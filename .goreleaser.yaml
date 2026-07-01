@@ -1,0 +1,127 @@
+version: 2
+
+builds:
+  - id: click-dog
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      # Specifying `files` overrides GoReleaser's implicit license/readme
+      # bundling, so re-list them here or they drop out of the tarball.
+      - LICENSE
+      - README.md
+      # Annotated starter configs, parity-pinned to `click-dog init --profile`
+      # by TestWizard_ParityWithProfileTemplates so they can't drift from the
+      # renderer. Flattened to examples/ in the archive (not docs/examples/).
+      - src: docs/examples/click-dog-*.yaml
+        dst: examples
+        strip_parent: true
+
+checksum:
+  name_template: 'checksums.txt'
+
+# Cosign keyless signing of checksums.txt via GitHub OIDC + Fulcio.
+# Produces checksums.txt.sig (signature) and checksums.txt.pem (cert chain
+# tied to the release workflow identity). The updater verifies these on
+# self-update; manual verification is documented in docs/install.md.
+signs:
+  - cmd: cosign
+    signature: '${artifact}.sig'
+    certificate: '${artifact}.pem'
+    args:
+      - sign-blob
+      - '--output-certificate=${certificate}'
+      - '--output-signature=${signature}'
+      - '${artifact}'
+      - --yes
+    artifacts: checksum
+
+dockers_v2:
+  # Versioned image — always pushed. The tag is the bare {{ .Version }}
+  # (e.g. 26.05.1 or 26.05.1-alpha) for every release.
+  - id: versioned
+    ids:
+      - click-dog
+    dockerfile: Dockerfile
+    images:
+      - "ghcr.io/coltconsulting/click-dog"
+    tags:
+      - "{{ .Version }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+
+  # `latest` image — same content, separate block so we can gate the
+  # whole entry with a templated disable. Prerelease tags
+  # (v…-alpha/-beta/-test) skip the block so users on :latest stay on the
+  # most recent GA.
+  - id: latest
+    ids:
+      - click-dog
+    dockerfile: Dockerfile
+    images:
+      - "ghcr.io/coltconsulting/click-dog"
+    tags:
+      - "latest"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    disable: "{{ if .Prerelease }}true{{ else }}false{{ end }}"
+
+# Cosign keyless signing of pushed images. Signs by digest.
+#
+# Prereleases: only the versioned block publishes (latest is disabled),
+# so one image, one signature.
+#
+# GA releases: both blocks publish. They are EXPECTED to produce
+# identical digests (same Dockerfile, same binaries, same platforms,
+# same buildx setup), in which case cosign signs the one digest twice
+# — idempotent at the Rekor level. This is behavioral rather than
+# structural: if the two buildx invocations ever drift (timestamps,
+# build-arg ordering, base-image float), :{{ .Version }} and :latest
+# will point to different digests with separate signatures. Verify on
+# the first GA cut:
+#   docker buildx imagetools inspect ghcr.io/coltconsulting/click-dog:{{ .Version }}
+#   docker buildx imagetools inspect ghcr.io/coltconsulting/click-dog:latest
+# If they diverge, the cheap fix is replacing the second block with a
+# `docker buildx imagetools create --tag …:latest …:{{ .Version }}`
+# post-publish step gated on !Prerelease — same digest by construction.
+docker_signs:
+  - cmd: cosign
+    artifacts: images
+    output: true
+    args:
+      - sign
+      - '${artifact}@${digest}'
+      - --yes
+
+release:
+  # `auto` flags any tag with a semver prerelease suffix (-alpha/-beta/-test)
+  # as a GitHub prerelease. Combined with the conditional `latest` docker tag
+  # above, this means prereleases never displace the GA on either surface.
+  prerelease: auto
+  # Keep the verified installer available at:
+  # https://github.com/coltconsulting/click-dog/releases/latest/download/install.sh
+  # (GitHub serves /releases/latest from the most recent NON-prerelease.)
+  extra_files:
+    - glob: ./deploy/install.sh
+      name_template: install.sh
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'

@@ -1,0 +1,12 @@
+.git
+*.md
+!README.md
+LICENSE
+coverage.*
+benchmarks/
+dashboards/
+deploy/
+docs/
+*.yaml
+!go.mod
+!go.sum

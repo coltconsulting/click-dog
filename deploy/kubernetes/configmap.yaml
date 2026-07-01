@@ -1,0 +1,110 @@
+# ClickHouse prerequisites (assumed by this deployment) ----------------------
+# click-dog only READS spans; it cannot enable them. Before this DaemonSet
+# exports anything, the ClickHouse side must already provide:
+#   1. system.opentelemetry_span_log enabled on every ClickHouse pod
+#      (ENGINE=MergeTree, PARTITION BY toYYYYMM(finish_date),
+#       ORDER BY (finish_date, finish_time_us, trace_id),
+#       database=system, table=opentelemetry_span_log,
+#       flush_interval_milliseconds=7500).
+#   2. A read-only monitoring user with SELECT on system.opentelemetry_span_log
+#      and system.query_log ONLY (readonly profile, no broader privileges).
+# Set these up with deploy/kubernetes/clickhouse-operator-spanlog.yaml (or
+# clickhouse-setup-job.yaml). Full walkthrough + verification commands:
+# docs/kubernetes-clickhouse.md.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: click-dog-config
+  namespace: click-dog
+  labels:
+    app.kubernetes.io/name: click-dog
+data:
+  # click-dog expands ${VAR} syntax in config values at startup (see config.go).
+  # The DaemonSet injects CLICKHOUSE_USERNAME and CLICKHOUSE_PASSWORD as env vars
+  # from required keys in the click-dog-secret Secret.
+  click-dog.yaml: |
+    clickhouse:
+      # The ClickHouse Service DNS — NOT localhost. A standalone click-dog pod
+      # has its own network namespace, so localhost would be click-dog itself.
+      # Replace with your cluster's Service (namespace.svc.cluster.local).
+      host: clickhouse.clickhouse.svc.cluster.local
+      port: 9000
+      database: default
+      username: ${CLICKHOUSE_USERNAME}
+      password: ${CLICKHOUSE_PASSWORD}
+      max_open_conns: 2
+      max_idle_conns: 1
+      query_timeout_s: 30
+      # Centralized topology: one instance reads all shards via cluster()
+      # queries. Both fields are required — use_cluster_queries with an empty
+      # cluster is a no-op that reads only the single pod the Service routes to.
+      # `main` matches deploy/kubernetes/clickhouse-operator-spanlog.yaml.
+      use_cluster_queries: true
+      cluster: main
+
+    exporters:
+      otel:
+        - collector_address: otel-collector.monitoring:4317
+          service_name: click-dog-monitor
+          # TLS — uncomment when using cert-manager or any CA-signed certificate.
+          # The DaemonSet mounts the click-dog-otel-tls secret at /etc/click-dog/tls/.
+          # secure: true
+          # ca_cert: /etc/click-dog/tls/ca.crt
+          # client_cert: /etc/click-dog/tls/tls.crt
+          # client_key: /etc/click-dog/tls/tls.key
+
+    monitor:
+      enabled: true
+      min_trace_duration_ms: 1000
+      check_interval_s: 30
+      lookback_s: 40
+      max_spans_per_cycle: 1000
+      dedup_cache_size: 10000
+      circuit_breaker:
+        enabled: true
+        failure_threshold: 3
+        success_threshold: 1
+        reset_timeout_s: 60
+      backoff:
+        enabled: true
+        max_interval_s: 300
+        backoff_factor: 2.0
+
+    filters:
+      blacklist_queries:
+        - "^SELECT \\* FROM system\\."
+        - "SHOW TABLES"
+        - "(?i)healthcheck"
+
+    log_level: info
+
+    metrics:
+      enabled: true
+      listen_address: ":9090"
+      # admin_listen_address (default: 127.0.0.1:9091) hosts POST /flush.
+      # Loopback-only so the admin endpoint isn't reachable off-pod. To
+      # trigger a flush from outside, prefer SIGUSR1 via `kubectl exec`
+      # over exposing this listener.
+      # admin_listen_address: "127.0.0.1:9091"
+
+    # Health endpoints (/healthz, /readyz, /status) used by the DaemonSet's
+    # liveness/readiness probes. See daemonset.yaml for the probe config.
+    # When listen_address matches metrics.listen_address the endpoints mount
+    # on the metrics listener so only one port is opened.
+    health:
+      enabled: true
+      listen_address: ":8686"
+
+    # Configuring keeper.hosts turns on leader election (only the leader
+    # exports). Keeper hosts should match your ClickHouse Keeper ensemble.
+    ha:
+      keeper:
+        hosts:
+          - "clickhouse-keeper-0.clickhouse-keeper:9181"
+          - "clickhouse-keeper-1.clickhouse-keeper:9181"
+          - "clickhouse-keeper-2.clickhouse-keeper:9181"
+        # secure: true
+        # auth_user: ${KEEPER_USER}
+        # auth_password: ${KEEPER_PASSWORD}
+        session_timeout_s: 10
+        base_path: "/click-dog/election"

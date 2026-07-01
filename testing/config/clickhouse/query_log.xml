@@ -1,0 +1,11 @@
+<clickhouse>
+    <query_log>
+        <database>system</database>
+        <table>query_log</table>
+        <engine>MergeTree</engine>
+        <partition_by>toYYYYMM(event_date)</partition_by>
+        <order_by>event_date, event_time</order_by>
+        <!-- Fast flush for test determinism -->
+        <flush_interval_milliseconds>500</flush_interval_milliseconds>
+    </query_log>
+</clickhouse>

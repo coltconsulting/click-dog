@@ -1,0 +1,28 @@
+click-dog is pre-1.0 beta software.
+
+Breaking changes to configuration, CLI flags, HTTP endpoints, metric names,
+exporter behaviour, and internal Go APIs can still land before v1.0 without a
+full deprecation cycle. Pin to a specific release tag (vYY.MM.idx) if you need
+stability across upgrades; read the changelog before bumping.
+
+Specifically, the following are NOT yet stable:
+
+  * YAML config schema and field names (the `health` block is new; others
+    may be renamed or restructured)
+  * HTTP endpoint JSON shapes on :9090 (/metrics, /health, /flush) and
+    :8686 (/healthz, /readyz, /status)
+  * Prometheus metric names and labels on /metrics
+  * Exported Go types and function signatures in internal/ packages
+    (these are internal/ to begin with, but calling them from tests or
+    forks means breakage is on you)
+  * CLI subcommand behaviour (flush, check, init, test-span,
+    create-dashboards, self-update)
+
+What is relatively stable:
+
+  * The core value proposition: read OTEL spans from
+    system.opentelemetry_span_log and export them via gRPC.
+  * The ClickHouse connection being read-only (readonly=2 is enforced).
+  * Integration-test guarantees against the shipped docker compose.
+
+Once we tag v1.0 this file goes away and semver applies.

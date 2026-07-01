@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: click-dog
+  labels:
+    app.kubernetes.io/name: click-dog
+    app.kubernetes.io/part-of: clickhouse-monitoring

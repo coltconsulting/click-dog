@@ -1,0 +1,17 @@
+
+# Use bd merge for beads JSONL files
+.beads/issues.jsonl merge=beads
+
+# Internal-only paths — never published to the public click-dog repo.
+# `git archive` honors export-ignore, so the clean-slate bootstrap and
+# scripts/publish-to-public.sh both drop these from the public tree. Only
+# user-facing docs (the mkdocs site) ship; development docs, business/strategy
+# notes, and specs stay private. See
+# docs/development/specs/open-source-clean-slate-migration.md.
+docs/development export-ignore
+docs/development/** export-ignore
+openspec export-ignore
+openspec/** export-ignore
+# The publish tool itself is internal-only: it runs from click-dog-internal and
+# points at docs/development paths that do not exist in the public tree.
+scripts/publish-to-public.sh export-ignore

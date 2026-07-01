@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: click-dog
+  namespace: click-dog
+  labels:
+    app.kubernetes.io/name: click-dog
+spec:
+  # Centralized topology: a single click-dog instance reads the cluster through
+  # the ClickHouse Service (see clickhouse.host / use_cluster_queries in the
+  # ConfigMap). Keep replicas at 1 — multiple instances double-export unless you
+  # also enable HA leader election. Do NOT scale this one-per-node; for a
+  # node-local sidecar, co-locate click-dog inside the ClickHouse pod instead.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: click-dog
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Brief gap during rollouts — fine for a span exporter (spans persist in
+      # ClickHouse's log; click-dog resumes via lookback_s). For zero-downtime
+      # set maxUnavailable: 0 + maxSurge: 1, but note two instances then briefly
+      # overlap and double-export (the collector dedups by span_id).
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: click-dog
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: click-dog
+      terminationGracePeriodSeconds: 15
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: click-dog
+          image: ghcr.io/coltconsulting/click-dog:{{ .ImageTag }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          args:
+            - "-config"
+            - "/etc/click-dog/click-dog.yaml"
+          env:
+            - name: CLICKHOUSE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: click-dog-secret
+                  key: CLICKHOUSE_USERNAME
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: click-dog-secret
+                  key: CLICKHOUSE_PASSWORD
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+            - name: health
+              containerPort: 8686
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /etc/click-dog
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: click-dog-config

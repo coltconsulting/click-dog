@@ -1,0 +1,1020 @@
+{
+  "title": "Click-Dog: Application Query Analysis",
+  "description": "Live-span-only, application-centric view of ClickHouse queries exported by click-dog from system.opentelemetry_span_log. Complements the official Datadog ClickHouse integration (which covers infrastructure). The first screen is an out-of-box key-metrics summary; automatic live-span enrichment sections come next; log_comment-tagged sections at the bottom add richer attribution when client-side tagging is in place. Backfill spans from system.query_log use the separate clickhouse.query/db.* contract and are intentionally outside this dashboard.",
+  "layout_type": "ordered",
+  "template_variables": [
+    {
+      "name": "service",
+      "prefix": "service",
+      "default": "click-dog-monitor"
+    },
+    {
+      "name": "env",
+      "prefix": "env",
+      "default": "*"
+    },
+    {
+      "name": "app",
+      "prefix": "@log_comment.app",
+      "default": "*"
+    },
+    {
+      "name": "user",
+      "prefix": "@query_log.user",
+      "default": "*"
+    },
+    {
+      "name": "client",
+      "prefix": "@query_log.client_name",
+      "default": "*"
+    },
+    {
+      "name": "host",
+      "prefix": "@hostname",
+      "default": "*"
+    },
+    {
+      "name": "client_host",
+      "prefix": "@query_log.client_hostname",
+      "default": "*"
+    }
+  ],
+  "widgets": [
+    {
+      "id": 10,
+      "definition": {
+        "type": "note",
+        "content": "# Click-Dog — Application Query Analysis\n\n**Live-span dashboard.** `click_dog.source=span_log` spans from `system.opentelemetry_span_log`, queried as `resource_name:query @click_dog.source:span_log`. Needs click-dog `v26.03.1`+.\n\n**Volume = exported queries, not total ClickHouse traffic** — only the stream selected by `monitor.min_trace_duration_ms` and filters. For total volume use the [Datadog ClickHouse integration](https://app.datadoghq.com/dash/integration/30297).\n\n**Dimensions.** Automatic `query_log.*` enrichment first (no tagging); `log_comment.*` attribution last (needs client tagging).\n\n**Backfill** is separate: `click_dog.source=query_log` / `clickhouse.query` / `db.*` spans — use trace search.",
+        "background_color": "blue",
+        "font_size": "14",
+        "text_align": "left",
+        "vertical_align": "top",
+        "show_tick": false,
+        "has_padding": true
+      },
+      "layout": {"x": 0, "y": 0, "width": 12, "height": 2}
+    },
+    {
+      "id": 100,
+      "definition": {
+        "type": "note",
+        "content": "## Key Metrics\nAre traces flowing, current volume, p95/p99 latency, slow-query count, top contributors — out of the box.",
+        "background_color": "green",
+        "font_size": "14",
+        "text_align": "left",
+        "vertical_align": "center",
+        "show_tick": false,
+        "has_padding": true
+      },
+      "layout": {"x": 0, "y": 2, "width": 12, "height": 1}
+    },
+    {
+      "id": 101,
+      "definition": {
+        "title": "Exported queries (1h)",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "query_value",
+        "autoscale": true,
+        "precision": 0,
+        "time": {"live_span": "1h"},
+        "requests": [
+          {
+            "formulas": [{"formula": "query1"}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log $env $app $user $client $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": []
+              }
+            ],
+            "response_format": "scalar",
+            "conditional_formats": [
+              {"comparator": "=", "value": 0, "palette": "white_on_red"},
+              {"comparator": ">", "value": 0, "palette": "white_on_green"}
+            ]
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 3, "width": 2, "height": 2}
+    },
+    {
+      "id": 102,
+      "definition": {
+        "title": "p95 latency",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "query_value",
+        "autoscale": true,
+        "precision": 2,
+        "timeseries_background": {"type": "area"},
+        "requests": [
+          {
+            "formulas": [{"formula": "query1"}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log $env $app $user $client $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "pc95", "metric": "@duration"},
+                "group_by": []
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 2, "y": 3, "width": 2, "height": 2}
+    },
+    {
+      "id": 103,
+      "definition": {
+        "title": "p99 latency",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "query_value",
+        "autoscale": true,
+        "precision": 2,
+        "timeseries_background": {"type": "area"},
+        "requests": [
+          {
+            "formulas": [{"formula": "query1"}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log $env $app $user $client $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "pc99", "metric": "@duration"},
+                "group_by": []
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 4, "y": 3, "width": 2, "height": 2}
+    },
+    {
+      "id": 104,
+      "definition": {
+        "title": "Slow queries (>1s)",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "query_value",
+        "autoscale": true,
+        "precision": 0,
+        "requests": [
+          {
+            "formulas": [{"formula": "query1"}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log @duration:>1000000000 $env $app $user $client $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": []
+              }
+            ],
+            "response_format": "scalar",
+            "conditional_formats": [
+              {"comparator": "=", "value": 0, "palette": "white_on_green"},
+              {"comparator": ">", "value": 0, "palette": "white_on_yellow"}
+            ]
+          }
+        ]
+      },
+      "layout": {"x": 6, "y": 3, "width": 2, "height": 2}
+    },
+    {
+      "id": 105,
+      "definition": {
+        "title": "Top user",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "toplist",
+        "requests": [
+          {
+            "formulas": [{"formula": "query1", "limit": {"count": 1, "order": "desc"}}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log $env $app $client $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": [
+                  {
+                    "facet": "@query_log.user",
+                    "limit": 1,
+                    "sort": {"aggregation": "count", "order": "desc"}
+                  }
+                ]
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 8, "y": 3, "width": 2, "height": 2}
+    },
+    {
+      "id": 106,
+      "definition": {
+        "title": "Top client",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "toplist",
+        "requests": [
+          {
+            "formulas": [{"formula": "query1", "limit": {"count": 1, "order": "desc"}}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log $env $app $user $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": [
+                  {
+                    "facet": "@query_log.client_name",
+                    "limit": 1,
+                    "sort": {"aggregation": "count", "order": "desc"}
+                  }
+                ]
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 10, "y": 3, "width": 2, "height": 2}
+    },
+    {
+      "id": 1,
+      "definition": {
+        "title": "Exported queries per minute",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "timeseries",
+        "show_legend": false,
+        "custom_links": [
+          {
+            "label": "View matching traces in APM",
+            "link": "/apm/traces?query=service:{{$service.value}} resource_name:query @click_dog.source:span_log @hostname:{{$host.value}}"
+          }
+        ],
+        "requests": [
+          {
+            "formulas": [{"formula": "query1"}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {
+                  "query": "$service resource_name:query @click_dog.source:span_log $env $app $user $client $host $client_host"
+                },
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": []
+              }
+            ],
+            "response_format": "timeseries",
+            "style": {"palette": "dog_classic", "line_type": "solid", "line_width": "normal"},
+            "display_type": "bars"
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 5, "width": 6, "height": 3}
+    },
+    {
+      "id": 2,
+      "definition": {
+        "title": "Query latency (p50, p95, p99)",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "timeseries",
+        "show_legend": true,
+        "legend_layout": "auto",
+        "legend_columns": ["avg", "max"],
+        "requests": [
+          {
+            "formulas": [
+              {"formula": "query1", "alias": "p50"},
+              {"formula": "query2", "alias": "p95"},
+              {"formula": "query3", "alias": "p99"}
+            ],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log $env $app $user $client $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "pc50", "metric": "@duration"},
+                "group_by": []
+              },
+              {
+                "data_source": "spans",
+                "name": "query2",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log $env $app $user $client $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "pc95", "metric": "@duration"},
+                "group_by": []
+              },
+              {
+                "data_source": "spans",
+                "name": "query3",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log $env $app $user $client $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "pc99", "metric": "@duration"},
+                "group_by": []
+              }
+            ],
+            "response_format": "timeseries",
+            "style": {"palette": "warm"},
+            "display_type": "line"
+          }
+        ]
+      },
+      "layout": {"x": 6, "y": 5, "width": 6, "height": 3}
+    },
+    {
+      "id": 210,
+      "definition": {
+        "type": "note",
+        "content": "## Failures\nFailed queries via `@query_log.exception_code` (`query_log` enrichment only — `span_log` has no error status). Blank = no failures seen, not broken.",
+        "background_color": "green",
+        "font_size": "14",
+        "text_align": "left",
+        "vertical_align": "center",
+        "show_tick": false,
+        "has_padding": true
+      },
+      "layout": {"x": 0, "y": 8, "width": 12, "height": 1}
+    },
+    {
+      "id": 211,
+      "definition": {
+        "title": "Failed queries",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "query_value",
+        "autoscale": true,
+        "precision": 0,
+        "timeseries_background": {"type": "area"},
+        "requests": [
+          {
+            "formulas": [{"formula": "query1"}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log @query_log.exception_code:>0 $env $app $user $client $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": []
+              }
+            ],
+            "response_format": "scalar",
+            "conditional_formats": [
+              {"comparator": "=", "value": 0, "palette": "white_on_green"},
+              {"comparator": ">", "value": 0, "palette": "white_on_red"}
+            ]
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 9, "width": 3, "height": 4}
+    },
+    {
+      "id": 212,
+      "definition": {
+        "title": "Top failing query families",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "toplist",
+        "requests": [
+          {
+            "formulas": [{"formula": "query1", "limit": {"count": 10, "order": "desc"}}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log @query_log.exception_code:>0 @query_log.normalized_query_hash:* $env $app $user $client $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": [
+                  {
+                    "facet": "@query_log.normalized_query_hash",
+                    "limit": 10,
+                    "sort": {"aggregation": "count", "order": "desc"}
+                  },
+                  {
+                    "facet": "@query_log.normalized_query",
+                    "limit": 10,
+                    "sort": {"aggregation": "count", "order": "desc"}
+                  }
+                ]
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 3, "y": 9, "width": 9, "height": 4}
+    },
+    {
+      "id": 60,
+      "definition": {
+        "type": "note",
+        "content": "## By ClickHouse User & Client\n`@query_log.user` and `@query_log.client_name` — automatic, no tagging.",
+        "background_color": "green",
+        "font_size": "14",
+        "text_align": "left",
+        "vertical_align": "center",
+        "show_tick": false,
+        "has_padding": true
+      },
+      "layout": {"x": 0, "y": 13, "width": 12, "height": 1}
+    },
+    {
+      "id": 61,
+      "definition": {
+        "title": "Top ClickHouse users by exported query volume",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "toplist",
+        "requests": [
+          {
+            "formulas": [{"formula": "query1", "limit": {"count": 10, "order": "desc"}}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log $env $app $client $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": [
+                  {
+                    "facet": "@query_log.user",
+                    "limit": 10,
+                    "sort": {"aggregation": "count", "order": "desc"}
+                  }
+                ]
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 14, "width": 4, "height": 4}
+    },
+    {
+      "id": 62,
+      "definition": {
+        "title": "Top client libraries",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "toplist",
+        "requests": [
+          {
+            "formulas": [{"formula": "query1", "limit": {"count": 10, "order": "desc"}}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log $env $app $user $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": [
+                  {
+                    "facet": "@query_log.client_name",
+                    "limit": 10,
+                    "sort": {"aggregation": "count", "order": "desc"}
+                  }
+                ]
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 4, "y": 14, "width": 4, "height": 4}
+    },
+    {
+      "id": 63,
+      "definition": {
+        "title": "Top users by p95 latency",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "toplist",
+        "requests": [
+          {
+            "formulas": [{"formula": "query1", "limit": {"count": 10, "order": "desc"}}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log $env $app $client $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "pc95", "metric": "@duration"},
+                "group_by": [
+                  {
+                    "facet": "@query_log.user",
+                    "limit": 10,
+                    "sort": {"aggregation": "pc95", "order": "desc", "metric": "@duration"}
+                  }
+                ]
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 8, "y": 14, "width": 4, "height": 4}
+    },
+    {
+      "id": 50,
+      "definition": {
+        "type": "note",
+        "content": "## Per-host Distribution\n`@hostname` from each span — automatic, no tagging.",
+        "background_color": "green",
+        "font_size": "14",
+        "text_align": "left",
+        "vertical_align": "center",
+        "show_tick": false,
+        "has_padding": true
+      },
+      "layout": {"x": 0, "y": 18, "width": 12, "height": 1}
+    },
+    {
+      "id": 9,
+      "definition": {
+        "title": "Exported queries by host",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "timeseries",
+        "show_legend": true,
+        "legend_layout": "horizontal",
+        "legend_columns": ["sum"],
+        "requests": [
+          {
+            "formulas": [{"formula": "query1"}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log $env $app $user $client $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": [
+                  {
+                    "facet": "@hostname",
+                    "limit": 10,
+                    "sort": {"aggregation": "count", "order": "desc"}
+                  }
+                ]
+              }
+            ],
+            "response_format": "timeseries",
+            "style": {"palette": "semantic"},
+            "display_type": "bars"
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 19, "width": 12, "height": 3}
+    },
+    {
+      "id": 70,
+      "definition": {
+        "type": "note",
+        "content": "## Resource Usage\nTop query families by total time, rows read, and memory, plus tables accessed. Needs `@query_log.normalized_query_hash` — older spans (pre-enrichment) are absent.",
+        "background_color": "green",
+        "font_size": "14",
+        "text_align": "left",
+        "vertical_align": "center",
+        "show_tick": false,
+        "has_padding": true
+      },
+      "layout": {"x": 0, "y": 22, "width": 12, "height": 1}
+    },
+    {
+      "id": 220,
+      "definition": {
+        "title": "Top query families by total query time",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "toplist",
+        "requests": [
+          {
+            "formulas": [{"formula": "query1", "limit": {"count": 10, "order": "desc"}}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log @query_log.normalized_query_hash:* $env $app $user $client $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "sum", "metric": "@duration"},
+                "group_by": [
+                  {
+                    "facet": "@query_log.normalized_query_hash",
+                    "limit": 10,
+                    "sort": {"aggregation": "sum", "order": "desc", "metric": "@duration"}
+                  },
+                  {
+                    "facet": "@query_log.normalized_query",
+                    "limit": 10,
+                    "sort": {"aggregation": "sum", "order": "desc", "metric": "@duration"}
+                  }
+                ]
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 23, "width": 12, "height": 4}
+    },
+    {
+      "id": 71,
+      "definition": {
+        "title": "Top query families by rows read (p95)",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "toplist",
+        "requests": [
+          {
+            "formulas": [{"formula": "query1", "limit": {"count": 10, "order": "desc"}}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log @query_log.normalized_query_hash:* $env $app $user $client $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "pc95", "metric": "@query_log.read_rows"},
+                "group_by": [
+                  {
+                    "facet": "@query_log.normalized_query_hash",
+                    "limit": 10,
+                    "sort": {"aggregation": "pc95", "order": "desc", "metric": "@query_log.read_rows"}
+                  },
+                  {
+                    "facet": "@query_log.normalized_query",
+                    "limit": 10,
+                    "sort": {"aggregation": "pc95", "order": "desc", "metric": "@query_log.read_rows"}
+                  }
+                ]
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 27, "width": 6, "height": 4}
+    },
+    {
+      "id": 72,
+      "definition": {
+        "title": "Top query families by peak memory (p95)",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "toplist",
+        "requests": [
+          {
+            "formulas": [{"formula": "query1", "limit": {"count": 10, "order": "desc"}}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log @query_log.normalized_query_hash:* $env $app $user $client $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "pc95", "metric": "@query_log.memory_usage"},
+                "group_by": [
+                  {
+                    "facet": "@query_log.normalized_query_hash",
+                    "limit": 10,
+                    "sort": {"aggregation": "pc95", "order": "desc", "metric": "@query_log.memory_usage"}
+                  },
+                  {
+                    "facet": "@query_log.normalized_query",
+                    "limit": 10,
+                    "sort": {"aggregation": "pc95", "order": "desc", "metric": "@query_log.memory_usage"}
+                  }
+                ]
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 6, "y": 27, "width": 6, "height": 4}
+    },
+    {
+      "id": 73,
+      "definition": {
+        "title": "Exported queries by tables accessed",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "toplist",
+        "requests": [
+          {
+            "formulas": [{"formula": "query1", "limit": {"count": 10, "order": "desc"}}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log $env $app $user $client $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": [
+                  {
+                    "facet": "@query_log.tables",
+                    "limit": 10,
+                    "sort": {"aggregation": "count", "order": "desc"}
+                  }
+                ]
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 31, "width": 6, "height": 4}
+    },
+    {
+      "id": 74,
+      "definition": {
+        "title": "Exported queries by databases accessed",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "toplist",
+        "requests": [
+          {
+            "formulas": [{"formula": "query1", "limit": {"count": 10, "order": "desc"}}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log $env $app $user $client $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": [
+                  {
+                    "facet": "@query_log.databases",
+                    "limit": 10,
+                    "sort": {"aggregation": "count", "order": "desc"}
+                  }
+                ]
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 6, "y": 31, "width": 6, "height": 4}
+    },
+    {
+      "id": 40,
+      "definition": {
+        "type": "note",
+        "content": "## Exact Query Families\nGrouped by `@query_log.normalized_query_hash` with `@query_log.normalized_query` preview — no tagging.",
+        "background_color": "green",
+        "font_size": "14",
+        "text_align": "left",
+        "vertical_align": "center",
+        "show_tick": false,
+        "has_padding": true
+      },
+      "layout": {"x": 0, "y": 35, "width": 12, "height": 1}
+    },
+    {
+      "id": 8,
+      "definition": {
+        "title": "Slowest exact query families",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "toplist",
+        "requests": [
+          {
+            "formulas": [{"formula": "query1", "limit": {"count": 10, "order": "desc"}}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log @query_log.normalized_query_hash:* $env $app $user $client $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "pc95", "metric": "@duration"},
+                "group_by": [
+                  {
+                    "facet": "@query_log.normalized_query_hash",
+                    "limit": 10,
+                    "sort": {"aggregation": "pc95", "order": "desc", "metric": "@duration"}
+                  },
+                  {
+                    "facet": "@query_log.normalized_query",
+                    "limit": 10,
+                    "sort": {"aggregation": "pc95", "order": "desc", "metric": "@duration"}
+                  }
+                ]
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 36, "width": 12, "height": 4}
+    },
+    {
+      "id": 20,
+      "definition": {
+        "type": "note",
+        "content": "## By Application\n`@log_comment.app` — needs client `log_comment` tagging (e.g. `{\"app\": \"my-app\"}`); blank until then.",
+        "background_color": "yellow",
+        "font_size": "14",
+        "text_align": "left",
+        "vertical_align": "center",
+        "show_tick": false,
+        "has_padding": true
+      },
+      "layout": {"x": 0, "y": 40, "width": 12, "height": 1}
+    },
+    {
+      "id": 3,
+      "definition": {
+        "title": "Top apps by exported query volume",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "toplist",
+        "requests": [
+          {
+            "formulas": [{"formula": "query1", "limit": {"count": 10, "order": "desc"}}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log $env $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": [
+                  {
+                    "facet": "@log_comment.app",
+                    "limit": 10,
+                    "sort": {"aggregation": "count", "order": "desc"}
+                  }
+                ]
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 41, "width": 4, "height": 4}
+    },
+    {
+      "id": 4,
+      "definition": {
+        "title": "Top apps by p95 latency",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "toplist",
+        "requests": [
+          {
+            "formulas": [{"formula": "query1", "limit": {"count": 10, "order": "desc"}}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log $env $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "pc95", "metric": "@duration"},
+                "group_by": [
+                  {
+                    "facet": "@log_comment.app",
+                    "limit": 10,
+                    "sort": {"aggregation": "pc95", "order": "desc", "metric": "@duration"}
+                  }
+                ]
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 4, "y": 41, "width": 4, "height": 4}
+    },
+    {
+      "id": 5,
+      "definition": {
+        "title": "Slow queries (>1s) by app",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "toplist",
+        "requests": [
+          {
+            "formulas": [{"formula": "query1", "limit": {"count": 10, "order": "desc"}}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log @duration:>1000000000 $env $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": [
+                  {
+                    "facet": "@log_comment.app",
+                    "limit": 10,
+                    "sort": {"aggregation": "count", "order": "desc"}
+                  }
+                ]
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 8, "y": 41, "width": 4, "height": 4}
+    },
+    {
+      "id": 30,
+      "definition": {
+        "type": "note",
+        "content": "## By Named Query\n`@log_comment.query_name` — needs per-query `log_comment` naming (e.g. `{\"query_name\": \"home_dashboard\"}`); blank until then.",
+        "background_color": "yellow",
+        "font_size": "14",
+        "text_align": "left",
+        "vertical_align": "center",
+        "show_tick": false,
+        "has_padding": true
+      },
+      "layout": {"x": 0, "y": 45, "width": 12, "height": 1}
+    },
+    {
+      "id": 6,
+      "definition": {
+        "title": "Top named queries by p95 latency",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "toplist",
+        "requests": [
+          {
+            "formulas": [{"formula": "query1", "limit": {"count": 15, "order": "desc"}}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log $env $app $user $client $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "pc95", "metric": "@duration"},
+                "group_by": [
+                  {
+                    "facet": "@log_comment.query_name",
+                    "limit": 15,
+                    "sort": {"aggregation": "pc95", "order": "desc", "metric": "@duration"}
+                  }
+                ]
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 46, "width": 6, "height": 4}
+    },
+    {
+      "id": 7,
+      "definition": {
+        "title": "Top named queries by exported volume",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "toplist",
+        "requests": [
+          {
+            "formulas": [{"formula": "query1", "limit": {"count": 15, "order": "desc"}}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log $env $app $user $client $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": [
+                  {
+                    "facet": "@log_comment.query_name",
+                    "limit": 15,
+                    "sort": {"aggregation": "count", "order": "desc"}
+                  }
+                ]
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 6, "y": 46, "width": 6, "height": 4}
+    }
+  ]
+}

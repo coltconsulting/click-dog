@@ -1,0 +1,87 @@
+# ClickHouseInstallation — span-log + read-only monitoring user for click-dog
+# =============================================================================
+# This is an EXAMPLE for the Altinity clickhouse-operator
+# (https://github.com/Altinity/clickhouse-operator). It shows the two
+# ClickHouse-side prerequisites click-dog assumes:
+#
+#   1. system.opentelemetry_span_log enabled on EVERY ClickHouse pod
+#      (rendered into config.d/ via spec.configuration.files — cluster-wide).
+#   2. A read-only monitoring user with SELECT on exactly two system tables.
+#
+# These settings mirror deploy/install.sh exactly (engine, partition, order,
+# flush interval, the two SELECT grants, the readonly profile). Adapt the
+# cluster name, shard/replica layout, and image tag to your environment.
+#
+# Full walkthrough: docs/kubernetes-clickhouse.md
+#
+# Apply with the operator already installed:
+#   kubectl apply -f clickhouse-operator-spanlog.yaml
+#
+# NOTE for ClickHouse Cloud / other managed services: you cannot ship a
+# server config file there, so the span-log `files` block below does not
+# apply. See the "Managed ClickHouse" caveat in the docs.
+apiVersion: "clickhouse.altinity.com/v1"
+kind: "ClickHouseInstallation"
+metadata:
+  name: clickhouse
+  namespace: clickhouse
+spec:
+  configuration:
+    # ── 1. Span-log config — applied to every ClickHouse pod ──────────────
+    # The operator renders entries under `files` into
+    # /etc/clickhouse-server/config.d/ on each pod, so every replica in
+    # every shard emits spans into system.opentelemetry_span_log. Keep these
+    # values identical to deploy/install.sh; click-dog's queries assume this
+    # exact engine/partition/order layout.
+    files:
+      config.d/opentelemetry.xml: |
+        <clickhouse>
+            <opentelemetry_span_log>
+                <engine>
+                    ENGINE = MergeTree
+                    PARTITION BY toYYYYMM(finish_date)
+                    ORDER BY (finish_date, finish_time_us, trace_id)
+                </engine>
+                <database>system</database>
+                <table>opentelemetry_span_log</table>
+                <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+            </opentelemetry_span_log>
+        </clickhouse>
+
+    # ── 2. Read-only monitoring user + SELECT-only grants ─────────────────
+    # `click_dog_monitor` is the user click-dog connects as (a dedicated,
+    # namespaced name matching the host installer, so it won't collide with an
+    # operator-managed `monitoring` account). It uses the built-in
+    # `readonly` profile (readonly=2: no writes, no settings changes) and is
+    # granted SELECT on ONLY the two tables click-dog reads. No other
+    # privileges are granted.
+    #
+    # Replace the password hash below. Generate one with:
+    #   printf '%s' 'YOUR_PASSWORD' | sha256sum | awk '{print $1}'
+    # then uncomment CLICKHOUSE_PASSWORD in deploy/kubernetes/secret.yaml and
+    # set it to the same plaintext so click-dog can authenticate.
+    users:
+      # Network ACL — tighten to the click-dog namespace's pod CIDR in
+      # production rather than allowing all sources.
+      click_dog_monitor/networks/ip:
+        - "::/0"
+      # SHA256 hex of the monitoring password (NOT the plaintext).
+      click_dog_monitor/password_sha256_hex: REPLACE_WITH_SHA256_HEX_OF_PASSWORD
+      # Built-in read-only profile (readonly=2).
+      click_dog_monitor/profile: readonly
+      click_dog_monitor/quota: default
+      # SELECT-only on exactly the two tables click-dog reads. Nothing else.
+      click_dog_monitor/grants/query:
+        - "GRANT SELECT ON system.opentelemetry_span_log TO click_dog_monitor"
+        - "GRANT SELECT ON system.query_log TO click_dog_monitor"
+
+    # ── 3. Cluster layout ─────────────────────────────────────────────────
+    # Expand shards/replicas to match your topology. The span-log config and
+    # monitoring user above apply to every pod regardless of layout, so a
+    # per-node click-dog sidecar reading its local span_log covers the whole
+    # cluster (see the sidecar vs centralized guidance in the docs).
+    clusters:
+      - name: "main"
+        layout:
+          shardsCount: 1
+          replicasCount: 1

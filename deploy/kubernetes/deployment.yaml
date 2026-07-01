@@ -1,0 +1,127 @@
+# Centralized click-dog Deployment — a single instance reads the cluster
+# through the ClickHouse Service (configmap.yaml sets clickhouse.host to the
+# Service DNS and use_cluster_queries: true). Keep replicas at 1: multiple
+# instances double-export unless you also configure HA leader election
+# (ha.keeper.hosts in configmap.yaml). A
+# node-local topology should be a sidecar inside the ClickHouse pod (where
+# localhost reaches ClickHouse), not this standalone Deployment — see
+# docs/kubernetes-clickhouse.md §3.
+#
+# Rollout note (upgrading from pre-health-endpoints releases): the probes moved
+# from the metrics port (:9090 /health) to a dedicated health port (:8686
+# /healthz, /readyz). Apply the ConfigMap FIRST so health.enabled: true lands
+# before K8s rolls the Deployment against probes that hit :8686.
+#
+# Recommended order:
+#   kubectl apply -f configmap.yaml
+#   kubectl rollout status deploy/click-dog
+#   kubectl apply -f deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: click-dog
+  namespace: click-dog
+  labels:
+    app.kubernetes.io/name: click-dog
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: click-dog
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Brief gap during rollouts — fine for a span exporter (spans persist in
+      # ClickHouse's log; click-dog resumes via lookback_s). For zero-downtime
+      # set maxUnavailable: 0 + maxSurge: 1, but note two instances then briefly
+      # overlap and double-export (the collector dedups by span_id).
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: click-dog
+    spec:
+      serviceAccountName: click-dog
+      terminationGracePeriodSeconds: 15
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: click-dog
+          # Pin to a specific release tag in production. Avoid :latest — it
+          # makes rollouts non-reproducible and rollbacks ambiguous. Bump the
+          # tag here as part of each upgrade. Available tags:
+          # https://github.com/coltconsulting/click-dog/releases
+          image: ghcr.io/coltconsulting/click-dog:26.04.6
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          args:
+            - "-config"
+            - "/etc/click-dog/click-dog.yaml"
+          env:
+            - name: CLICKHOUSE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: click-dog-secret
+                  key: CLICKHOUSE_USERNAME
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: click-dog-secret
+                  key: CLICKHOUSE_PASSWORD
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+            - name: health
+              containerPort: 8686
+              protocol: TCP
+          # /healthz and /readyz are served by the health HTTP server.
+          # These probes require health.enabled: true in click-dog.yaml (see configmap.yaml).
+          # If you disable health, switch to a simple exec probe:
+          #   exec: { command: ["click-dog", "-validate", "-config", "/etc/click-dog/click-dog.yaml"] }
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          # failureThreshold defaults to 3, giving ~30s (3 × periodSeconds)
+          # for readiness to recover after a transient ClickHouse blip
+          # before K8s pulls the pod from the Service endpoints. Raise it
+          # if your ClickHouse restart windows are longer (e.g. 5-6 for a
+          # replica rebuild that takes >30s).
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /etc/click-dog
+              readOnly: true
+            - name: otel-tls
+              mountPath: /etc/click-dog/tls
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: click-dog-config
+        - name: otel-tls
+          secret:
+            secretName: click-dog-otel-tls
+            optional: true

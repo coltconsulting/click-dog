@@ -1,0 +1,100 @@
+# ClickHouse monitoring-user setup Job (alternative to the operator `users` block)
+# =============================================================================
+# Use this Job if you create the read-only monitoring user with SQL instead of
+# declaring it under spec.configuration.users in clickhouse-operator-spanlog.yaml
+# (for example, on a vanilla StatefulSet ClickHouse, or where you manage users
+# imperatively rather than through the operator).
+#
+# It runs exactly the same SELECT-only grants deploy/install.sh issues:
+#   CREATE USER ... IDENTIFIED WITH sha256_hash BY '<hash>';
+#   GRANT SELECT ON system.opentelemetry_span_log TO <user>;
+#   GRANT SELECT ON system.query_log TO <user>;
+# No broader privileges are granted.
+#
+# Prerequisites:
+#   - system.opentelemetry_span_log is ALREADY enabled on the server
+#     (see clickhouse-operator-spanlog.yaml / docs/kubernetes-clickhouse.md).
+#   - An admin DSN with privileges to CREATE USER / GRANT. Supplied via the
+#     click-dog-ch-admin Secret below — DO NOT reuse the monitoring user for
+#     this; it is read-only and cannot create users.
+#
+# Adjust CLICKHOUSE_HOST to your service name (e.g. clickhouse.clickhouse).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: click-dog-ch-admin
+  namespace: click-dog
+  labels:
+    app.kubernetes.io/name: click-dog
+type: Opaque
+stringData:
+  # REQUIRED: fill these before applying. Admin credentials are used ONLY by
+  # this one-shot Job to create the read-only monitoring user. Delete the Secret
+  # and Job after it completes.
+  CLICKHOUSE_ADMIN_USER: "default"
+  # CLICKHOUSE_ADMIN_PASSWORD: "replace-with-admin-password"
+  # The password the monitoring user (and click-dog) will authenticate with.
+  # Must match CLICKHOUSE_PASSWORD in deploy/kubernetes/secret.yaml.
+  # MONITORING_PASSWORD: "replace-with-monitoring-password"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: click-dog-ch-setup
+  namespace: click-dog
+  labels:
+    app.kubernetes.io/name: click-dog
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: click-dog
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: setup
+          # The dedicated clickhouse-client image does not publish 24.x tags.
+          # Use the matching server image because it includes clickhouse-client.
+          # Avoid :latest in production manifests.
+          image: clickhouse/clickhouse-server:24.1
+          env:
+            - name: CLICKHOUSE_HOST
+              value: "clickhouse.clickhouse"
+            - name: CLICKHOUSE_PORT
+              value: "9000"
+            - name: CLICKHOUSE_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: click-dog-ch-admin
+                  key: CLICKHOUSE_ADMIN_USER
+            - name: CLICKHOUSE_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: click-dog-ch-admin
+                  key: CLICKHOUSE_ADMIN_PASSWORD
+            - name: MONITORING_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: click-dog-ch-admin
+                  key: MONITORING_PASSWORD
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              PASS_HASH=$(printf '%s' "$MONITORING_PASSWORD" | sha256sum | awk '{print $1}')
+              clickhouse-client \
+                --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" \
+                --user "$CLICKHOUSE_ADMIN_USER" --password "$CLICKHOUSE_ADMIN_PASSWORD" \
+                --multiquery --query "
+                  -- IF NOT EXISTS (never OR REPLACE): re-running this Job will
+                  -- not clobber an existing user's auth, profile, quota, or
+                  -- grants. To rotate the password of an existing user, run an
+                  -- explicit ALTER USER instead. Matches the host installer's
+                  -- non-clobbering posture.
+                  CREATE USER IF NOT EXISTS click_dog_monitor IDENTIFIED WITH sha256_hash BY '$PASS_HASH';
+                  GRANT SELECT ON system.opentelemetry_span_log TO click_dog_monitor;
+                  GRANT SELECT ON system.query_log TO click_dog_monitor;
+                "
+              echo 'click_dog_monitor user ready with SELECT-only grants'

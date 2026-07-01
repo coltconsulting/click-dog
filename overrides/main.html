@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+<!-- Click-Dog: brand fonts, favicon, and social-card meta for all DOCS pages.
+     The marketing homepage uses home.html instead and is unaffected. -->
+
+{% block extrahead %}
+  {{ super() }}
+
+  <!-- Brand fonts (match the landing) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <!-- Favicon -->
+  <link rel="icon" href="{{ 'assets/favicon.png' | url }}">
+  <link rel="icon" sizes="32x32" href="{{ 'assets/favicon-32.png' | url }}">
+  <link rel="apple-touch-icon" href="{{ 'assets/favicon.png' | url }}">
+
+  <!-- Open Graph / Twitter social card.
+       Guard `page` — it is None on the generated 404 page, which also
+       extends this template. -->
+  {# Absolute URL so crawlers can fetch the card; falls back to a page-relative
+     path if site_url is unset. config.site_url is normalised with a trailing /. #}
+  {% set og_image = (config.site_url ~ 'assets/social-card.png') if config.site_url else ('assets/social-card.png' | url) %}
+  {% set og_title = (page.title if page else None) or config.site_name %}
+  {% set og_desc = (page.meta.description if page and page.meta else None) or config.site_description or 'Source-safe query observability for ClickHouse.' %}
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="{{ og_title }}">
+  <meta property="og:description" content="{{ og_desc }}">
+  <meta property="og:image" content="{{ og_image }}">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ og_title }}">
+  <meta name="twitter:description" content="{{ og_desc }}">
+  <meta name="twitter:image" content="{{ og_image }}">
+{% endblock %}
+
+{% block scripts %}
+  {{ super() }}
+  <!-- Make the "Click-Dog" wordmark in the docs header link to the homepage,
+       like the logo icon already does. We reuse the logo's href so the link is
+       correct from any depth; if JS is off the wordmark just stays plain text. -->
+  <script>
+    (function () {
+      var logo = document.querySelector('.md-header [data-md-component="logo"]');
+      var name = document.querySelector('.md-header__title .md-header__topic:not([data-md-component="header-topic"]) .md-ellipsis');
+      if (!logo || !name || name.querySelector('a')) return;
+      var a = document.createElement('a');
+      a.href = logo.getAttribute('href');
+      a.textContent = name.textContent.trim();
+      a.setAttribute('aria-label', 'Click-Dog home');
+      a.style.color = 'inherit';
+      a.style.textDecoration = 'none';
+      name.textContent = '';
+      name.appendChild(a);
+    })();
+  </script>
+{% endblock %}

@@ -1,0 +1,96 @@
+name: Release
+
+# Tag-triggered wrapper around ci.yml. The cosign keyless identity is the
+# workflow file that runs the signing step (`.../release.yml@refs/tags/v...`)
+# — the updater (internal/updater/github.go) and the installer
+# (deploy/install.sh) both hardcode that path, so this file must remain
+# the home of the signing step even after ci.yml was generalised into a
+# reusable workflow.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One in-flight release per tag. Releases must run to completion, so no
+# cancel-in-progress.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Run the full CI gate (test/lint/build/build-arm64/govulncheck/
+  # integration-test) via the reusable entry point in ci.yml. Failing here
+  # blocks the release step below.
+  ci:
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
+  release:
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      # Required for cosign keyless signing via GitHub OIDC: GoReleaser's
+      # signs:/docker_signs: blocks shell out to cosign sign-blob/sign,
+      # which exchanges this token for a Fulcio-issued signing certificate.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.4'
+          cache: false
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Check GoReleaser config
+        # Keep this separate from the release step so schema/config errors
+        # fail before any publish/signing work starts.
+        uses: goreleaser/goreleaser-action@1a80836c5c9d9e5755a25cb59ec6f45a3b5f41a8 # v7.2.1
+        with:
+          version: '~> v2'
+          args: check
+
+      - name: Install cosign
+        # Pinned to commit SHA (v3.9.2) rather than the @v3 tag: this PR's
+        # whole point is closing the supply-chain gap, and a compromised
+        # cosign-installer tag could substitute a malicious cosign binary
+        # that would silently pass our verify-blob calls. Bump deliberately.
+        uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+
+      - name: Run GoReleaser
+        # SHA-pinned for the same reason as cosign-installer above: this
+        # step runs the signing flow, and a hijacked @v7 tag could
+        # produce unsigned (or wrongly-signed) artifacts. The other
+        # actions in this workflow stay on floating tags by repo
+        # convention — they don't affect the signed-artifact chain.
+        uses: goreleaser/goreleaser-action@1a80836c5c9d9e5755a25cb59ec6f45a3b5f41a8 # v7.2.1
+        with:
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify release
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          echo "Released $TAG"
+          echo "Binaries: https://github.com/${{ github.repository }}/releases/tag/$TAG"
+          echo "Docker:   ghcr.io/${{ github.repository }}:${TAG#v}"

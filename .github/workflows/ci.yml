@@ -1,0 +1,282 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+    # `ready_for_review` is required because the PR jobs below skip draft
+    # PRs (via `github.event.pull_request.draft == false`). Without it,
+    # marking a draft "ready" wouldn't fire any event and CI would never
+    # run. `synchronize` still re-runs CI on every push to a non-draft PR.
+    types: [opened, synchronize, reopened, ready_for_review]
+    # Docs-only PRs are handled by docs.yml; running the full CI matrix on
+    # them just burns minutes on a private repo. paths-ignore only skips
+    # when EVERY changed path matches, so mixed code+docs PRs still run.
+    paths-ignore:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - '**/*.md'
+  # Reusable entry point: release.yml calls this workflow on tag pushes
+  # so the test/lint/build/govulncheck/integration gate runs exactly once
+  # per tag, then GoReleaser fires from release.yml (which keeps the
+  # cosign keyless identity pinned to release.yml — the updater and
+  # install.sh both hardcode that path).
+  workflow_call:
+  workflow_dispatch:
+  schedule:
+    # Weekly full run (Mon 06:00 UTC). Its job is to re-run govulncheck
+    # against the latest vuln DB now that govulncheck no longer runs on
+    # PRs (see its `if:` below) — and as a side benefit gives master a
+    # weekly green baseline incl. the integration suite. ~4 runs/month.
+    - cron: '0 6 * * 1'
+
+# Cancel superseded PR runs to avoid paying for stale push iterations.
+# Master and tag pushes are never cancelled — we want every merge/release
+# commit fully validated.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Default to read-only. The release job opts in to write below.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Skip draft PRs — agents (claude/*, codex/*) push many WIP commits and
+    # each one would otherwise fire the full job set. Non-PR events (push,
+    # tag, schedule, workflow_call) always run. Same guard on lint/build.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.4'
+
+      - name: Download dependencies
+        run: go mod download
+
+      # PRs run unit tests without -race to halve wall-clock; master and tag
+      # pushes (which gate releases) get the full race-detected run.
+      - name: Run tests
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            go test -v -coverprofile=coverage.out ./...
+          else
+            go test -v -race -coverprofile=coverage.out ./...
+          fi
+
+      - name: Upload coverage
+        # codecov-action v5.5.5, pinned by commit to avoid major-tag drift.
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac
+        with:
+          files: coverage.out
+        continue-on-error: true
+
+  lint:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.4'
+
+      - name: gofmt
+        run: make fmt-check
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          args: --timeout=5m
+
+  build:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.4'
+
+      - name: Build (linux/amd64)
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o click-dog-linux-amd64
+
+  # arm64 cross-compile smoke test. Only runs on tag pushes so we catch any
+  # arm64-breaking change before GoReleaser produces the release artefacts —
+  # everyday PRs/master pushes stay amd64-only for speed.
+  build-arm64:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.4'
+
+      - name: Build (linux/arm64)
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o click-dog-linux-arm64
+
+  govulncheck:
+    # Moved off PRs: the vuln DB updates daily, not per-commit, so scanning
+    # every PR push was wasted minutes. Now runs on master push, tag/release
+    # (the gate that matters), the weekly schedule above, and manual dispatch.
+    # Run `make vulncheck` locally if you need a pre-merge check on a PR.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.4'
+
+      # Pinned: avoid silent CI behaviour changes from a govulncheck
+      # release we haven't reviewed. v1.3.0 requires Go >= 1.25, which
+      # matches the go-version above. Bump deliberately.
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.3.0
+
+      - name: Run govulncheck
+        run: govulncheck ./...
+
+  # Integration tests spin up a 3-node ClickHouse cluster + OTEL collector
+  # — by far the most expensive job (~210s/run). Skipped on PRs; runs on
+  # master push (post-merge confidence), tag pushes (release gate), and
+  # manual dispatch (for risky PRs — start a workflow_dispatch run against
+  # the PR ref when integration confidence is needed before merge).
+  integration-test:
+    if: github.event_name != 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.4'
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Prepare OTEL output directory
+        run: |
+          chmod 777 testing/otel-output
+          touch testing/otel-output/traces.jsonl
+          chmod 666 testing/otel-output/traces.jsonl
+
+      - name: Start integration cluster
+        run: docker compose -f testing/docker-compose.integration.yml up -d
+
+      - name: Show initial container status
+        run: |
+          sleep 5
+          docker compose -f testing/docker-compose.integration.yml ps
+          echo "--- Container logs (last 20 lines each) ---"
+          docker compose -f testing/docker-compose.integration.yml logs --tail=20
+
+      - name: Wait for ClickHouse nodes
+        run: |
+          for svc in clickhouse1 clickhouse2 clickhouse3; do
+            container="clickhouse-int-${svc##clickhouse}"
+            echo "Waiting for $svc (container $container)..."
+            # Phase 1: wait for HTTP ping (server process started)
+            for i in $(seq 1 90); do
+              if docker exec "$container" wget --spider -q localhost:8123/ping 2>/dev/null; then
+                echo "$svc HTTP ping OK"
+                break
+              fi
+              if [ "$i" -eq 90 ]; then
+                echo "$svc failed to start (HTTP ping never responded)"
+                echo "--- docker compose logs ---"
+                docker compose -f testing/docker-compose.integration.yml logs "$svc"
+                echo "--- clickhouse error log ---"
+                docker exec "$container" cat /var/log/clickhouse-server/clickhouse-server.err.log 2>/dev/null || true
+                exit 1
+              fi
+              sleep 2
+            done
+            # Phase 2: wait for native protocol (Keeper quorum formed)
+            for i in $(seq 1 30); do
+              if docker exec "$container" clickhouse-client --query "SELECT 1" 2>/dev/null; then
+                echo "$svc is fully ready"
+                break
+              fi
+              if [ "$i" -eq 30 ]; then
+                echo "$svc HTTP OK but native protocol not ready (Keeper quorum issue?)"
+                echo "--- clickhouse error log ---"
+                docker exec "$container" cat /var/log/clickhouse-server/clickhouse-server.err.log 2>/dev/null || true
+                exit 1
+              fi
+              sleep 2
+            done
+          done
+
+      - name: Wait for OTEL Collector
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl -sf http://localhost:13133/ > /dev/null 2>&1; then
+              echo "OTEL Collector is ready"
+              exit 0
+            fi
+            echo "Waiting for OTEL Collector ($attempt/30)..."
+            sleep 2
+          done
+          echo "OTEL Collector failed to start"
+          docker compose -f testing/docker-compose.integration.yml logs otel-collector
+          exit 1
+
+      - name: Run integration tests
+        run: |
+          go test -v -race -tags integration -skip TestDegradation -timeout 300s ./... 2>&1 | tee test-output.txt
+          exit "${PIPESTATUS[0]}"
+        env:
+          CLICKHOUSE1_ADDR: localhost:19000
+          CLICKHOUSE2_ADDR: localhost:19001
+          CLICKHOUSE3_ADDR: localhost:19002
+          OTEL_ADDR: localhost:14317
+          KEEPER1_ADDR: localhost:19181
+          KEEPER2_ADDR: localhost:19182
+          KEEPER3_ADDR: localhost:19183
+
+      - name: Test summary
+        if: always()
+        run: |
+          echo "=== TEST SUMMARY ==="
+          PASS=$(grep -c '^--- PASS:' test-output.txt 2>/dev/null || echo 0)
+          FAIL=$(grep -c '^--- FAIL:' test-output.txt 2>/dev/null || echo 0)
+          echo "PASSED: $PASS"
+          echo "FAILED: $FAIL"
+          if [ "$FAIL" -gt 0 ]; then
+            echo ""
+            echo "=== FAILED TESTS ==="
+            grep '^--- FAIL:' test-output.txt
+          fi
+
+      - name: Collect logs on failure
+        if: failure()
+        run: docker compose -f testing/docker-compose.integration.yml logs > integration-logs.txt 2>&1
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-logs
+          path: integration-logs.txt
+
+      - name: Teardown
+        if: always()
+        run: docker compose -f testing/docker-compose.integration.yml down -v

@@ -1,0 +1,64 @@
+# Click-Dog
+
+> Click-Dog is source-safe query observability for ClickHouse: a read-only
+> exporter that turns native ClickHouse telemetry into OTLP traces, Datadog
+> dashboards, and deterministic query-analysis reports.
+
+Important notes:
+- Click-Dog is pre-1.0 beta software. Read the operating contract and changelog
+  before relying on stable config, CLI, HTTP, or metric names.
+- Analysis reports are operational artifacts. They may contain normalized SQL,
+  schema shape, table names, users, clients, hosts, application tags, and
+  resource usage evidence.
+- AI-ready means deterministic, schema-versioned `AnalysisReport` and `Finding`
+  JSON that assistants can summarize. It does not mean Click-Dog runs an LLM in
+  the export path.
+- Use `click-dog analyze queries --redact-dimensions -format json` before
+  sharing report output with external tools.
+
+## Product Docs
+
+- [Documentation](https://click-dog.com/docs/): task-oriented entry point for
+  public user docs.
+- [Getting Started](https://click-dog.com/getting-started/): Fast path from
+  install to verification and first value.
+- [Install](https://click-dog.com/install/): Verified installer, Docker,
+  Kubernetes, and Ansible deployment paths.
+- [Integrations](https://click-dog.com/integrations/): Backend overview for
+  packaged Datadog support and interest-gathering pages.
+- [Configuration](https://click-dog.com/configuration/): Config reference for
+  ClickHouse, exporters, filters, metrics, health, HA, and logging.
+- [Operation Modes](https://click-dog.com/modes/): Scheduled, backfill,
+  validate, dry-run, flush, and deploy modes.
+- [Query Analysis](https://click-dog.com/query-analysis/): Deterministic local
+  analysis reports and JSON output for tooling.
+- [Observability](https://click-dog.com/observability/): Metrics, health
+  endpoints, status, webhooks, and self-monitoring.
+- [Operating Contract](https://click-dog.com/operating/): Beta delivery
+  guarantees, loss windows, compatibility, performance, and cost posture.
+- [Span Attributes](https://click-dog.com/span-attributes/): Exported trace and
+  query attributes, including normalized query metadata.
+- [Datadog](https://click-dog.com/integrations/datadog/): Datadog Agent/OTLP
+  setup, dashboards, and recommended monitors.
+- [Generic OTLP](https://click-dog.com/integrations/generic-otlp/): OTLP setup
+  for compatible tracing backends.
+- [Splunk HEC](https://click-dog.com/integrations/splunk-hec/): Splunk HTTP
+  Event Collector setup and multi-sink notes.
+- [Troubleshooting](https://click-dog.com/troubleshooting/): Common install,
+  export, dashboard, and data-shape issues.
+- [Support](https://click-dog.com/support/): community support, commercial
+  support, and custom development boundaries.
+
+## Machine-Readable Contracts
+
+- [Analysis report schema](https://click-dog.com/schemas/analysis-report-v1.schema.json):
+  JSON Schema for `analysis.report.v1`.
+- [Finding schema](https://click-dog.com/schemas/analysis-finding-v1.schema.json):
+  JSON Schema for `analysis.finding.v1`.
+- [Redacted report example](https://click-dog.com/examples/analysis-report-redacted.json):
+  Example `analyze queries` output suitable for docs and assistant tests.
+
+## Source
+
+- [GitHub repository](https://github.com/coltconsulting/click-dog): Source,
+  issues, releases, dashboard JSON, and contributor docs.

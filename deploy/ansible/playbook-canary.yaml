@@ -1,0 +1,64 @@
+---
+# Click-Dog Canary Deployment Playbook
+#
+# Staged rollout using the main playbook: deploy to canary nodes first,
+# verify health, wait for a configurable soak period, then proceed to the
+# full fleet in rolling batches.
+#
+# Usage:
+#   ansible-playbook -i inventory.ini playbook-canary.yaml \
+#     --extra-vars "clickhouse_password=YOUR_PASSWORD"
+#
+# Options:
+#   canary_soak_minutes       Minutes to wait after canary readiness check (default: 5)
+#   click_dog_health_enabled  Set false only during a legacy migration where
+#                             canary nodes have not yet received a config with
+#                             the health: listener block on :8686.
+#
+# Note: The full fleet deploy uses the main playbook's serial setting.
+# To control batch size, pass -f N (forks) on the CLI:
+#   ansible-playbook -i inventory.ini playbook-canary.yaml -f 10 ...
+#
+# Requirements:
+#   - Add canary nodes to the [clickhouse_canary] group in inventory.ini
+#   - The main playbook.yaml must be in the same directory
+
+# Step 1: Deploy to canary nodes (one at a time) using the main playbook
+- import_playbook: playbook.yaml
+  vars:
+    # Override target to canary group only, one at a time
+    target_hosts: clickhouse_canary
+
+# Step 2: Verify canary health
+- name: Verify canary health
+  hosts: clickhouse_canary
+  become: true
+  tasks:
+    - name: Check service is active
+      ansible.builtin.systemd:
+        name: click-dog
+      register: click_dog_status
+      failed_when: click_dog_status.status.ActiveState != "active"
+
+    - name: Check readiness endpoint
+      ansible.builtin.uri:
+        url: "http://localhost:8686/readyz"
+        status_code: 200
+      retries: 6
+      delay: 10
+      when: click_dog_health_enabled | default(true)
+
+# Step 3: Soak time — let the canary run before proceeding to the full fleet
+- name: Canary soak period
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Wait for canary soak period
+      ansible.builtin.pause:
+        minutes: "{{ canary_soak_minutes | default(5) }}"
+        prompt: "Canary healthy. Waiting {{ canary_soak_minutes | default(5) }} min before full fleet. Ctrl+C then 'A' to abort."
+
+# Step 4: Deploy to remaining fleet in rolling batches
+- import_playbook: playbook.yaml
+  vars:
+    target_hosts: "clickhouse:!clickhouse_canary"

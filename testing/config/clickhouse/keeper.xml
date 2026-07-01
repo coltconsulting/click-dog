@@ -1,0 +1,17 @@
+<clickhouse>
+    <!-- Use the embedded ClickHouse Keeper ensemble (3 nodes) -->
+    <zookeeper>
+        <node>
+            <host>clickhouse1</host>
+            <port>9181</port>
+        </node>
+        <node>
+            <host>clickhouse2</host>
+            <port>9181</port>
+        </node>
+        <node>
+            <host>clickhouse3</host>
+            <port>9181</port>
+        </node>
+    </zookeeper>
+</clickhouse>

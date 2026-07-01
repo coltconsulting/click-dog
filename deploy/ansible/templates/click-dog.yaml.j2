@@ -1,0 +1,70 @@
+clickhouse:
+  host: {{ clickhouse_host }}
+  port: {{ clickhouse_port }}
+  database: default
+  username: {{ clickhouse_username }}
+  password_file: {{ click_dog_config_dir }}/.secret
+  max_open_conns: 2
+  max_idle_conns: 1
+  query_timeout_s: 30
+
+exporters:
+  otel:
+    - collector_address: {{ otel_collector_address }}
+      service_name: click-dog-monitor
+{% if tls_enabled | bool %}
+      secure: true
+      ca_cert: {{ tls_cert_dir }}/fullchain.pem
+      client_cert: {{ tls_cert_dir }}/tls.crt
+      client_key: {{ tls_cert_dir }}/tls.key
+{% endif %}
+
+monitor:
+  enabled: true
+  min_trace_duration_ms: 1000
+  check_interval_s: 30
+  lookback_s: 40
+  max_spans_per_cycle: 1000
+  dedup_cache_size: 10000
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 3
+    success_threshold: 1
+    reset_timeout_s: 60
+  backoff:
+    enabled: true
+    max_interval_s: 300
+    backoff_factor: 2.0
+
+filters:
+  blacklist_queries:
+    - "^SELECT \\* FROM system\\."
+    - "SHOW TABLES"
+    - "(?i)healthcheck"
+  blacklist_operations:
+    - "MergeTreeSource"
+    - "MergeTreeMarksLoader"
+    - "MergeTreeIndex"
+    - "MergeTreeSequentialSource"
+    - "VFSWrite"
+    - "WriteBufferFromS3"
+    - "ConcurrentJoin"
+    - "QueryPipelineEx"
+
+metrics:
+  enabled: true
+  listen_address: ":9090"
+
+health:
+  enabled: true
+  listen_address: ":8686"
+
+log_level: info
+
+{% if ha_enabled | bool %}
+ha:
+  keeper:
+    hosts: {{ keeper_hosts }}
+    session_timeout_s: 10
+    base_path: "/click-dog/election"
+{% endif %}

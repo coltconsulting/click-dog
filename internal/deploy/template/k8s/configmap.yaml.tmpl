@@ -1,0 +1,80 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: click-dog-config
+  namespace: click-dog
+  labels:
+    app.kubernetes.io/name: click-dog
+data:
+  click-dog.yaml: |
+    clickhouse:
+      host: {{ .ClickHouseHost }}
+      port: 9000
+      database: default
+      username: ${CLICKHOUSE_USERNAME}
+      password: ${CLICKHOUSE_PASSWORD}
+      max_open_conns: 2
+      max_idle_conns: 1
+      query_timeout_s: 30
+{{- if .ClickHouseCluster }}
+      # Read across all shards from this one instance via cluster() queries.
+      # Both fields are required — use_cluster_queries with an empty cluster is a
+      # no-op that reads only the single pod the Service routes to.
+      use_cluster_queries: true
+      cluster: {{ .ClickHouseCluster }}
+{{- end }}
+
+    exporters:
+      otel:
+        - collector_address: {{ .CollectorAddress }}
+          service_name: click-dog-monitor
+
+    monitor:
+      enabled: true
+      min_trace_duration_ms: 1000
+      check_interval_s: 30
+      lookback_s: 40
+      max_spans_per_cycle: 1000
+      dedup_cache_size: 10000
+      circuit_breaker:
+        enabled: true
+        failure_threshold: 3
+        success_threshold: 1
+        reset_timeout_s: 60
+      backoff:
+        enabled: true
+        max_interval_s: 300
+        backoff_factor: 2.0
+
+    filters:
+      blacklist_queries:
+        - "^SELECT \\* FROM system\\."
+        - "SHOW TABLES"
+        - "(?i)healthcheck"
+        - "(?i)^SELECT 1$"
+        - "(?i)^SELECT version\\(\\)"
+      blacklist_operations:
+        - "MergeTreeSource"
+        - "MergeTreeMarksLoader"
+        - "MergeTreeIndex"
+        - "MergeTreeSequentialSource"
+        - "VFSWrite"
+        - "WriteBufferFromS3"
+        - "ConcurrentJoin"
+        - "QueryPipelineEx"
+
+    log_level: info
+
+    metrics:
+      enabled: true
+      listen_address: ":9090"
+      # admin_listen_address (default: 127.0.0.1:9091) hosts POST /flush.
+      # Loopback by default; SIGUSR1 via kubectl exec is the cross-pod
+      # equivalent. Don't expose 9091 in a Service or containerPort.
+      # admin_listen_address: "127.0.0.1:9091"
+
+    # Dedicated Kubernetes probe endpoints. /healthz is liveness and /readyz
+    # reports dependency/circuit-breaker readiness.
+    health:
+      enabled: true
+      listen_address: ":8686"

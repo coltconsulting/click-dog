@@ -1,0 +1,25 @@
+<clickhouse>
+    <remote_servers>
+        <test_cluster>
+            <!-- 3-shard, 1-replica cluster for integration testing -->
+            <shard>
+                <replica>
+                    <host>clickhouse1</host>
+                    <port>9000</port>
+                </replica>
+            </shard>
+            <shard>
+                <replica>
+                    <host>clickhouse2</host>
+                    <port>9000</port>
+                </replica>
+            </shard>
+            <shard>
+                <replica>
+                    <host>clickhouse3</host>
+                    <port>9000</port>
+                </replica>
+            </shard>
+        </test_cluster>
+    </remote_servers>
+</clickhouse>

@@ -1,0 +1,869 @@
+{
+  "title": "Click-Dog: Health",
+  "description": "OTLP self-monitoring dashboard for click-dog. Prioritizes current action state: last success age, circuit breaker severity, error rate, export throughput, and adaptive backoff before lifetime counters. In the default one-sidecar-per-ClickHouse-node deployment the top cockpit tiles aggregate worst-case across the active exporters (max breaker state, max backoff, oldest active last-success) so a single unhealthy active exporter is never hidden by healthy peers; HA standbys stay visible through the leader state without making stale-export tiles red. Circuit breaker state uses severity order: 0=closed, 1=half-open, 2=open. Metrics are pushed over OTLP when metrics.otlp.enabled is true and grouped by host.name; the note widget keeps the legacy OpenMetrics scrape mapping for Prometheus-only users.",
+  "layout_type": "ordered",
+  "template_variables": [
+    {
+      "name": "host",
+      "prefix": "host.name",
+      "default": "*"
+    }
+  ],
+  "widgets": [
+    {
+      "id": 1,
+      "definition": {
+        "type": "note",
+        "content": "# Click-Dog — Health\n\nOTLP self-monitoring for the click-dog exporter. The top cockpit answers whether active exports are flowing now: last success age, breaker state, current error rate, export throughput, and adaptive backoff. In the default one-sidecar-per-ClickHouse-node deployment these tiles aggregate worst-case across active exporters — `max` breaker state, `max` backoff, and oldest (`min`) `role:active` last-success timestamp — so one unhealthy active exporter is never averaged away by healthy peers while HA standbys stay visibly idle. The **Per-host health** table below the cockpit ranks sidecars worst-first so the degraded host is immediately identifiable; standbys remain visible through the leader column but are excluded from stale-export age calculations. Lifetime totals live lower on the dashboard. Metrics are pushed over OTLP when `metrics.otlp.enabled: true`; by default they reuse `exporters.otel[0]`. Set `metrics.otlp.host` for a stable `host.name` in containers. Circuit breaker state uses severity order: `0=closed`, `1=half-open`, `2=open`.\n\n**Legacy Datadog Agent OpenMetrics check (Prometheus-only)** — drop this in `/etc/datadog-agent/conf.d/openmetrics.d/conf.yaml` and restart the Agent. The explicit rename list maps Prometheus names to the legacy dotted Datadog names. The shipped dashboard queries OTLP names by default; use this block only if you are staying on the scrape path.\n\n```yaml\ninit_config:\n\ninstances:\n  - openmetrics_endpoint: http://localhost:9090/metrics\n    namespace: click_dog\n    metrics:\n      # Counters — Datadog appends `.count` and submits as a monotonic rate.\n      - click_dog_spans_exported_total: spans_exported\n      - click_dog_spans_filtered_total: spans_filtered\n      - click_dog_spans_duplicates_total: spans_duplicates\n      - click_dog_export_attempts_total: export.attempts\n      - click_dog_export_accepted_total: export.accepted\n      - click_dog_export_errors_total: export.errors\n      - click_dog_cycle_results_total: cycle_results\n      # Gauges — submitted as-is under the namespace.\n      - click_dog_circuit_breaker_state: circuit_breaker.state\n      - click_dog_leader: leader\n      - click_dog_backoff_interval_seconds: backoff_interval.seconds\n      - click_dog_last_success_timestamp_seconds: last_success_timestamp.seconds\n      - click_dog_uptime_seconds: uptime.seconds\n      - click_dog_last_cycle_duration_seconds: last_cycle.duration_seconds\n      - click_dog_last_cycle_exported_spans: last_cycle.exported_spans\n      - click_dog_last_cycle_filtered_spans: last_cycle.filtered_spans\n      - click_dog_last_cycle_duplicate_spans: last_cycle.duplicate_spans\n      # ClickHouse data-plane health (#183) — distinguishes 'click-dog is down' from 'ClickHouse is not emitting useful data'.\n      - click_dog_span_log_last_poll_timestamp_seconds: span_log.last_poll_timestamp.seconds\n      - click_dog_span_log_newest_row_age_seconds: span_log.newest_row_age.seconds\n      - click_dog_span_log_rows_last_cycle: span_log.rows_last_cycle\n      - click_dog_query_log_enrichment_attempts_total: query_log.enrichment.attempts\n      - click_dog_query_log_enrichment_successes_total: query_log.enrichment.successes\n      - click_dog_query_log_enrichment_failures_total: query_log.enrichment.failures\n      - click_dog_query_log_enrichment_match_ratio: query_log.enrichment.match_ratio\n      - click_dog_spans_with_query_id_ratio: spans_with_query_id_ratio\n      - click_dog_normalized_query_supported: normalized_query_supported\n      # Topology self-audit — detects the sidecar + use_cluster_queries anti-pattern. Grey / no-data ≠ healthy: the metric must be scraped.\n      - click_dog_topology_warning: topology_warning\n```\n\nThe OTLP path emits `click_dog.{canonical_key}` and Datadog stores monotonic sums with a `.count` suffix, for example `click_dog.spans_exported.count`. The scrape mapping above is retained for pure-Prometheus users who cannot enable OTLP self-metrics.\n\n**No data?** In Datadog Metrics Explorer, search for `click_dog.`. Confirm `metrics.otlp.enabled: true`, that the Datadog Agent or collector OTLP gRPC receiver is reachable, and that `metrics.otlp.host` matches the `host.name` template variable you expect. On the legacy scrape path, search for `click_dog.click_dog_spans_exported_total`; that means the explicit OpenMetrics `metrics:` rename list above is not being applied.",
+        "background_color": "blue",
+        "font_size": "14",
+        "text_align": "left",
+        "vertical_align": "top",
+        "show_tick": false,
+        "has_padding": true
+      },
+      "layout": {"x": 0, "y": 0, "width": 12, "height": 2}
+    },
+    {
+      "id": 2,
+      "definition": {
+        "type": "query_value",
+        "title": "Uptime",
+        "title_size": "16",
+        "title_align": "left",
+        "precision": 0,
+        "autoscale": true,
+        "custom_unit": "s",
+        "requests": [
+          {
+            "response_format": "scalar",
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "avg:click_dog.uptime_seconds{$host}",
+                "aggregator": "last"
+              }
+            ],
+            "formulas": [{"formula": "query1"}]
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 17, "width": 4, "height": 2}
+    },
+    {
+      "id": 3,
+      "definition": {
+        "type": "query_value",
+        "title": "Cycles total",
+        "title_size": "16",
+        "title_align": "left",
+        "precision": 0,
+        "autoscale": true,
+        "requests": [
+          {
+            "response_format": "scalar",
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "sum:click_dog.cycle_results.count{$host}",
+                "aggregator": "sum"
+              }
+            ],
+            "formulas": [{"formula": "query1"}]
+          }
+        ]
+      },
+      "layout": {"x": 4, "y": 17, "width": 4, "height": 2}
+    },
+    {
+      "id": 4,
+      "definition": {
+        "type": "query_value",
+        "title": "Errors total",
+        "title_size": "16",
+        "title_align": "left",
+        "precision": 0,
+        "autoscale": true,
+        "requests": [
+          {
+            "response_format": "scalar",
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "sum:click_dog.cycle_results.count{result:error,$host}",
+                "aggregator": "sum"
+              }
+            ],
+            "formulas": [{"formula": "query1"}],
+            "conditional_formats": [
+              {"comparator": ">", "value": 0, "palette": "white_on_red"},
+              {"comparator": "<=", "value": 0, "palette": "white_on_green"}
+            ]
+          }
+        ]
+      },
+      "layout": {"x": 8, "y": 17, "width": 4, "height": 2}
+    },
+    {
+      "id": 5,
+      "definition": {
+        "type": "query_value",
+        "title": "Circuit breaker",
+        "title_size": "16",
+        "title_align": "left",
+        "precision": 0,
+        "autoscale": false,
+        "requests": [
+          {
+            "response_format": "scalar",
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "max:click_dog.circuit_breaker_state{$host}",
+                "aggregator": "last"
+              }
+            ],
+            "formulas": [{"formula": "query1"}],
+            "conditional_formats": [
+              {"comparator": "=", "value": 0, "palette": "white_on_green"},
+              {"comparator": "=", "value": 1, "palette": "white_on_yellow"},
+              {"comparator": "=", "value": 2, "palette": "white_on_red"}
+            ]
+          }
+        ],
+        "custom_links": []
+      },
+      "layout": {"x": 3, "y": 2, "width": 2, "height": 2}
+    },
+    {
+      "id": 6,
+      "definition": {
+        "type": "timeseries",
+        "title": "Spans exported / filtered / duplicates",
+        "title_size": "16",
+        "title_align": "left",
+        "show_legend": true,
+        "legend_layout": "auto",
+        "legend_columns": ["avg", "sum", "max"],
+        "requests": [
+          {
+            "formulas": [
+              {"formula": "query1", "alias": "exported"},
+              {"formula": "query2", "alias": "filtered"},
+              {"formula": "query3", "alias": "duplicates"}
+            ],
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "sum:click_dog.spans_exported.count{$host}.as_rate()"
+              },
+              {
+                "name": "query2",
+                "data_source": "metrics",
+                "query": "sum:click_dog.spans_filtered.count{$host}.as_rate()"
+              },
+              {
+                "name": "query3",
+                "data_source": "metrics",
+                "query": "sum:click_dog.spans_duplicates.count{$host}.as_rate()"
+              }
+            ],
+            "response_format": "timeseries",
+            "display_type": "line",
+            "style": {"palette": "cool", "line_type": "solid", "line_width": "normal"}
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 8, "width": 6, "height": 4}
+    },
+    {
+      "id": 7,
+      "definition": {
+        "type": "timeseries",
+        "title": "Cycle rate and errors",
+        "title_size": "16",
+        "title_align": "left",
+        "show_legend": true,
+        "requests": [
+          {
+            "formulas": [
+              {"formula": "query1", "alias": "cycles/sec"},
+              {"formula": "query2", "alias": "errors/sec"}
+            ],
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "sum:click_dog.cycle_results.count{$host}.as_rate()"
+              },
+              {
+                "name": "query2",
+                "data_source": "metrics",
+                "query": "sum:click_dog.cycle_results.count{result:error,$host}.as_rate()"
+              }
+            ],
+            "response_format": "timeseries",
+            "display_type": "line",
+            "style": {"palette": "warm", "line_type": "solid", "line_width": "normal"}
+          }
+        ]
+      },
+      "layout": {"x": 6, "y": 8, "width": 6, "height": 4}
+    },
+    {
+      "id": 8,
+      "definition": {
+        "type": "timeseries",
+        "title": "Backoff interval over time",
+        "title_size": "16",
+        "title_align": "left",
+        "show_legend": false,
+        "requests": [
+          {
+            "formulas": [{"formula": "query1"}],
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "max:click_dog.backoff_interval_seconds{$host}"
+              }
+            ],
+            "response_format": "timeseries",
+            "display_type": "area",
+            "style": {"palette": "grey", "line_type": "solid", "line_width": "normal"}
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 12, "width": 6, "height": 3}
+    },
+    {
+      "id": 9,
+      "definition": {
+        "type": "timeseries",
+        "title": "Circuit breaker state (0=closed, 1=half-open, 2=open)",
+        "title_size": "16",
+        "title_align": "left",
+        "show_legend": false,
+        "requests": [
+          {
+            "formulas": [{"formula": "query1"}],
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "max:click_dog.circuit_breaker_state{$host}"
+              }
+            ],
+            "response_format": "timeseries",
+            "display_type": "bars",
+            "style": {"palette": "semantic", "line_type": "solid", "line_width": "normal"}
+          }
+        ],
+        "yaxis": {"min": "0", "max": "2"}
+      },
+      "layout": {"x": 6, "y": 12, "width": 6, "height": 3}
+    },
+    {
+      "id": 10,
+      "definition": {
+        "type": "query_value",
+        "title": "Last success age",
+        "title_size": "16",
+        "title_align": "left",
+        "precision": 0,
+        "autoscale": true,
+        "custom_unit": "s",
+        "requests": [
+          {
+            "response_format": "scalar",
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "min:click_dog.last_success_timestamp_seconds{role:active,$host}",
+                "aggregator": "last"
+              }
+            ],
+            "formulas": [{"formula": "time() - query1"}],
+            "conditional_formats": [
+              {"comparator": "<", "value": 300, "palette": "white_on_green"},
+              {"comparator": "<", "value": 900, "palette": "white_on_yellow"},
+              {"comparator": ">=", "value": 900, "palette": "white_on_red"}
+            ]
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 2, "width": 3, "height": 2}
+    },
+    {
+      "id": 11,
+      "definition": {
+        "type": "query_value",
+        "title": "Last cycle duration",
+        "title_size": "16",
+        "title_align": "left",
+        "precision": 2,
+        "autoscale": true,
+        "custom_unit": "s",
+        "requests": [
+          {
+            "response_format": "scalar",
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "max:click_dog.last_cycle_duration_seconds{$host}",
+                "aggregator": "last"
+              }
+            ],
+            "formulas": [{"formula": "query1"}]
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 15, "width": 3, "height": 2}
+    },
+    {
+      "id": 12,
+      "definition": {
+        "type": "query_value",
+        "title": "Last cycle exported",
+        "title_size": "16",
+        "title_align": "left",
+        "precision": 0,
+        "autoscale": true,
+        "requests": [
+          {
+            "response_format": "scalar",
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "max:click_dog.last_cycle_exported_spans{$host}",
+                "aggregator": "last"
+              }
+            ],
+            "formulas": [{"formula": "query1"}]
+          }
+        ]
+      },
+      "layout": {"x": 3, "y": 15, "width": 3, "height": 2}
+    },
+    {
+      "id": 13,
+      "definition": {
+        "type": "query_value",
+        "title": "Last cycle filtered",
+        "title_size": "16",
+        "title_align": "left",
+        "precision": 0,
+        "autoscale": true,
+        "requests": [
+          {
+            "response_format": "scalar",
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "max:click_dog.last_cycle_filtered_spans{$host}",
+                "aggregator": "last"
+              }
+            ],
+            "formulas": [{"formula": "query1"}]
+          }
+        ]
+      },
+      "layout": {"x": 6, "y": 15, "width": 3, "height": 2}
+    },
+    {
+      "id": 14,
+      "definition": {
+        "type": "query_value",
+        "title": "Last cycle duplicates",
+        "title_size": "16",
+        "title_align": "left",
+        "precision": 0,
+        "autoscale": true,
+        "requests": [
+          {
+            "response_format": "scalar",
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "max:click_dog.last_cycle_duplicate_spans{$host}",
+                "aggregator": "last"
+              }
+            ],
+            "formulas": [{"formula": "query1"}]
+          }
+        ]
+      },
+      "layout": {"x": 9, "y": 15, "width": 3, "height": 2}
+    },
+    {
+      "id": 15,
+      "definition": {
+        "type": "timeseries",
+        "title": "Cycle results by outcome",
+        "title_size": "16",
+        "title_align": "left",
+        "show_legend": true,
+        "legend_layout": "auto",
+        "legend_columns": ["avg", "sum", "max"],
+        "requests": [
+          {
+            "formulas": [{"formula": "query1"}],
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "sum:click_dog.cycle_results.count{$host} by {result}.as_rate()"
+              }
+            ],
+            "response_format": "timeseries",
+            "display_type": "bars",
+            "style": {"palette": "semantic", "line_type": "solid", "line_width": "normal"}
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 19, "width": 12, "height": 4}
+    },
+    {
+      "id": 16,
+      "definition": {
+        "type": "query_value",
+        "title": "Error rate",
+        "title_size": "16",
+        "title_align": "left",
+        "precision": 3,
+        "autoscale": true,
+        "custom_unit": "err/s",
+        "requests": [
+          {
+            "response_format": "scalar",
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "sum:click_dog.cycle_results.count{result:error,$host}.as_rate()",
+                "aggregator": "last"
+              }
+            ],
+            "formulas": [{"formula": "query1"}],
+            "conditional_formats": [
+              {"comparator": "<=", "value": 0, "palette": "white_on_green"},
+              {"comparator": ">", "value": 0, "palette": "white_on_red"}
+            ]
+          }
+        ]
+      },
+      "layout": {"x": 5, "y": 2, "width": 2, "height": 2}
+    },
+    {
+      "id": 17,
+      "definition": {
+        "type": "query_value",
+        "title": "Export throughput",
+        "title_size": "16",
+        "title_align": "left",
+        "precision": 2,
+        "autoscale": true,
+        "custom_unit": "spans/s",
+        "requests": [
+          {
+            "response_format": "scalar",
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "sum:click_dog.spans_exported.count{$host}.as_rate()",
+                "aggregator": "last"
+              }
+            ],
+            "formulas": [{"formula": "query1"}],
+            "conditional_formats": [
+              {"comparator": ">", "value": 0, "palette": "white_on_green"},
+              {"comparator": "<=", "value": 0, "palette": "white_on_gray"}
+            ]
+          }
+        ]
+      },
+      "layout": {"x": 7, "y": 2, "width": 3, "height": 2}
+    },
+    {
+      "id": 18,
+      "definition": {
+        "type": "query_value",
+        "title": "Backoff interval",
+        "title_size": "16",
+        "title_align": "left",
+        "precision": 0,
+        "autoscale": true,
+        "custom_unit": "s",
+        "requests": [
+          {
+            "response_format": "scalar",
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "max:click_dog.backoff_interval_seconds{$host}",
+                "aggregator": "last"
+              }
+            ],
+            "formulas": [{"formula": "query1"}],
+            "conditional_formats": [
+              {"comparator": ">=", "value": 300, "palette": "white_on_red"},
+              {"comparator": ">", "value": 60, "palette": "white_on_yellow"},
+              {"comparator": "<=", "value": 60, "palette": "white_on_green"}
+            ]
+          }
+        ]
+      },
+      "layout": {"x": 10, "y": 2, "width": 2, "height": 2}
+    },
+    {
+      "id": 19,
+      "definition": {
+        "type": "query_table",
+        "title": "Per-host health — worst sidecar first (breaker, last-success age, backoff)",
+        "title_size": "16",
+        "title_align": "left",
+        "requests": [
+          {
+            "response_format": "scalar",
+            "queries": [
+              {
+                "name": "breaker",
+                "data_source": "metrics",
+                "query": "max:click_dog.circuit_breaker_state{$host} by {host.name}",
+                "aggregator": "last"
+              },
+              {
+                "name": "leader",
+                "data_source": "metrics",
+                "query": "max:click_dog.leader{$host} by {host.name}",
+                "aggregator": "last"
+              },
+              {
+                "name": "last_success",
+                "data_source": "metrics",
+                "query": "min:click_dog.last_success_timestamp_seconds{role:active,$host} by {host.name}",
+                "aggregator": "last"
+              },
+              {
+                "name": "backoff",
+                "data_source": "metrics",
+                "query": "max:click_dog.backoff_interval_seconds{$host} by {host.name}",
+                "aggregator": "last"
+              },
+              {
+                "name": "topology",
+                "data_source": "metrics",
+                "query": "max:click_dog.topology_warning{$host} by {host.name}",
+                "aggregator": "last"
+              }
+            ],
+            "formulas": [
+              {
+                "formula": "breaker",
+                "alias": "circuit breaker",
+                "limit": {"count": 100, "order": "desc"},
+                "conditional_formats": [
+                  {"comparator": "=", "value": 0, "palette": "white_on_green"},
+                  {"comparator": "=", "value": 1, "palette": "white_on_yellow"},
+                  {"comparator": "=", "value": 2, "palette": "white_on_red"}
+                ]
+              },
+              {
+                "formula": "leader",
+                "alias": "leader",
+                "conditional_formats": [
+                  {"comparator": "=", "value": 1, "palette": "white_on_green"},
+                  {"comparator": "=", "value": 0, "palette": "white_on_yellow"}
+                ]
+              },
+              {
+                "formula": "time() - last_success",
+                "alias": "last success age (s)",
+                "conditional_formats": [
+                  {"comparator": "<", "value": 300, "palette": "white_on_green"},
+                  {"comparator": "<", "value": 900, "palette": "white_on_yellow"},
+                  {"comparator": ">=", "value": 900, "palette": "white_on_red"}
+                ]
+              },
+              {
+                "formula": "backoff",
+                "alias": "backoff (s)",
+                "conditional_formats": [
+                  {"comparator": ">=", "value": 300, "palette": "white_on_red"},
+                  {"comparator": ">", "value": 60, "palette": "white_on_yellow"},
+                  {"comparator": "<=", "value": 60, "palette": "white_on_green"}
+                ]
+              },
+              {
+                "formula": "topology",
+                "alias": "topology warning",
+                "conditional_formats": [
+                  {"comparator": "=", "value": 0, "palette": "white_on_green"},
+                  {"comparator": ">", "value": 0, "palette": "white_on_red"}
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 4, "width": 12, "height": 4}
+    },
+    {
+      "id": 20,
+      "definition": {
+        "type": "note",
+        "content": "## ClickHouse data-plane health (#183)\n\nThese tiles distinguish \"click-dog is down\" (entire row blank — no scrape) from \"click-dog is up but ClickHouse is not emitting useful data\" (tiles populated but red). Pair the **newest span age** tile with the cockpit's **last success age**: when last-success is fresh but newest-span-age keeps climbing, click-dog is polling ClickHouse but `system.opentelemetry_span_log` has gone quiet. The **enrichment failure** rate isolates query_log join health independent of span flow. **Spans with query_id** below 1.0 is the signal Datadog query-analysis dashboards lose context — confirm the OpenTelemetry trace propagation in your ClickHouse client.",
+        "background_color": "gray",
+        "font_size": "14",
+        "text_align": "left",
+        "show_tick": false,
+        "has_padding": true
+      },
+      "layout": {"x": 0, "y": 23, "width": 12, "height": 1}
+    },
+    {
+      "id": 21,
+      "definition": {
+        "type": "query_value",
+        "title": "Newest span_log row age",
+        "title_size": "16",
+        "title_align": "left",
+        "precision": 0,
+        "autoscale": true,
+        "custom_unit": "s",
+        "requests": [
+          {
+            "response_format": "scalar",
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "max:click_dog.span_log_newest_row_age_seconds{$host}",
+                "aggregator": "last"
+              }
+            ],
+            "formulas": [{"formula": "query1"}],
+            "conditional_formats": [
+              {"comparator": "<", "value": 120, "palette": "white_on_green"},
+              {"comparator": "<", "value": 600, "palette": "white_on_yellow"},
+              {"comparator": ">=", "value": 600, "palette": "white_on_red"}
+            ]
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 24, "width": 4, "height": 2}
+    },
+    {
+      "id": 22,
+      "definition": {
+        "type": "query_value",
+        "title": "Span_log rows last cycle",
+        "title_size": "16",
+        "title_align": "left",
+        "precision": 0,
+        "autoscale": true,
+        "requests": [
+          {
+            "response_format": "scalar",
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "max:click_dog.span_log_rows_last_cycle{$host}",
+                "aggregator": "last"
+              }
+            ],
+            "formulas": [{"formula": "query1"}],
+            "conditional_formats": [
+              {"comparator": ">", "value": 0, "palette": "white_on_green"},
+              {"comparator": "<=", "value": 0, "palette": "white_on_yellow"}
+            ]
+          }
+        ]
+      },
+      "layout": {"x": 4, "y": 24, "width": 4, "height": 2}
+    },
+    {
+      "id": 23,
+      "definition": {
+        "type": "query_value",
+        "title": "Spans with query_id (last cycle)",
+        "title_size": "16",
+        "title_align": "left",
+        "precision": 2,
+        "autoscale": true,
+        "requests": [
+          {
+            "response_format": "scalar",
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "min:click_dog.spans_with_query_id_ratio{$host}",
+                "aggregator": "last"
+              }
+            ],
+            "formulas": [{"formula": "query1"}],
+            "conditional_formats": [
+              {"comparator": ">=", "value": 0.99, "palette": "white_on_green"},
+              {"comparator": ">=", "value": 0.5, "palette": "white_on_yellow"},
+              {"comparator": "<", "value": 0.5, "palette": "white_on_red"}
+            ]
+          }
+        ]
+      },
+      "layout": {"x": 8, "y": 24, "width": 4, "height": 2}
+    },
+    {
+      "id": 24,
+      "definition": {
+        "type": "query_value",
+        "title": "Enrichment match ratio (last cycle)",
+        "title_size": "16",
+        "title_align": "left",
+        "precision": 2,
+        "autoscale": true,
+        "requests": [
+          {
+            "response_format": "scalar",
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "min:click_dog.query_log_enrichment_match_ratio{$host}",
+                "aggregator": "last"
+              }
+            ],
+            "formulas": [{"formula": "query1"}],
+            "conditional_formats": [
+              {"comparator": ">=", "value": 0.9, "palette": "white_on_green"},
+              {"comparator": ">=", "value": 0.5, "palette": "white_on_yellow"},
+              {"comparator": "<", "value": 0.5, "palette": "white_on_red"}
+            ]
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 26, "width": 4, "height": 2}
+    },
+    {
+      "id": 25,
+      "definition": {
+        "type": "timeseries",
+        "title": "Enrichment outcomes (rate)",
+        "title_size": "16",
+        "title_align": "left",
+        "show_legend": true,
+        "legend_layout": "auto",
+        "requests": [
+          {
+            "response_format": "timeseries",
+            "queries": [
+              {
+                "name": "successes",
+                "data_source": "metrics",
+                "query": "sum:click_dog.query_log_enrichment_successes.count{$host}.as_rate()"
+              },
+              {
+                "name": "failures",
+                "data_source": "metrics",
+                "query": "sum:click_dog.query_log_enrichment_failures.count{$host}.as_rate()"
+              }
+            ],
+            "formulas": [
+              {"formula": "successes", "alias": "successes/s"},
+              {"formula": "failures", "alias": "failures/s"}
+            ],
+            "display_type": "line"
+          }
+        ]
+      },
+      "layout": {"x": 4, "y": 26, "width": 5, "height": 2}
+    },
+    {
+      "id": 26,
+      "definition": {
+        "type": "query_value",
+        "title": "Normalized query enabled",
+        "title_size": "16",
+        "title_align": "left",
+        "precision": 0,
+        "autoscale": true,
+        "requests": [
+          {
+            "response_format": "scalar",
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "min:click_dog.normalized_query_supported{$host}",
+                "aggregator": "last"
+              }
+            ],
+            "formulas": [{"formula": "query1"}],
+            "conditional_formats": [
+              {"comparator": ">=", "value": 1, "palette": "white_on_green"},
+              {"comparator": "<", "value": 1, "palette": "white_on_yellow"}
+            ]
+          }
+        ]
+      },
+      "layout": {"x": 9, "y": 26, "width": 3, "height": 2}
+    },
+    {
+      "id": 27,
+      "definition": {
+        "type": "query_value",
+        "title": "Topology",
+        "title_size": "16",
+        "title_align": "left",
+        "precision": 0,
+        "autoscale": false,
+        "requests": [
+          {
+            "response_format": "scalar",
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "metrics",
+                "query": "max:click_dog.topology_warning{$host}",
+                "aggregator": "last"
+              }
+            ],
+            "formulas": [{"formula": "query1"}],
+            "conditional_formats": [
+              {"comparator": "=", "value": 0, "palette": "white_on_green"},
+              {"comparator": ">", "value": 0, "palette": "white_on_red"}
+            ]
+          }
+        ],
+        "custom_links": []
+      },
+      "layout": {"x": 0, "y": 28, "width": 2, "height": 2}
+    },
+    {
+      "id": 28,
+      "definition": {
+        "type": "note",
+        "content": "## Topology self-audit\n\nDetects the **sidecar + `use_cluster_queries` anti-pattern**: more than one click-dog instance running whole-cluster span reads → N× duplicate exports and cluster-wide query load. `0` (green) = one reader doing cluster-wide reads (or none); `1` (red) = duplicate cluster-wide reads detected. The `reason` tag splits **`sidecar_cluster_queries`** (per-node sidecars each going cluster-wide — turn `use_cluster_queries` off) from **`multi_instance_cluster_queries`** (separate readers not sharing a Keeper election — run a single cluster-mode reader, or 2–3 sharing one election). The **Per-host health** table's *topology warning* column shows which nodes trip.\n\nThis signal is **indirect**: a **grey / no-data** tile is **not** healthy — it means OTLP self-metrics are not being exported (or, on the legacy scrape path, the metric is not being scraped or the OpenMetrics rename is missing). It is observability-only: detection never affects `/readyz` or de-rotates a node. First detection lands roughly `interval_s × debounce_count` (~10 min at defaults) after the misconfig appears.\n\nA red tile can also reflect **legitimate, bounded** duplication — a sustained Keeper outage (instances fail open and export by design) or a long-running backfill from another host — and clears on its own once resolved.",
+        "background_color": "gray",
+        "font_size": "14",
+        "text_align": "left",
+        "show_tick": false,
+        "has_padding": true
+      },
+      "layout": {"x": 2, "y": 28, "width": 10, "height": 2}
+    }
+  ]
+}

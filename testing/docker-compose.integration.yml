@@ -1,0 +1,103 @@
+# 3-node ClickHouse cluster with embedded Keeper + OTEL Collector
+# for click-dog integration testing.
+#
+# Usage:
+#   docker compose -f testing/docker-compose.integration.yml up -d
+#   go test -v -race -tags integration -timeout 300s ./...
+#   docker compose -f testing/docker-compose.integration.yml down -v
+
+services:
+  clickhouse1:
+    image: clickhouse/clickhouse-server:24.1
+    container_name: clickhouse-int-1
+    hostname: clickhouse1
+    ports:
+      - "19000:9000"    # Native protocol
+      - "18123:8123"    # HTTP interface
+      - "19181:9181"    # Keeper (ZK-compatible)
+    volumes:
+      - ./config/clickhouse/tracing.xml:/etc/clickhouse-server/config.d/tracing.xml:ro
+      - ./config/clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./config/clickhouse/keeper.xml:/etc/clickhouse-server/config.d/keeper.xml:ro
+      - ./config/clickhouse/keeper-node1.xml:/etc/clickhouse-server/config.d/keeper-node.xml:ro
+    environment:
+      - CLICKHOUSE_DB=default
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "localhost:8123/ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+      start_period: 15s
+
+  clickhouse2:
+    image: clickhouse/clickhouse-server:24.1
+    container_name: clickhouse-int-2
+    hostname: clickhouse2
+    ports:
+      - "19001:9000"
+      - "18124:8123"
+      - "19182:9181"
+    volumes:
+      - ./config/clickhouse/tracing.xml:/etc/clickhouse-server/config.d/tracing.xml:ro
+      - ./config/clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./config/clickhouse/keeper.xml:/etc/clickhouse-server/config.d/keeper.xml:ro
+      - ./config/clickhouse/keeper-node2.xml:/etc/clickhouse-server/config.d/keeper-node.xml:ro
+    environment:
+      - CLICKHOUSE_DB=default
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "localhost:8123/ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+      start_period: 15s
+
+  clickhouse3:
+    image: clickhouse/clickhouse-server:24.1
+    container_name: clickhouse-int-3
+    hostname: clickhouse3
+    ports:
+      - "19002:9000"
+      - "18125:8123"
+      - "19183:9181"
+    volumes:
+      - ./config/clickhouse/tracing.xml:/etc/clickhouse-server/config.d/tracing.xml:ro
+      - ./config/clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./config/clickhouse/keeper.xml:/etc/clickhouse-server/config.d/keeper.xml:ro
+      - ./config/clickhouse/keeper-node3.xml:/etc/clickhouse-server/config.d/keeper-node.xml:ro
+    environment:
+      - CLICKHOUSE_DB=default
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "localhost:8123/ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+      start_period: 15s
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.91.0
+    container_name: otel-integration
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    ports:
+      - "14317:4317"    # gRPC OTLP
+      - "13133:13133"   # Health check
+    volumes:
+      - ./config/otel-collector.yaml:/etc/otel-collector-config.yaml:ro
+      - ./otel-output:/otel-output

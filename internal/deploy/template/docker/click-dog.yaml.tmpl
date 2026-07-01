@@ -1,0 +1,64 @@
+clickhouse:
+  host: localhost
+  port: 9000
+  database: default
+  username: {{ .ClickHouseUsername }}
+  password: ${CLICKHOUSE_PASSWORD}
+  max_open_conns: 2
+  max_idle_conns: 1
+  query_timeout_s: 30
+
+exporters:
+  otel:
+    - collector_address: {{ .CollectorAddress }}
+      service_name: click-dog-monitor
+
+monitor:
+  enabled: true
+  # A trace must contain at least one span >= this duration to be considered.
+  min_trace_duration_ms: 1000
+  check_interval_s: 30
+  lookback_s: 40
+  max_spans_per_cycle: 1000
+  dedup_cache_size: 10000
+  circuit_breaker:
+    enabled: true
+    failure_threshold: 3
+    success_threshold: 1
+    reset_timeout_s: 60
+  backoff:
+    enabled: true
+    max_interval_s: 300
+    backoff_factor: 2.0
+
+filters:
+  # Drop common low-value queries before export. Regex patterns match the SQL text.
+  blacklist_queries:
+    - "^SELECT \\\\* FROM system\\\\."
+    - "SHOW TABLES"
+    - "(?i)healthcheck"
+    - "(?i)^SELECT 1$"                 # connection pings
+    - "(?i)^SELECT version\\\\(\\\\)"  # driver version checks
+
+  # Drop internal ClickHouse pipeline spans at the SQL level (pushed down as
+  # operation_name NOT LIKE '%pattern%'). These are high-volume but low-signal -
+  # they represent engine internals, not user queries or their sub-queries.
+  # Removing them cuts ingest cost by ~90-99% without losing query-level data.
+  blacklist_operations:
+    - "MergeTreeSource"
+    - "MergeTreeMarksLoader"
+    - "MergeTreeIndex"
+    - "MergeTreeSequentialSource"
+    - "VFSWrite"
+    - "WriteBufferFromS3"
+    - "ConcurrentJoin"
+    - "QueryPipelineEx"
+
+log_level: info
+
+metrics:
+  enabled: true
+  listen_address: ":9090"
+  # admin_listen_address (default: 127.0.0.1:9091) hosts POST /flush.
+  # Loopback by default; SIGUSR1 is the cross-host equivalent.
+  # admin_listen_address: "127.0.0.1:9091"

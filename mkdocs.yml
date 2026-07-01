@@ -1,0 +1,113 @@
+site_name: Click-Dog
+site_description: Source-safe query observability for ClickHouse today, with more telemetry sources planned
+site_url: https://click-dog.com
+repo_url: https://github.com/coltconsulting/click-dog
+repo_name: coltconsulting/click-dog
+
+theme:
+  name: material
+  # Enables overrides/home.html (marketing landing) + overrides/main.html
+  # (brand fonts, favicon, and social-card meta on every docs page).
+  custom_dir: overrides
+  logo: assets/click-dog-logo-light.svg   # app icon for the docs header bar
+  favicon: assets/favicon.png
+  font:
+    text: IBM Plex Sans          # body font on docs pages (matches the landing)
+    code: JetBrains Mono
+  palette:
+    # light (default) — warm tokens are re-skinned by stylesheets/extra.css
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: black
+      accent: amber
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: amber
+      toggle:
+        icon: material/weather-night
+        name: Switch to light mode
+  features:
+    # navigation.instant (SPA-style link swapping) is intentionally OFF: the
+    # homepage (overrides/home.html) is a standalone, non-Material template, so
+    # instant-loading it from a docs page swaps broken markup into the Material
+    # shell and the page renders broken. Full page loads keep "Home" working.
+    - navigation.tracking
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+  icon:
+    repo: fontawesome/brands/github
+
+nav:
+  - Home: index.md
+  - Overview: overview.md
+  - Get started:
+    - Getting Started: getting-started.md
+    - Install: install.md
+    - Configuration: configuration.md
+  - Integrations:
+    - Overview: integrations/index.md
+    - Datadog: integrations/datadog.md
+    - Honeycomb: integrations/honeycomb.md
+    - Generic OTLP: integrations/generic-otlp.md
+    - Splunk HEC: integrations/splunk-hec.md
+  - Query analysis:
+    - Query Analysis: query-analysis.md
+    - Span Attributes: span-attributes.md
+  - Operate:
+    - Observability: observability.md
+    - Resilience: resilience.md
+    - Troubleshooting: troubleshooting.md
+    - Operating Contract: operating.md
+    - Kubernetes — ClickHouse Setup: kubernetes-clickhouse.md
+  - Reference:
+    - Operation Modes: modes.md
+    - Filtering: filtering.md
+    - Architecture: architecture.md
+    - Changelog: changelog.md
+    - Support: support.md
+
+# Development docs live in the repo only — excluded from the built site
+# entirely (not just the nav) since the site is publicly reachable.
+exclude_docs: |
+  /development/**
+
+# Brand stylesheet that remaps Material's tokens to the Click-Dog palette/type.
+extra_css:
+  - stylesheets/extra.css
+
+# Adds <wbr> break points in table code so long identifiers wrap at `_`/`.`/`:`.
+extra_javascript:
+  - javascripts/table-wbr.js
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+
+extra:
+  generator: false   # drop the "Made with Material for MkDocs" footer notice
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/coltconsulting/click-dog

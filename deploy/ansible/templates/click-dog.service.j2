@@ -1,0 +1,26 @@
+[Unit]
+Description=click-dog ClickHouse OTEL span exporter
+Documentation=https://github.com/coltconsulting/click-dog
+After=network-online.target clickhouse-server.service
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User={{ click_dog_user }}
+Group={{ click_dog_group }}
+ExecStart={{ click_dog_install_dir }}/click-dog -config {{ click_dog_config_dir }}/click-dog.yaml
+Restart=on-failure
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ click_dog_log_dir }}
+ReadOnlyPaths={{ tls_cert_dir }}
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

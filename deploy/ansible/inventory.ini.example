@@ -1,0 +1,30 @@
+# Click-Dog Ansible Inventory
+#
+# List all ClickHouse nodes here. click-dog will be deployed to every host
+# in the [clickhouse] group (one sidecar per node).
+#
+# For a 50-node cluster, list all 50 hosts below.
+
+[clickhouse]
+ch-node-01.example.com
+ch-node-02.example.com
+ch-node-03.example.com
+# ... add all 50 nodes ...
+ch-node-50.example.com
+
+[clickhouse:vars]
+# ClickHouse connection (click-dog connects to localhost on each node)
+clickhouse_username=click_dog_monitor
+# Set password via --extra-vars or ansible-vault (never commit plaintext)
+# clickhouse_password=CHANGE_ME
+
+# OTEL collector endpoint (shared across all nodes)
+otel_collector_address=otel-collector.monitoring.internal:4317
+
+# ClickHouse Keeper hosts for HA leader election
+keeper_hosts=["keeper-01:9181", "keeper-02:9181", "keeper-03:9181"]
+
+# click-dog version to install
+click_dog_version=latest
+# Override download URL for air-gapped environments:
+# click_dog_download_url=https://internal-mirror.example.com/click-dog

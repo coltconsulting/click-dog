@@ -1,0 +1,47 @@
+# Binaries
+click-dog
+click-dog-linux-*
+click-dog-darwin-*
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of the go coverage tool
+*.out
+*.prof
+coverage.html
+
+# Release/build artefacts
+dist/
+*.oci.tar
+
+# Config files (keep only example)
+config.yaml
+*-config.yaml
+click-dog.yaml
+
+# Go workspace file
+go.work
+
+# Integration test output
+testing/otel-output/*.jsonl
+
+# MkDocs build output
+site/
+
+# Docker buildx scratch context
+.docker-buildx/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# AI
+.claude/

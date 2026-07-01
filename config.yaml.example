@@ -1,0 +1,301 @@
+# ═══════════════════════════════════════════════════════════════════════
+# Click-Dog Configuration
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Environment variables are supported using ${VAR} or $VAR syntax
+# Example: CLICKHOUSE_PASSWORD=secret ./click-dog -config config.yaml
+#
+# This file is organized in two tiers:
+#
+#   STANDARD CONFIG — the settings most users need. If you only configure
+#   these, click-dog works well with safe defaults for everything else.
+#
+#   EXPERT CONFIG — tuning knobs for connection pools, safety limits,
+#   distributed queries, TLS, HA, and circuit breaker behavior. Commented
+#   out by default; uncomment only what you need.
+#
+# ═══════════════════════════════════════════════════════════════════════
+
+
+# ─── STANDARD CONFIG ─────────────────────────────────────────────────
+# Everything you need for a working setup. ~10 lines.
+
+clickhouse:
+  host: localhost
+  port: 9000
+  database: default
+  username: ${CLICKHOUSE_USERNAME}  # Falls back to empty if not set
+  password: ${CLICKHOUSE_PASSWORD}  # Required: set via environment variable
+
+exporters:
+  otel:
+    - collector_address: localhost:4317  # Your OTEL collector (Datadog Agent, etc.)
+      service_name: click-dog-monitor
+
+monitor:
+  enabled: true
+  min_trace_duration_ms: 1000       # Export traces with spans >= 1 second
+  check_interval_s: 30              # Poll every 30 seconds
+
+filters:
+  blacklist_queries:
+    - "^SELECT \\* FROM system\\."  # Skip system table scans
+    - "SHOW TABLES"
+    - "(?i)healthcheck"
+
+log_level: info                     # debug, info, warn, error
+
+
+# ─── EXPERT CONFIG ───────────────────────────────────────────────────
+# Everything below has safe defaults. Uncomment only what you need.
+
+# ── ClickHouse Connection Tuning ─────────────────────────────────────
+#
+# clickhouse:
+#
+#   # Connection pool
+#   max_open_conns: 2               # Maximum open connections (default: 2)
+#   max_idle_conns: 1               # Maximum idle connections (default: 1)
+#   query_timeout_s: 30             # Client-side query timeout (default: 30s)
+#
+#   # Server-side safety limits (applied via ClickHouse session settings):
+#   #
+#   #   readonly: 2
+#   #     All click-dog connections use readonly=2. This is a ClickHouse
+#   #     server-enforced guarantee that the connection can never execute
+#   #     INSERT, ALTER, CREATE, DROP, or any mutation — only SELECT and
+#   #     SET. Mode 2 (vs 1) allows SET so we can also apply the limits
+#   #     below. This is not configurable because it is a safety invariant.
+#   #
+#   #   max_execution_time: <query_timeout_s>
+#   #     Server-side query timeout. Automatically tracks query_timeout_s
+#   #     so ClickHouse kills runaway queries even if the client disconnects.
+#   #
+#   #   max_memory_usage: <max_memory_usage>
+#   #     Per-query memory ceiling on the ClickHouse server. Prevents a
+#   #     single click-dog query from consuming unbounded RAM.
+#   #
+#   max_memory_usage: 104857600     # 100MB per-query memory limit (default)
+#                                    # Increase for clusters with very wide
+#                                    # span attributes or high cardinality.
+#                                    # Examples: 209715200 (200MB), 52428800 (50MB)
+#
+#   # TLS
+#   secure: false                    # Enable TLS connection (default: false)
+#   insecure_skip_verify: false      # INSECURE - testing only!
+#   ca_cert: /path/to/ca.pem        # CA cert for self-signed / internal CAs
+#
+#   # Distributed queries (advanced - most users should leave these off)
+#   cluster: ""                      # Cluster name for cluster() queries
+#   use_cluster_queries: false       # Use cluster() function (default: false)
+#                                    # When false: queries only this node's local tables
+#                                    # When true: queries distributed across cluster
+#                                    # Normalized query attributes are used only if
+#                                    # clusterAllReplicas(..., system.columns) verifies
+#                                    # every replica exposes normalized_query_hash.
+
+# ── OTEL Export Tuning ───────────────────────────────────────────────
+#
+# Extra knobs on the exporters.otel[] entry above.
+#
+# exporters:
+#   otel:
+#     - collector_address: localhost:4317
+#       service_name: click-dog-monitor
+#       max_query_length: 100000        # Truncate SQL > 100k chars (prevents PII leaks)
+#
+#       # TLS for gRPC to your collector
+#       secure: false
+#       insecure_skip_verify: false
+#       ca_cert: /path/to/otel-ca.pem
+#       client_cert: /path/to/client.pem   # mTLS
+#       client_key: /path/to/client-key.pem
+
+# ── Multi-Sink Export ───────────────────────────────────────────────
+#
+# Add more entries under exporters.otel[] for additional OTEL backends,
+# or add an exporters.splunk_hec[] block to fan out to Splunk HEC.
+#
+# exporters:
+#   otel:
+#     - collector_address: otel-1:4317
+#       service_name: click-dog-monitor
+#     - collector_address: otel-2:4317   # Second OTEL backend
+#       service_name: click-dog-backup
+#   splunk_hec:
+#     - endpoint: https://splunk.internal:8088  # HTTPS by default for HEC token transport
+#       token: ${SPLUNK_HEC_TOKEN}
+#       index: clickhouse                # Target index (optional)
+#       source: click-dog                # Event source (default: click-dog)
+#       source_type: _json               # Event source type (default: _json)
+#       allow_insecure_http: false        # Allow http:// only for local/dev/test
+#       insecure_skip_verify: false       # Skip TLS verification (default: false)
+#       max_query_length: 100000          # Truncate SQL (default: 100000)
+
+# ── Monitor Tuning ───────────────────────────────────────────────────
+#
+# monitor:
+#   # Duration thresholds
+#   min_span_duration_ms: 0          # Only export spans >= this (0 = all from matching traces)
+#   max_trace_duration_ms: 0         # Skip traces > this (0 = no limit)
+#   max_span_duration_ms: 0          # Skip spans > this (0 = no limit)
+#   max_query_length: 100000         # Skip queries with SQL > 100k chars
+#
+#   # Polling
+#   lookback_buffer_s: 10            # Extra seconds added to check_interval for lookback overlap
+#                                     # Absorbs clock skew and slow poll cycles (default: 10)
+#                                     # Increase under high load if you see missed spans
+#   lookback_s: 40                   # Override: total lookback (default: check_interval_s + lookback_buffer_s)
+#
+#   # Rate limiting
+#   max_spans_per_cycle: 1000        # Bounds spans fetched + exported per cycle (default: 1000)
+#                                     # Prevents backend cost explosions. When the cap
+#                                     # is hit, a trace can be split across cycles —
+#                                     # lookback overlap + dedup keep continuation working
+#                                     # as long as the trace stays inside lookback_s.
+#                                     # Internal safety ceiling: 100000 spans/cycle.
+#
+#   # Batch processing
+#   batch_size: 0                    # 0 = process all at once
+#   batch_delay_ms: 0                # Delay between batches (smooths load)
+#   export_timeout_s: 30             # Per-call exporter deadline (default: 30s; 0 disables)
+#
+#   # Deduplication
+#   dedup_cache_size: 10000          # LRU cache entries, keyed by (trace_id, span_id)
+#                                     # — increase for high throughput. The cache is in-memory
+#                                     # only and not persisted across restarts; spans still
+#                                     # within lookback are re-exported once after restart and
+#                                     # deduped downstream by collectors.
+#
+#   # Span enrichment
+#   extract_log_comment: true        # Promote JSON keys from ClickHouse `log_comment` to
+#                                     # span attributes prefixed with `log_comment.`. Looks at
+#                                     # http.url / http.target / other URI-shaped attributes
+#                                     # in addition to the raw setting. Default: true.
+#   enrich_from_query_log: true      # Join exported root-query spans to `system.query_log` by
+#                                     # `query_id` to add user, client_address, client_hostname,
+#                                     # tables, and query stats. Non-fatal: a failed enrich
+#                                     # query logs a warning and the span is exported without
+#                                     # the extra fields. Default: true.
+#                                     # Note: includes potential PII (user / client_address /
+#                                     # client_hostname) — disable if your downstream pipeline
+#                                     # treats those as sensitive.
+#
+#   # Circuit breaker — protects ClickHouse during failures
+#   circuit_breaker:
+#     enabled: true                  # Enabled by installer / production profile configs
+#     failure_threshold: 3           # Open after N consecutive failures
+#     success_threshold: 1           # Close after N successes in half-open
+#     reset_timeout_s: 60            # Wait before retrying when open
+#
+#   # Adaptive backoff — increases poll interval during errors
+#   backoff:
+#     enabled: true                  # Enabled by installer / production profile configs
+#     max_interval_s: 300            # Max 5 min between polls
+#     backoff_factor: 2.0            # Double interval on each failure
+
+# ── Filtering (advanced) ─────────────────────────────────────────────
+#
+# filters:
+#   # Drop internal ClickHouse pipeline spans at the SQL level (substring match).
+#   # This is the primary volume knob — cuts ~90-99% of noise spans.
+#   blacklist_operations:
+#     - "MergeTreeSource"
+#     - "MergeTreeMarksLoader"
+#     - "MergeTreeIndex"
+#     - "MergeTreeSequentialSource"
+#     - "VFSWrite"
+#     - "WriteBufferFromS3"
+#     - "ConcurrentJoin"
+#     - "QueryPipelineEx"
+#
+#   # Only export these operations (supports * wildcard, post-fetch)
+#   whitelist_operations: []
+#     # - "DB::Interpreter*::execute()"
+#     # - "HTTPHandler::*"
+#
+#   # Only export from these IPs (supports CIDR notation)
+#   whitelist_ips: []
+#     # - "10.0.0.0/8"
+#     # - "192.168.1.100"
+
+# ── High Availability ────────────────────────────────────────────────
+#
+# Leader election for multi-instance deployments. Uses ClickHouse Keeper
+# (ZooKeeper-compatible protocol, port 9181) — NOT the ClickHouse SQL
+# connection. This is the ONLY component that writes anything: ephemeral
+# znodes under base_path that auto-delete when the session closes.
+# No ClickHouse tables are ever written to.
+#
+# Election is driven solely by the presence of keeper.hosts below — set them
+# and instances coordinate so only the leader exports; omit the ha block
+# entirely and each instance runs standalone. There is no separate enable flag.
+#
+# ha:
+#   keeper:
+#     hosts:
+#       - "keeper-01:9181"
+#       - "keeper-02:9181"
+#       - "keeper-03:9181"
+#     session_timeout_s: 10
+#     # secure: true  # Enable TLS to Keeper when supported
+#     base_path: "/click-dog/election"
+#     # auth_user: ${KEEPER_USER}
+#     # auth_password: ${KEEPER_PASSWORD}
+
+# ── Logging ──────────────────────────────────────────────────────────
+#
+# log_file: /var/log/click-dog/app.log  # If omitted, logs to stderr (container-friendly)
+#
+# log_rotation:
+#   max_size_mb: 100   # Rotate when log exceeds this size (default: 100)
+#   max_files: 3        # Keep this many rotated files (default: 3)
+#
+# log_format: text                       # text or json (default: text)
+#                                         # json emits {"ts":"...","level":"...","msg":"..."}
+#                                         # Useful for log aggregators (Loki, Datadog, etc.)
+
+# ── Prometheus Metrics ──────────────────────────────────────────────
+#
+# Exposes /metrics (Prometheus text format) and a legacy /health (JSON)
+# liveness endpoint. No external dependency — metrics are emitted in
+# Prometheus exposition format.
+#
+# metrics:
+#   enabled: false                       # Enable /metrics and legacy /health
+#   listen_address: ":9090"              # Scrape listener (default: :9090)
+#   admin_listen_address: "127.0.0.1:9091"  # Admin listener (POST /flush)
+
+# ── Kubernetes-shaped Health Endpoints ─────────────────────────────
+#
+# Independent of the metrics block above. Serves /healthz (liveness),
+# /readyz (readiness — pings ClickHouse), and /status (JSON report) for
+# orchestrators. Hitting these paths on the metrics scrape listener
+# returns 404; they only exist on the health listener.
+#
+# If health.listen_address normalises to the same socket as
+# metrics.listen_address, the handlers are mounted on the metrics
+# listener so only one port is opened.
+#
+# health:
+#   enabled: false
+#   listen_address: ":8686"              # default
+
+# ── Webhook Notifications ──────────────────────────────────────────
+#
+# Sends HTTP POST to a webhook URL on critical events.
+# Compatible with Slack incoming webhooks (sends {"text": "..."}).
+# Also works with PagerDuty, Discord, or any JSON webhook endpoint.
+#
+# webhook:
+#   enabled: false
+#   url: ${SLACK_WEBHOOK_URL}            # Webhook URL (env var recommended)
+#   timeout_s: 10                        # HTTP timeout (default: 10s)
+#   events:                              # Which events to notify (default: all)
+#     - circuit_breaker_opened           # ClickHouse protection activated
+#     - circuit_breaker_closed           # Recovery successful
+#     - backfill_complete                # Historical export finished cleanly
+#     - backfill_failed                  # Historical export had partial/total failures
+#     - error_spike                      # Error threshold exceeded
+#     - startup                          # Click-Dog started
+#     - shutdown                         # Click-Dog shutting down

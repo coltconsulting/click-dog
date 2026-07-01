@@ -1,0 +1,308 @@
+---
+# Click-Dog Deployment Playbook
+#
+# Deploys click-dog as a systemd sidecar on every ClickHouse node.
+#
+# Usage:
+#   ansible-playbook -i inventory.ini playbook.yaml \
+#     --extra-vars "clickhouse_password=YOUR_PASSWORD"
+#
+# Bound SSH concurrency to 10 hosts in flight at once:
+#   ansible-playbook -i inventory.ini playbook.yaml \
+#     --extra-vars "clickhouse_password=YOUR_PASSWORD" \
+#     -f 10
+#
+# For batched rollouts that finish a wave before starting the next,
+# add a play-level `serial: 10` keyword to this playbook below
+# (it's a YAML keyword on the play, not an `ansible-playbook` CLI
+# flag — `--serial` does not exist).
+
+- name: Deploy click-dog sidecar to ClickHouse nodes
+  hosts: "{{ target_hosts | default('clickhouse') }}"
+  become: true
+  vars:
+    click_dog_user: click-dog
+    click_dog_group: click-dog
+    click_dog_version: "{{ click_dog_version | default('latest') }}"
+    click_dog_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+    click_dog_install_dir: /usr/local/bin
+    click_dog_config_dir: /etc/click-dog
+    click_dog_log_dir: /var/log/click-dog
+
+    # Connection defaults (override via inventory or --extra-vars)
+    clickhouse_host: localhost
+    clickhouse_port: 9000
+    clickhouse_username: "{{ clickhouse_username | default('click_dog_monitor') }}"
+    clickhouse_password: "{{ clickhouse_password }}"
+    otel_collector_address: "{{ otel_collector_address | default('localhost:4317') }}"
+    keeper_hosts: "{{ keeper_hosts | default('[\"localhost:9181\"]') }}"
+    ha_enabled: "{{ (keeper_hosts | default('') | length > 2) | ternary(true, false) }}"
+
+    # TLS / Let's Encrypt (set tls_enabled=true to provision certs via certbot)
+    tls_enabled: "{{ tls_enabled | default(false) }}"
+    tls_domain: "{{ tls_domain | default('') }}"
+    tls_email: "{{ tls_email | default('') }}"
+    tls_cert_dir: /etc/click-dog/tls
+
+  handlers:
+    - name: validate click-dog config
+      ansible.builtin.command:
+        cmd: /usr/local/bin/click-dog -validate -config {{ click_dog_config_dir }}/click-dog.yaml
+      changed_when: false
+      listen: restart click-dog
+
+    - name: restart click-dog service
+      ansible.builtin.systemd:
+        name: click-dog
+        state: restarted
+        daemon_reload: true
+      listen: restart click-dog
+
+  tasks:
+    # ── System user ──────────────────────────────────────────────
+    - name: Create click-dog system group
+      ansible.builtin.group:
+        name: "{{ click_dog_group }}"
+        system: true
+        state: present
+
+    - name: Create click-dog system user
+      ansible.builtin.user:
+        name: "{{ click_dog_user }}"
+        group: "{{ click_dog_group }}"
+        system: true
+        shell: /usr/sbin/nologin
+        create_home: false
+
+    # ── Directories ──────────────────────────────────────────────
+    - name: Create config directory
+      ansible.builtin.file:
+        path: "{{ click_dog_config_dir }}"
+        state: directory
+        owner: "{{ click_dog_user }}"
+        group: "{{ click_dog_group }}"
+        mode: "0750"
+
+    - name: Create log directory
+      ansible.builtin.file:
+        path: "{{ click_dog_log_dir }}"
+        state: directory
+        owner: "{{ click_dog_user }}"
+        group: "{{ click_dog_group }}"
+        mode: "0750"
+
+    # ── Binary ───────────────────────────────────────────────────
+    # Three modes: explicit URL, versioned release, latest release, or local binary.
+    # GitHub URL patterns differ: versioned = releases/download/VERSION/FILE
+    #                              latest   = releases/latest/download/FILE
+
+    - name: Back up current binary
+      ansible.builtin.copy:
+        src: "{{ click_dog_install_dir }}/click-dog"
+        dest: "{{ click_dog_install_dir }}/click-dog.prev"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0755"
+      failed_when: false  # OK if binary doesn't exist yet (first deploy)
+
+    - name: Download click-dog binary (explicit URL)
+      ansible.builtin.get_url:
+        url: "{{ click_dog_download_url }}"
+        dest: /tmp/click-dog.tar.gz
+        mode: "0644"
+      when: click_dog_download_url is defined
+
+    # GoReleaser archives use the version without 'v' prefix in the filename
+    # but the GitHub release tag includes it, e.g.:
+    #   /releases/download/v1.0.0/click-dog_1.0.0_linux_amd64.tar.gz
+    - name: Download click-dog binary (versioned release)
+      ansible.builtin.get_url:
+        url: "https://github.com/coltconsulting/click-dog/releases/download/{{ click_dog_version }}/click-dog_{{ click_dog_version | regex_replace('^v', '') }}_linux_{{ click_dog_arch }}.tar.gz"
+        dest: /tmp/click-dog.tar.gz
+        mode: "0644"
+      when: click_dog_download_url is not defined and click_dog_version != 'latest'
+
+    - name: Resolve latest release version from GitHub API
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/coltconsulting/click-dog/releases/latest"
+        return_content: true
+      register: latest_release
+      when: click_dog_download_url is not defined and click_dog_version == 'latest' and click_dog_local_binary is not defined
+
+    - name: Download click-dog binary (latest release)
+      ansible.builtin.get_url:
+        url: "https://github.com/coltconsulting/click-dog/releases/download/{{ latest_release.json.tag_name }}/click-dog_{{ latest_release.json.tag_name | regex_replace('^v', '') }}_linux_{{ click_dog_arch }}.tar.gz"
+        dest: /tmp/click-dog.tar.gz
+        mode: "0644"
+      when: click_dog_download_url is not defined and click_dog_version == 'latest' and click_dog_local_binary is not defined
+
+    - name: Copy click-dog binary from local build
+      ansible.builtin.copy:
+        src: "{{ click_dog_local_binary | default('../../click-dog') }}"
+        dest: "{{ click_dog_install_dir }}/click-dog"
+        owner: root
+        group: root
+        mode: "0755"
+      notify: restart click-dog
+      when: click_dog_local_binary is defined
+
+    - name: Extract click-dog from tarball
+      ansible.builtin.unarchive:
+        src: /tmp/click-dog.tar.gz
+        dest: "{{ click_dog_install_dir }}"
+        remote_src: true
+      notify: restart click-dog
+      when: click_dog_local_binary is not defined
+
+    # ── Configuration ────────────────────────────────────────────
+    # Write the password to a 0600 file the click-dog user owns; the config
+    # references it via clickhouse.password_file. This keeps the secret out of
+    # the group-readable (0640) click-dog.yaml and matches install.sh. The file
+    # is the raw password with no trailing newline (copy preserves content
+    # exactly; click-dog also trims one trailing newline defensively).
+    - name: Write click-dog ClickHouse password file
+      ansible.builtin.copy:
+        content: "{{ clickhouse_password }}"
+        dest: "{{ click_dog_config_dir }}/.secret"
+        owner: "{{ click_dog_user }}"
+        group: "{{ click_dog_group }}"
+        mode: "0600"
+      no_log: true
+      notify: restart click-dog
+
+    - name: Deploy click-dog configuration
+      ansible.builtin.template:
+        src: click-dog.yaml.j2
+        dest: "{{ click_dog_config_dir }}/click-dog.yaml"
+        owner: "{{ click_dog_user }}"
+        group: "{{ click_dog_group }}"
+        mode: "0640"
+      notify: restart click-dog
+
+    # ── TLS / Let's Encrypt ─────────────────────────────────────
+    - name: Validate TLS domain format
+      ansible.builtin.assert:
+        that:
+          - tls_domain is regex('^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*$')
+          - tls_email | length > 0
+        fail_msg: "tls_domain must be a valid hostname (got '{{ tls_domain }}') and tls_email must be set"
+      when: tls_enabled | bool
+
+    - name: Install certbot
+      ansible.builtin.package:
+        name: certbot
+        state: present
+      when: tls_enabled | bool
+
+    - name: Create TLS directory
+      ansible.builtin.file:
+        path: "{{ tls_cert_dir }}"
+        state: directory
+        owner: "{{ click_dog_user }}"
+        group: "{{ click_dog_group }}"
+        mode: "0750"
+      when: tls_enabled | bool
+
+    - name: Obtain Let's Encrypt certificate
+      ansible.builtin.command:
+        cmd: >-
+          certbot certonly --standalone --non-interactive --agree-tos
+          --email "{{ tls_email }}"
+          --domain "{{ tls_domain }}"
+          --cert-path "{{ tls_cert_dir }}/tls.crt"
+          --key-path "{{ tls_cert_dir }}/tls.key"
+          --fullchain-path "{{ tls_cert_dir }}/fullchain.pem"
+        creates: "{{ tls_cert_dir }}/fullchain.pem"
+      when: tls_enabled | bool
+      notify: restart click-dog
+
+    - name: Set certificate permissions
+      ansible.builtin.file:
+        path: "{{ item }}"
+        owner: "{{ click_dog_user }}"
+        group: "{{ click_dog_group }}"
+        mode: "0640"
+      loop:
+        - "{{ tls_cert_dir }}/tls.crt"
+        - "{{ tls_cert_dir }}/tls.key"
+        - "{{ tls_cert_dir }}/fullchain.pem"
+      when: tls_enabled | bool
+
+    # The renewal hook is a static script with all values baked in at deploy
+    # time (no shell variables). The "Validate TLS domain format" assert task
+    # above guarantees tls_domain is a valid hostname before we reach this point.
+    - name: Configure certbot auto-renewal hook
+      ansible.builtin.copy:
+        dest: /etc/letsencrypt/renewal-hooks/post/click-dog-restart.sh
+        owner: root
+        group: root
+        content: |
+          #!/bin/bash
+          set -euo pipefail
+          cp -- "/etc/letsencrypt/live/{{ tls_domain }}/fullchain.pem" "{{ tls_cert_dir }}/fullchain.pem"
+          cp -- "/etc/letsencrypt/live/{{ tls_domain }}/privkey.pem" "{{ tls_cert_dir }}/tls.key"
+          cp -- "/etc/letsencrypt/live/{{ tls_domain }}/cert.pem" "{{ tls_cert_dir }}/tls.crt"
+          chown -- "{{ click_dog_user }}:{{ click_dog_group }}" "{{ tls_cert_dir }}/fullchain.pem" "{{ tls_cert_dir }}/tls.key" "{{ tls_cert_dir }}/tls.crt"
+          chmod 640 "{{ tls_cert_dir }}/fullchain.pem" "{{ tls_cert_dir }}/tls.key" "{{ tls_cert_dir }}/tls.crt"
+          systemctl restart click-dog
+        mode: "0755"
+      when: tls_enabled | bool
+
+    # ── Systemd ──────────────────────────────────────────────────
+    - name: Deploy systemd unit file
+      ansible.builtin.template:
+        src: click-dog.service.j2
+        dest: /etc/systemd/system/click-dog.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify: restart click-dog
+
+    - name: Enable and start click-dog
+      ansible.builtin.systemd:
+        name: click-dog
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    # ── Verification ─────────────────────────────────────────────
+    - name: Wait for click-dog to start
+      ansible.builtin.wait_for:
+        timeout: 5
+
+    - name: Check click-dog is running
+      ansible.builtin.systemd:
+        name: click-dog
+      register: click_dog_status
+
+    - name: Check click-dog health endpoint
+      ansible.builtin.uri:
+        url: "http://localhost:8686/healthz"
+        status_code: 200
+      retries: 6
+      delay: 5
+
+    - name: Report status
+      ansible.builtin.debug:
+        msg: "click-dog on {{ inventory_hostname }}: {{ click_dog_status.status.ActiveState }}"
+
+    # ── Rollback (run with: ansible-playbook --tags rollback) ────
+    - name: Check .prev binary exists
+      ansible.builtin.stat:
+        path: "{{ click_dog_install_dir }}/click-dog.prev"
+      register: click_dog_prev
+      tags: [rollback]
+
+    - name: Rollback binary (atomic mv)
+      ansible.builtin.command:
+        cmd: mv {{ click_dog_install_dir }}/click-dog.prev {{ click_dog_install_dir }}/click-dog
+      when: click_dog_prev.stat.exists
+      notify: restart click-dog
+      tags: [rollback]
+
+    - name: Warn if no .prev binary available
+      ansible.builtin.debug:
+        msg: "No .prev binary found — this node has no rollback target (first deploy?)"
+      when: not click_dog_prev.stat.exists
+      tags: [rollback]

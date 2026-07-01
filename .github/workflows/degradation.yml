@@ -1,0 +1,129 @@
+name: Degradation Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_filter:
+        description: 'Test filter regex (default: all degradation tests)'
+        required: false
+        default: 'TestDegradation'
+
+concurrency:
+  group: degradation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  degradation-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.4'
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Prepare OTEL output directory
+        run: |
+          chmod 777 testing/otel-output
+          touch testing/otel-output/traces.jsonl
+          chmod 666 testing/otel-output/traces.jsonl
+
+      - name: Start integration cluster
+        run: docker compose -f testing/docker-compose.integration.yml up -d
+
+      - name: Show initial container status
+        run: |
+          sleep 5
+          docker compose -f testing/docker-compose.integration.yml ps
+
+      - name: Wait for ClickHouse nodes
+        run: |
+          for svc in clickhouse1 clickhouse2 clickhouse3; do
+            container="clickhouse-int-${svc##clickhouse}"
+            echo "Waiting for $svc (container $container)..."
+            for i in $(seq 1 90); do
+              if docker exec $container wget --spider -q localhost:8123/ping 2>/dev/null; then
+                echo "$svc HTTP ping OK"
+                break
+              fi
+              if [ $i -eq 90 ]; then
+                echo "$svc failed to start"
+                docker compose -f testing/docker-compose.integration.yml logs $svc
+                exit 1
+              fi
+              sleep 2
+            done
+            for i in $(seq 1 30); do
+              if docker exec $container clickhouse-client --query "SELECT 1" 2>/dev/null; then
+                echo "$svc is fully ready"
+                break
+              fi
+              if [ $i -eq 30 ]; then
+                echo "$svc native protocol not ready"
+                exit 1
+              fi
+              sleep 2
+            done
+          done
+
+      - name: Wait for OTEL Collector
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:13133/ > /dev/null 2>&1; then
+              echo "OTEL Collector is ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "OTEL Collector failed to start"
+          docker compose -f testing/docker-compose.integration.yml logs otel-collector
+          exit 1
+
+      - name: Run degradation tests
+        run: |
+          go test -v -race -tags integration -run "$TEST_FILTER" -timeout 300s ./... 2>&1 | tee test-output.txt
+          exit ${PIPESTATUS[0]}
+        env:
+          TEST_FILTER: ${{ github.event.inputs.test_filter }}
+          CLICKHOUSE1_ADDR: localhost:19000
+          CLICKHOUSE2_ADDR: localhost:19001
+          CLICKHOUSE3_ADDR: localhost:19002
+          OTEL_ADDR: localhost:14317
+          KEEPER1_ADDR: localhost:19181
+          KEEPER2_ADDR: localhost:19182
+          KEEPER3_ADDR: localhost:19183
+
+      - name: Test summary
+        if: always()
+        run: |
+          echo "=== TEST SUMMARY ==="
+          PASS=$(grep -c '^--- PASS:' test-output.txt 2>/dev/null || echo 0)
+          FAIL=$(grep -c '^--- FAIL:' test-output.txt 2>/dev/null || echo 0)
+          echo "PASSED: $PASS"
+          echo "FAILED: $FAIL"
+          if [ "$FAIL" -gt 0 ]; then
+            echo ""
+            echo "=== FAILED TESTS ==="
+            grep '^--- FAIL:' test-output.txt
+          fi
+
+      - name: Collect logs on failure
+        if: failure()
+        run: docker compose -f testing/docker-compose.integration.yml logs > degradation-logs.txt 2>&1
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: degradation-logs
+          path: |
+            degradation-logs.txt
+            test-output.txt
+
+      - name: Teardown
+        if: always()
+        run: docker compose -f testing/docker-compose.integration.yml down -v

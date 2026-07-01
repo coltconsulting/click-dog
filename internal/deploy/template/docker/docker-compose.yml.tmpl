@@ -1,0 +1,10 @@
+services:
+  click-dog:
+    image: ghcr.io/coltconsulting/click-dog:{{ .ImageTag }}
+    container_name: click-dog
+    env_file:
+      - .env
+    volumes:
+      - ./click-dog.yaml:/etc/click-dog/click-dog.yaml:ro
+    restart: unless-stopped
+    network_mode: host
