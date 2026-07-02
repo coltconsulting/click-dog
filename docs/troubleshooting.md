@@ -196,10 +196,11 @@ Times must be RFC3339 format with timezone:
 - Verify your regex pattern matches the target text. Test with a regex tool first
 - YAML escaping is tricky with regex. Prefer block scalar syntax to avoid double-escaping:
   ```yaml
-  redact_queries:
-    - pattern: |
-        (?i)identified\s+by\s+'[^']*'
-      replacement: "IDENTIFIED BY '[REDACTED]'"
+  filters:
+    redact_queries:
+      - pattern: |
+          (?i)identified\s+by\s+'[^']*'
+        replacement: "IDENTIFIED BY '[REDACTED]'"
   ```
 - Leading/trailing whitespace in patterns is trimmed automatically
 - Redaction runs _after_ blacklist filtering — if the query is blacklisted, it's dropped entirely (not redacted)

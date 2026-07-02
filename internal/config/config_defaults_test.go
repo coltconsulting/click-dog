@@ -29,6 +29,9 @@ func TestLoadConfig_ValidMinimal(t *testing.T) {
 	if cfg.ClickHouse.QueryTimeoutS != 30 {
 		t.Errorf("query_timeout_s default = %d, want 30", cfg.ClickHouse.QueryTimeoutS)
 	}
+	if cfg.ClickHouse.Port != 9000 {
+		t.Errorf("port default = %d, want 9000", cfg.ClickHouse.Port)
+	}
 	if cfg.ClickHouse.MaxMemoryUsage != 104857600 {
 		t.Errorf("max_memory_usage default = %d, want 104857600", cfg.ClickHouse.MaxMemoryUsage)
 	}
@@ -52,6 +55,28 @@ func TestLoadConfig_ValidMinimal(t *testing.T) {
 	}
 	if cfg.Monitor.Backoff.BackoffFactor != 2.0 {
 		t.Errorf("backoff.backoff_factor default = %f, want 2.0", cfg.Monitor.Backoff.BackoffFactor)
+	}
+}
+
+func TestLoadConfig_ClickHousePortDefault(t *testing.T) {
+	yaml := `
+clickhouse:
+  host: localhost
+  database: default
+exporters:
+  otel:
+    - collector_address: localhost:4317
+monitor:
+  enabled: true
+  min_trace_duration_ms: 1000
+  check_interval_s: 30
+`
+	cfg, err := LoadConfig(writeConfigFile(t, yaml))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ClickHouse.Port != 9000 {
+		t.Errorf("clickhouse.port default = %d, want 9000", cfg.ClickHouse.Port)
 	}
 }
 
@@ -411,7 +436,7 @@ health:
 }
 
 func TestLoadConfig_HealthClusterDefaultsNotAppliedWhenDisabled(t *testing.T) {
-	// Mirror of the listen-address default behavior: if cluster.enabled
+	// Mirror of the listen-address default behavior: if health.cluster.enabled
 	// is false, default values are not silently materialised — operators
 	// reading the parsed config can tell the feature wasn't turned on.
 	cfg, err := LoadConfig(writeConfigFile(t, validMinimalYAML))

@@ -28,8 +28,9 @@ The cache is **not persisted across restarts** (`main.go`, the LRU setup in
 `runScheduledMode`). On startup it is empty, so any span still inside the
 lookback window is **re-exported once**. This is safe by design:
 
-- OTEL collectors and OTLP backends (and Splunk HEC) dedup by
-  `(trace_id, span_id)`, so a downstream backend collapses the duplicate.
+- OTEL collectors and trace backends can deduplicate by `(trace_id, span_id)`.
+  Splunk HEC exports include those same stable IDs, but duplicate collapse
+  there depends on downstream Splunk searches or index-time posture.
 - The alternative — disk persistence — adds crash-recovery complexity not
   justified for a best-effort sidecar.
 
@@ -79,7 +80,7 @@ sequentially under the default **`PolicyAllRequired`** contract
 - Because nothing from a failed batch is marked seen, the next cycle
   **re-delivers the whole batch to every sink** — including sinks that already
   succeeded. They see the same `(trace_id, span_id)` again; this is the
-  intentional at-least-once trade-off, deduped downstream.
+  intentional at-least-once trade-off, with stable IDs for downstream dedup.
 
 Per-sink visibility comes from these counters (see [Observability](observability.md)):
 

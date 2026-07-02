@@ -63,6 +63,10 @@ filters:
 metrics:
   enabled: true
   listen_address: ":9090"
+  otlp:
+    # Push click-dog's own health metrics over OTLP, reusing exporters.otel[0].
+    # Feeds the Datadog "Click-Dog: Health" dashboard. Delete to disable.
+    enabled: true
 
 health:
   enabled: true

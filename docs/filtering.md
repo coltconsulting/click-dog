@@ -5,16 +5,17 @@ Click-Dog provides multiple filtering layers to control which spans get exported
 ## Filter Evaluation Order
 
 1. **Operation blacklist** (SQL-level) — `blacklist_operations` patterns are pushed down to ClickHouse as `NOT LIKE` clauses. Matching spans are never fetched. This is the primary volume control — use it to drop high-volume internal pipeline spans like `MergeTreeIndex`.
-2. **User filter** — `whitelist_users` / `blacklist_users` are pushed down to the `query_log` enrichment WHERE clause (SQL-level) and re-checked per span in Go for defense-in-depth.
+2. **User filter** — `whitelist_users` is pushed down to the `query_log` enrichment WHERE clause, `blacklist_users` is kept for the Go-layer span re-check, and both lists are pushed down for the slow-query / backfill path.
 3. **IP whitelist** — if configured, reject spans from IPs not in the list
 4. **Operation whitelist** — if configured, reject spans with non-matching operation names
 5. **Query blacklist** — reject spans whose SQL text matches any blacklist pattern
+6. **Query redaction** — rewrite matching SQL fragments before export; this does not affect whether a span is exported
 
-Step 1 runs entirely at the SQL level (before data transfer). Step 2 is mixed: the enrichment leg is SQL-level, the per-span re-check is post-fetch. Steps 3–5 run in Go after spans are fetched. A span must pass all checks to be exported. If a whitelist is not configured (empty list), that check is skipped.
+Step 1 runs entirely at the SQL level (before data transfer). Step 2 is mixed: the enrichment leg is SQL-level, the per-span re-check is post-fetch. Steps 3–5 run in Go after spans are fetched. A span must pass all checks in steps 1–5 to be exported. Step 6 is a post-filter transform that runs before export. If a whitelist is not configured (empty list), that check is skipped.
 
-The list above describes *enforcement order* (SQL first, then Go). Within the Go-level loop the per-span user re-check runs alongside the IP / operation / query checks; the relative order of those Go-level checks is an implementation detail and shouldn't be relied on for debugging filter behavior.
+The list above describes *enforcement order* (SQL first, then Go filtering, then redaction). Within the Go-level loop the per-span user re-check runs alongside the IP / operation / query checks; the relative order of those Go-level checks is an implementation detail and shouldn't be relied on for debugging filter behavior.
 
-Note: `blacklist_operations` (SQL-level, step 1) and `whitelist_operations` (post-fetch, step 3) are independent. The blacklist always wins because matching spans are never fetched — they cannot reach the whitelist check.
+Note: `blacklist_operations` (SQL-level, step 1) and `whitelist_operations` (post-fetch, step 4) are independent. The blacklist always wins because matching spans are never fetched — they cannot reach the whitelist check.
 
 ## Operation Blacklist (SQL-level)
 
@@ -74,9 +75,13 @@ filters:
     - "10.0.1.50"
     - "10.0.1.51"
     - "192.168.1.100"
+    - "10.2.0.0/16"
 ```
 
-IP matching is exact string comparison against the `client.address` span attribute. The value comes from ClickHouse's `IPv6NumToString(address)` in the query log or the `client.address` attribute in the span log.
+Entries without `/` match by exact IP string. Entries in CIDR notation match any
+address in that range. The value comes from ClickHouse's
+`IPv6NumToString(address)` in the query log or the `client.address` attribute in
+the span log.
 
 ### When Not Configured
 
@@ -176,6 +181,29 @@ blacklist_queries:
 
 ---
 
+## Query Redaction
+
+Rewrite sensitive fragments in SQL text before export without dropping the span.
+Redaction rules use Go's RE2 regexp syntax, run after query blacklist filtering,
+and are applied sequentially. If `replacement` is omitted, matches are replaced
+with `[REDACTED]`.
+
+```yaml
+filters:
+  redact_queries:
+    - pattern: |
+        (?i)identified\s+by\s+'[^']*'
+      replacement: "IDENTIFIED BY '[REDACTED]'"
+    - pattern: "(?i)token\\s*=\\s*'[^']*'"
+```
+
+Redaction changes exported query attributes such as `db.statement`; it does not
+change ClickHouse data and it does not affect filter decisions. If a query
+matches `blacklist_queries`, it is dropped entirely and no redacted copy is
+exported.
+
+---
+
 ## Duration Filtering
 
 Duration thresholds are applied at the SQL level in ClickHouse, not in application code. This minimizes data transfer.
@@ -223,7 +251,7 @@ max_trace_duration_ms: 600000  # Skip traces > 10 minutes
 
 ## Query Length Filtering
 
-Skip queries with excessively long SQL text. There are two separate settings:
+Skip queries with excessively long SQL text. There are two separate stages:
 
 ```yaml
 monitor:
@@ -233,12 +261,17 @@ exporters:
   otel:
     - collector_address: localhost:4317
       max_query_length: 100000 # Truncate SQL > 100k chars (at export time)
+  splunk_hec:
+    - endpoint: https://splunk.internal:8088
+      token: ${SPLUNK_HEC_TOKEN}
+      max_query_length: 100000 # Truncate SQL > 100k chars (at export time)
 ```
 
 | Setting | When Applied | Behavior |
 |---------|-------------|----------|
 | `monitor.max_query_length` | During ClickHouse query | Queries with SQL text longer than this are **excluded entirely** |
 | `exporters.otel[].max_query_length` | During OTEL export | SQL text is **truncated** to this length with `...` appended |
+| `exporters.splunk_hec[].max_query_length` | During Splunk HEC export | SQL text is **truncated** to this length with `...` appended |
 
 ---
 

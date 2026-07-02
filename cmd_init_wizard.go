@@ -656,10 +656,15 @@ func clickhouseHardeningForProfile(profile string) string {
 //
 // `production` enables the Prometheus scrape on :9090 by default — install.sh
 // emitted this block unconditionally pre-unification, and operators
-// shipping a production install almost certainly want scrape coverage.
-// `minimal` keeps the bare-essentials shape; `paranoid` likewise omits
-// metrics so a load-constrained cluster doesn't get an extra listener it
-// didn't ask for.
+// shipping a production install almost certainly want scrape coverage. It also
+// turns on the OTLP self-metrics push (`otlp.enabled`), which reuses
+// `exporters.otel[0]` — without it the shipped Datadog "Click-Dog: Health"
+// dashboard reads `click_dog.*` metrics that were never exported and renders
+// all-"No data". The line is written into the generated YAML (not defaulted in
+// Go) so it's visible and one deletion away from off. `minimal` keeps the
+// bare-essentials shape; `paranoid` likewise omits metrics so a
+// load-constrained cluster doesn't get an extra listener — or a billable
+// self-metrics stream — it didn't ask for.
 func metricsSectionForProfile(profile string) string {
 	if profile != "production" {
 		return ""
@@ -667,6 +672,10 @@ func metricsSectionForProfile(profile string) string {
 	return `metrics:
   enabled: true
   listen_address: ":9090"
+  otlp:
+    # Push click-dog's own health metrics over OTLP, reusing exporters.otel[0].
+    # Feeds the Datadog "Click-Dog: Health" dashboard. Delete to disable.
+    enabled: true
 `
 }
 
@@ -735,6 +744,21 @@ filters:
   enabled: true
   min_trace_duration_ms: 1000
   check_interval_s: 30
+
+# Recommended before real use: drop high-volume engine-internal spans at the
+# SQL level. They carry no clickhouse.query_id, so leaving them in drives the
+# Health dashboard's "spans with query_id" tile toward zero and inflates ingest
+# ~10-100x. The production profile enables this list; uncomment to use it here.
+# filters:
+#   blacklist_operations:
+#     - "MergeTreeSource"
+#     - "MergeTreeMarksLoader"
+#     - "MergeTreeIndex"
+#     - "MergeTreeSequentialSource"
+#     - "VFSWrite"
+#     - "WriteBufferFromS3"
+#     - "ConcurrentJoin"
+#     - "QueryPipelineEx"
 `
 	case "paranoid":
 		return `monitor:
@@ -759,6 +783,24 @@ filters:
   canary:
     enabled: true
     threshold_duration_ms: 60000
+
+filters:
+  # Both lists are ACTIVE here (unlike minimal's commented block): paranoid's
+  # max_spans_per_cycle budget would otherwise fill with engine-internal spans
+  # instead of the slow query spans it exists to catch, and aggressive dropping
+  # is the profile's whole point. Engine ops carry no clickhouse.query_id.
+  blacklist_queries:
+    - "^SYSTEM"
+    - "^INSERT INTO.*\\.inner\\."
+  blacklist_operations:
+    - "MergeTreeSource"
+    - "MergeTreeMarksLoader"
+    - "MergeTreeIndex"
+    - "MergeTreeSequentialSource"
+    - "VFSWrite"
+    - "WriteBufferFromS3"
+    - "ConcurrentJoin"
+    - "QueryPipelineEx"
 `
 	default:
 		panic(fmt.Sprintf(

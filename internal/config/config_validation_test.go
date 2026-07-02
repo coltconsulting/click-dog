@@ -64,7 +64,7 @@ func TestValidate_ClickHousePort(t *testing.T) {
 		port    int
 		wantErr bool
 	}{
-		{"port 0 valid", 0, false},
+		{"port 0 invalid", 0, true},
 		{"port 9000 valid", 9000, false},
 		{"port 65535 valid", 65535, false},
 		{"port -1 invalid", -1, true},
@@ -539,7 +539,7 @@ func TestValidate_HealthCluster_RequiresHealthEnabled(t *testing.T) {
 
 	err := cfg.Validate()
 	if err == nil {
-		t.Fatal("expected error: cluster.enabled without health.enabled")
+		t.Fatal("expected error: health.cluster.enabled without health.enabled")
 	}
 	if !strings.Contains(err.Error(), "health.enabled") {
 		t.Errorf("error should call out health.enabled, got: %v", err)
@@ -730,7 +730,7 @@ func TestValidate_HealthCluster_RejectsDuplicatesAfterTrim(t *testing.T) {
 }
 
 func TestValidate_HealthCluster_DisabledSkipsAllChecks(t *testing.T) {
-	// When cluster.enabled is false, the other fields should not trigger
+	// When health.cluster.enabled is false, the other fields should not trigger
 	// validation — operators may leave a partial-but-disabled stanza in
 	// their config without it counting as a misconfiguration.
 	cfg := validConfig()
@@ -740,7 +740,7 @@ func TestValidate_HealthCluster_DisabledSkipsAllChecks(t *testing.T) {
 	cfg.Health.Cluster.Peers = []string{""}
 
 	if err := cfg.Validate(); err != nil {
-		t.Errorf("cluster.enabled=false should bypass cluster checks, got: %v", err)
+		t.Errorf("health.cluster.enabled=false should bypass cluster checks, got: %v", err)
 	}
 }
 

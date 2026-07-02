@@ -1,15 +1,15 @@
 # Operation Modes
 
 Click-Dog supports two long-running modes — **scheduled** (continuous
-monitoring) and **backfill** (one-shot historical export) — plus two
-short-lived inspection modes (**validate** and **dry-run**) and a
+monitoring) and **backfill** (one-shot historical export) — plus short-lived
+inspection modes (**validate**, **dry-run**, and `click-dog analyze`) and a
 separate `click-dog deploy` subcommand family for emitting Kubernetes /
 Docker manifests. Scheduled and backfill can run simultaneously as two
 separate processes.
 
 ## Scheduled Mode
 
-Continuously polls ClickHouse's `system.opentelemetry_span_log` table at a configurable interval and exports matching spans to your OTEL collector.
+Continuously polls ClickHouse's `system.opentelemetry_span_log` table at a configurable interval and exports matching spans to your configured OTEL gRPC and/or Splunk HEC sinks.
 
 ### How It Works
 
@@ -17,7 +17,7 @@ Continuously polls ClickHouse's `system.opentelemetry_span_log` table at a confi
 2. Fetches all spans for those traces (optionally filtered by span-level duration)
 3. Deduplicates against an LRU cache to avoid re-exporting
 4. Applies operation, IP, and query filters
-5. Exports to the OTEL collector via gRPC
+5. Exports to the configured OTEL gRPC and/or Splunk HEC sinks
 6. Waits `check_interval_s` seconds, then repeats
 
 ### Usage
@@ -46,7 +46,7 @@ monitor:
 - **Runs on startup** — the first poll happens immediately, then repeats at `check_interval_s`
 - **Deduplication** — an LRU cache (default 10,000 entries) keyed by the composite OTLP span identity `(trace_id, span_id)` prevents re-exporting the same spans across polling cycles. Span IDs are only unique within a trace, so the trace ID is part of the key
 - **Lookback overlap** — set `lookback_s` slightly larger than `check_interval_s` (the default adds 10 seconds) to avoid gaps between polls
-- **Graceful shutdown** — responds to SIGINT and SIGTERM. If a polling cycle is in progress, it completes before shutdown. The gRPC connection to the OTEL collector is closed with a 5-second timeout. The in-memory dedup cache is not persisted — after restart, spans still within the lookback window will be re-exported once (OTEL collectors dedup by `(trace_id, span_id)`)
+- **Graceful shutdown** — responds to SIGINT and SIGTERM. If a polling cycle is in progress, it completes before shutdown. Exporter connections are closed with a 5-second timeout. The in-memory dedup cache is not persisted — after restart, spans still within the lookback window will be re-exported once. OTEL collectors and trace backends can deduplicate by `(trace_id, span_id)`; Splunk HEC receives the same stable IDs for downstream dedup/search.
 - **Resilience** — supports circuit breaker and adaptive backoff to protect ClickHouse during failures
 
 ### Data Source
@@ -67,7 +67,7 @@ One-time export of historical data from ClickHouse's `system.query_log` table fo
 1. Queries `system.query_log` for queries in the specified time range matching the duration threshold
 2. Filters by `QueryFinish` and `ExceptionWhileProcessing` event types
 3. Applies configured filters
-4. Exports each query as a trace to the OTEL collector
+4. Exports each query as a trace/event to the configured OTEL gRPC and/or Splunk HEC sinks
 5. Exits when complete
 
 ### Usage
@@ -99,7 +99,7 @@ monitor:
 - **No deduplication cache** — since it's a one-time run, there's no need for the LRU cache
 - **Rate controllable** — use `max_spans_per_cycle`, `batch_size`, and `batch_delay_ms` to control the export rate
 - **Different data source** — reads from `system.query_log` (not `system.opentelemetry_span_log`), which provides richer query metadata
-- **Filters applied** — IP whitelist and query blacklist filters work as expected. However, operation whitelist does not apply to backfill mode — `query_log` entries have no operation name, so if `whitelist_operations` is set, all backfill queries would be filtered out. Leave `whitelist_operations` empty when using backfill
+- **Filters applied** — IP whitelist, operation whitelist, query blacklist, user filters, and query redaction use `query_log` fields. Because `query_log` entries have no operation name, a configured `whitelist_operations` rejects every backfill query. Leave `whitelist_operations` empty when using backfill
 - **Exit code reflects export outcome** — backfill exits 0 only when every (non-filtered) query exported successfully. Any export failure exits non-zero. The final log line and the `backfill_failed` webhook (if enabled) include `queries=N exported=N filtered=N failed=N` so an operator can tell whether the failure was partial (some data landed) or total (none did) and decide how to recover
 
 ### Data Source
@@ -208,13 +208,31 @@ Use it to:
 - **Sink label** — Prometheus metrics emitted in the cycle carry
   `sink="dry_run"` so dashboards can distinguish dry-run traffic from
   live exports
-- **No side effects** — webhook notifications still fire on lifecycle
-  events (startup, shutdown), but nothing is exported
+- **No exports** — the startup webhook notification still fires when webhooks
+  are enabled, but the shutdown webhook does not fire because dry-run exits
+  before the scheduled loop's signal-driven shutdown path
 
 > **Want a continuous dry-run loop?** That isn't supported today —
 > scheduled `--dry-run` exits after one cycle. If you need rolling
 > summaries, re-invoke periodically (cron, `watch`, etc.) or open a
 > follow-up issue.
+
+---
+
+## `click-dog analyze` (read-only reports)
+
+`click-dog analyze` is a local, read-only inspection command family for query
+behavior. It produces reports and exits; it does not start the scheduled polling
+loop, open exporters, start metrics or health servers, start leader election, or
+run the circuit breaker.
+
+| Subcommand | Purpose |
+|------------|---------|
+| `click-dog analyze queries` | Build a deterministic query-analysis report over a bounded lookback window |
+| `click-dog analyze trace` | Drill from a current/recent query or explicit identity to native trace spans and nearby query-family context |
+
+See [Query Analysis](query-analysis.md) for the operator workflow and JSON
+artifact boundary.
 
 ---
 
@@ -246,12 +264,12 @@ See [Install](install.md) for the equivalent `install.sh kubernetes` /
 
 ## Comparison
 
-| | Scheduled | Backfill | Validate | Dry-run | `deploy` |
-|---|---|---|---|---|---|
-| **Data source** | `system.opentelemetry_span_log` | `system.query_log` | None | Same as scheduled / backfill | None |
-| **Duration** | Runs continuously | Runs once, then exits | Exits immediately | Runs once, then exits | Exits immediately |
-| **Time range** | Rolling window (`lookback_s`) | Fixed range (`-backfill-start` / `-backfill-end`) | N/A | Same as the mode it shadows | N/A |
-| **Deduplication** | LRU cache prevents re-exports | Not needed (one-time run) | N/A | Active during the single cycle | N/A |
-| **Resilience** | Circuit breaker + adaptive backoff | None (single run) | N/A | Single-cycle — no loop to back off | N/A |
-| **Exports anything?** | Yes | Yes | No | **No** — discards via `DryRunExporter` | No |
-| **Use case** | Real-time monitoring | Historical analysis, outage recovery | Config verification | Preview / smoke-test without sending | Generate manifests, check installed state |
+| | Scheduled | Backfill | Validate | Dry-run | Analyze | `deploy` |
+|---|---|---|---|---|---|---|
+| **Data source** | `system.opentelemetry_span_log` | `system.query_log` | None | Same as scheduled / backfill | `system.query_log`, `system.processes`, and/or `system.opentelemetry_span_log` | None |
+| **Duration** | Runs continuously | Runs once, then exits | Exits immediately | Runs once, then exits | Exits after producing a report | Exits immediately |
+| **Time range** | Rolling window (`lookback_s`) | Fixed range (`-backfill-start` / `-backfill-end`) | N/A | Same as the mode it shadows | Bounded lookback window | N/A |
+| **Deduplication** | LRU cache prevents re-exports | Not needed (one-time run) | N/A | Active during the single cycle | N/A | N/A |
+| **Resilience** | Circuit breaker + adaptive backoff | None (single run) | N/A | Single-cycle — no loop to back off | N/A | N/A |
+| **Exports anything?** | Yes | Yes | No | **No** — discards via `DryRunExporter` | No | No |
+| **Use case** | Real-time monitoring | Historical analysis, outage recovery | Config verification | Preview / smoke-test without sending | Local query triage and report artifacts | Generate manifests, check installed state |

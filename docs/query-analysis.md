@@ -18,8 +18,11 @@ slow-query traces with query-log context, and ships ready-made dashboards.
 `click-dog analyze queries` builds a bounded, **read-only** analysis report
 directly from `system.query_log` and `system.opentelemetry_span_log`: query-family
 resource outliers, `log_comment` attribution gaps, user / client / host skew, and
-coverage prerequisites. It opens a single read-only connection — no exporter
-credentials are read and nothing is written to ClickHouse.
+coverage prerequisites. It opens a single read-only ClickHouse connection and
+nothing is written to ClickHouse. The command still loads config through the
+normal loader, so exporter fields are expanded and `*_file` secret paths are read
+at config-load time, but no exporter clients are constructed and no exporter
+connections are opened.
 
 ```bash
 # Human-readable table for the last hour (default window)
@@ -43,6 +46,32 @@ credentials are read and nothing is written to ClickHouse.
 !!! note "Reports are operational artifacts"
     JSON reports contain normalized SQL and dimension values that can reveal
     schema and ownership shape — treat them like logs and traces.
+
+## Trace drilldown (`analyze trace`)
+
+`click-dog analyze trace` is the incident-response inverse of
+`analyze queries`: start from a running query, recent query-log row, query ID,
+trace ID, or normalized query hash, then fetch the native ClickHouse trace spans
+that carry the query and fan out to query-log stats, the matching query-family
+rollup, and any findings for that family.
+
+```bash
+# Guided flow
+./click-dog analyze trace -config click-dog.yaml -wizard
+
+# Search recent finished/failed queries
+./click-dog analyze trace -config click-dog.yaml -source recent -match events
+
+# Drill explicit identities
+./click-dog analyze trace -config click-dog.yaml -query-id abc123
+./click-dog analyze trace -config click-dog.yaml -trace-id <trace-id>
+./click-dog analyze trace -config click-dog.yaml -normalized-query-hash 123456789
+```
+
+Like `analyze queries`, the trace drilldown is local and read-only: no exporters,
+metrics or health servers, leader election, circuit breaker, or adaptive polling
+are started. Missing trace spans, unsupported rollups, or no matching findings
+produce warnings or empty sections rather than a command failure.
 
 ## AI-ready JSON
 

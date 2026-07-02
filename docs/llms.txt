@@ -29,7 +29,7 @@ Important notes:
 - [Configuration](https://click-dog.com/configuration/): Config reference for
   ClickHouse, exporters, filters, metrics, health, HA, and logging.
 - [Operation Modes](https://click-dog.com/modes/): Scheduled, backfill,
-  validate, dry-run, flush, and deploy modes.
+  validate, dry-run, analyze, flush, and deploy modes.
 - [Query Analysis](https://click-dog.com/query-analysis/): Deterministic local
   analysis reports and JSON output for tooling.
 - [Observability](https://click-dog.com/observability/): Metrics, health

@@ -167,8 +167,9 @@ command searches system.query_log inside the lookback window; -source current
 searches the running queries in system.processes. -query-id and -trace-id are
 direct drills that skip candidate search; -normalized-query-hash does an exact
 recent query-log lookup and drills in only when exactly one candidate matches.
-The command opens only the ClickHouse reader: no exporter credentials are read
-and nothing is written to ClickHouse.
+The command opens only the ClickHouse reader: no exporter connections are
+opened and nothing is written to ClickHouse. Config loading still expands env
+vars and reads configured *_file secret fields.
 
 A -source current candidate may not have finished yet: its query-log row and
 normalized-query hash may not exist and its trace spans may not be flushed. Use

@@ -546,6 +546,7 @@ func LoadConfig(path string) (*Config, error) {
 	exportTimeoutSet := lookupPath(raw, "monitor.export_timeout_s")
 	monitorEnabledSet := lookupPath(raw, "monitor.enabled")
 	checkIntervalSet := lookupPath(raw, "monitor.check_interval_s")
+	clickHousePortSet := lookupPath(raw, "clickhouse.port")
 	topologyAuditEnabledSet := lookupPath(raw, "monitor.topology_audit.enabled")
 	otlpMetricsInheritSet := lookupPath(raw, "metrics.otlp.inherit_otel_connection")
 	otlpMetricsIntervalSet := lookupPath(raw, "metrics.otlp.interval_seconds")
@@ -635,6 +636,9 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if config.LogFormat == "" {
 		config.LogFormat = "text"
+	}
+	if !clickHousePortSet {
+		config.ClickHouse.Port = 9000
 	}
 	if config.ClickHouse.MaxOpenConns == 0 {
 		config.ClickHouse.MaxOpenConns = 2
@@ -765,7 +769,7 @@ func LoadConfig(path string) (*Config, error) {
 	if config.Health.Enabled && config.Health.ListenAddress == "" {
 		config.Health.ListenAddress = ":8686"
 	}
-	// Cluster fanout defaults — only meaningful when cluster.enabled. The
+	// Cluster fanout defaults — only meaningful when health.cluster.enabled. The
 	// 3s default matches the stricter end of typical Kubernetes per-probe
 	// budgets while still tolerating one or two slow peers per fanout.
 	if config.Health.Cluster.Enabled && config.Health.Cluster.PeerTimeoutMs == 0 {
@@ -777,7 +781,7 @@ func LoadConfig(path string) (*Config, error) {
 	// whitespace-only entries; this canonicalises the populated ones so
 	// the trimmed form is what propagates into Validate(), Source.Peers(),
 	// and the fanout. Run unconditionally — the cost is negligible and
-	// it future-proofs against `cluster.enabled` toggling at runtime.
+	// it future-proofs against `health.cluster.enabled` toggling at runtime.
 	config.Health.Cluster.Self = strings.TrimSpace(config.Health.Cluster.Self)
 	for i, p := range config.Health.Cluster.Peers {
 		config.Health.Cluster.Peers[i] = strings.TrimSpace(p)
@@ -871,8 +875,8 @@ func (c *Config) Validate() error {
 	var errs []string
 
 	// ClickHouse validation
-	if c.ClickHouse.Port < 0 || c.ClickHouse.Port > 65535 {
-		errs = append(errs, fmt.Sprintf("clickhouse.port must be between 0 and 65535, got %d", c.ClickHouse.Port))
+	if c.ClickHouse.Port <= 0 || c.ClickHouse.Port > 65535 {
+		errs = append(errs, fmt.Sprintf("clickhouse.port must be between 1 and 65535, got %d", c.ClickHouse.Port))
 	}
 	if c.ClickHouse.MaxOpenConns < 0 {
 		errs = append(errs, fmt.Sprintf("clickhouse.max_open_conns cannot be negative, got %d", c.ClickHouse.MaxOpenConns))

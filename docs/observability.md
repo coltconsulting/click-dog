@@ -409,7 +409,7 @@ based discovery.
 
 Behavior:
 
-- `/clusterz` is mounted only when `cluster.enabled: true` AND
+- `/clusterz` is mounted only when `health.cluster.enabled: true` AND
   `health.enabled: true`. The combination is enforced at config load.
 - When HA is disabled, the single instance treats itself as leader and
   `/clusterz` aggregates whatever peers are listed (typically just self).

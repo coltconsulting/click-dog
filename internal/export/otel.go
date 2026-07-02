@@ -171,8 +171,8 @@ func (o *OTELExporter) Close(ctx context.Context) error {
 // Trace/span IDs are derived deterministically from the row's identity
 // (query_id + event_time + query_kind) so that a re-export — a MultiExporter
 // partial-failure retry, or a re-run backfill window — produces identical IDs
-// and the collector dedups by (trace_id, span_id). This is what makes the
-// at-least-once delivery contract safe for the query_log path.
+// and OTEL trace backends can deduplicate by (trace_id, span_id). This is what
+// makes the at-least-once delivery contract safe for the query_log path.
 //
 // The provided ctx controls the gRPC call deadline. Callers should set a
 // timeout (e.g. context.WithTimeout) to avoid blocking indefinitely if the
@@ -247,7 +247,7 @@ func (o *OTELExporter) ExportQuery(ctx context.Context, log model.QueryLog) (mod
 // deterministicQueryIDs derives a stable 16-byte trace ID and 8-byte span ID
 // from a query_log row's identity, so re-exporting the same row (a
 // MultiExporter partial-failure retry, or a re-run backfill window) yields
-// identical OTLP IDs and the collector dedups it instead of duplicating it.
+// identical OTLP IDs so OTEL trace backends can deduplicate retries.
 //
 // The key is (query_id, event_time, query_kind) — NOT query_id alone.
 // ClickHouse query_id is a caller-supplied value that is only guaranteed unique

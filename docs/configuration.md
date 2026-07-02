@@ -1,6 +1,9 @@
 # Configuration Reference
 
-Click-Dog uses YAML configuration with environment variable support. By default it looks for `click-dog.yaml` in the current directory. Override with `-config`:
+Click-Dog uses YAML configuration with environment variable support. When
+`-config` is omitted, it first looks for
+`/etc/click-dog/click-dog.yaml`, then falls back to `./click-dog.yaml` in the
+current directory. Override with `-config`:
 
 ```bash
 ./click-dog -config /path/to/config.yaml
@@ -228,7 +231,7 @@ exporters:
 |-------|---------|-------------|
 | `collector_address` | — | OTEL collector gRPC endpoint (e.g., `localhost:4317`) |
 | `service_name` | `click-dog-monitor` | Service name that appears in traces |
-| `max_query_length` | `100000` | Truncate SQL query text longer than this in exported spans. Set to `0` to disable truncation |
+| `max_query_length` | `100000` | Truncate SQL query text longer than this in exported spans. `0` or omitted is coerced to the `100000` default; the limit is not disabled at config load |
 | `secure` | `false` | Enable TLS for the gRPC connection |
 | `insecure_skip_verify` | `false` | Skip TLS cert verification. **Insecure** |
 | `ca_cert` | — | CA certificate path for TLS verification |
@@ -263,7 +266,7 @@ Each `exporters.splunk_hec[]` entry takes a Splunk HTTP Event Collector endpoint
 
 When more than one exporter is configured, spans are sent to all backends sequentially under the default **`PolicyAllRequired`** contract: any backend failure — partial or total — is treated as a real export error. The cycle is marked an error (`click_dog_cycle_results_total{result="error"}`), feeds the circuit breaker and adaptive backoff, and shows up as the most recent error on `/status` and `/readyz`. The per-sink counters (`click_dog_export_{attempts,accepted,errors}_total{sink}`) plus warning log summaries surface exactly which backend failed, so a dead sink can't silently drop out of the fan-out.
 
-A span is marked as "seen" in the dedup cache only if **every** backend accepts it. If any backend fails, no span from that batch is marked seen, and the next cycle re-delivers the full batch to *every* sink. Backends that already accepted those spans will see the same `(trace_id, span_id)` pair again — accepted by design as an at-least-once delivery trade-off; OTEL collectors and Splunk HEC dedup by `(trace_id, span_id)`. The same contract applies to backfill mode: a partial multi-sink failure counts the query as `Failed` in the run summary, the process exits non-zero, and re-running the window re-delivers to every sink.
+A span is marked as "seen" in the dedup cache only if **every** backend accepts it. If any backend fails, no span from that batch is marked seen, and the next cycle re-delivers the full batch to *every* sink. Backends that already accepted those spans will see the same `(trace_id, span_id)` pair again — accepted by design as an at-least-once delivery trade-off. OTEL collectors and trace backends can deduplicate by that identity; Splunk HEC receives the same stable IDs, but duplicate collapse depends on downstream Splunk searches or index-time posture. The same contract applies to backfill mode: a partial multi-sink failure counts the query as `Failed` in the run summary, the process exits non-zero, and re-running the window re-delivers to every sink.
 
 An alternate `PolicyAnySuccess` policy exists in code — spans are marked seen as soon as one sink accepts them, while failed sinks remain visible through `ExportResult` and the per-sink metrics. It is not exposed via YAML today; production configs use the strict default policy. The per-call deadline applied to every backend in the fan-out is `monitor.export_timeout_s` (see [Monitor](#monitor) below).
 
@@ -294,7 +297,7 @@ ha:
 | `keeper.hosts` | — | ClickHouse Keeper (ZooKeeper-compatible) endpoints. **Presence enables leader election**; empty/omitted means standalone |
 | `keeper.secure` | `false` | Enable TLS for the Keeper connection. Use with Keeper digest auth on untrusted networks so credentials are not sent in plaintext |
 | `keeper.session_timeout_s` | `10` | Session timeout in seconds. Must be 5-30 |
-| `keeper.base_path` | `/click-dog/election` | Znode path prefix. Must start with `/click-dog/` |
+| `keeper.base_path` | `/click-dog/election` | Znode path prefix. Must be exactly `/click-dog` or under `/click-dog/`; paths overlapping ClickHouse's own Keeper paths (`/clickhouse...`) are rejected |
 | `keeper.auth_user` | — | Optional digest authentication username (supports `${ENV}` expansion) |
 | `keeper.auth_password` | — | Optional digest authentication password (supports `${ENV}` expansion). Mutually exclusive with `keeper.auth_password_file` |
 | `keeper.auth_password_file` | — | Path to a file holding the digest auth password (read at load; one trailing newline — CRLF or LF — trimmed). Path supports `${VAR}` expansion. Mutually exclusive with `keeper.auth_password` |
@@ -357,7 +360,7 @@ All duration filtering happens in SQL for maximum efficiency.
 | `min_span_duration_ms` | `0` | Only export spans >= this (ms). `0` = export all spans from matching traces |
 | `max_trace_duration_ms` | `0` | Skip traces with spans > this (ms). `0` = no upper limit |
 | `max_span_duration_ms` | `0` | Skip individual spans > this (ms). `0` = no upper limit |
-| `max_query_length` | `100000` | Skip queries with SQL text longer than this (chars) and truncate live `query_log.normalized_query` previews to this length. Set to `0` to disable both the fetch-time length limit and live normalized-preview truncation. Different from `exporters.otel[].max_query_length` which truncates at export time |
+| `max_query_length` | `100000` | Skip queries with SQL text longer than this (chars) and truncate live `query_log.normalized_query` previews to this length. `0` or omitted is coerced to the `100000` default; the limit is not disabled at config load. Different from `exporters.otel[].max_query_length` which truncates at export time |
 
 ### Polling
 
@@ -442,16 +445,21 @@ filters:
     - "^SELECT \\* FROM system\\."
     - "SHOW TABLES"
     - "(?i)healthcheck"
+  redact_queries:              # Regex replacements applied before export
+    - pattern: "(?i)identified\\s+by\\s+'[^']*'"
+      replacement: "IDENTIFIED BY '[REDACTED]'"
 ```
 
 | Field | Default | Description |
 |-------|---------|-------------|
 | `whitelist_operations` | `[]` | If set, only export spans with matching operation names. Supports `*` wildcard (e.g., `DB::Interpreter*::execute()`) |
 | `blacklist_operations` | `[]` | Substring patterns matched against `operation_name`. Pushed down to ClickHouse as `NOT LIKE '%pattern%'` so matching spans are never fetched. Use this to drop high-volume internal pipeline spans (`MergeTreeIndex`, `VFSWrite`, etc.) without affecting query-level spans |
-| `whitelist_ips` | `[]` | If set, only export spans from these client IP addresses |
+| `whitelist_ips` | `[]` | If set, only export spans from these client IP addresses. Entries may be exact IPs (`10.0.1.50`) or CIDR ranges (`10.0.0.0/8`) |
 | `whitelist_users` | `[]` | If set, only export spans whose `query_log.user` is on the list. Pushed down to enrichment SQL as `AND user IN (...)` and re-checked per span. Strict — spans with an unresolvable user are dropped |
 | `blacklist_users` | `[]` | Never export spans whose `query_log.user` is on the list. Enforced at the Go layer for the span path (pushing it to enrichment SQL would strip the user and let blacklisted spans bypass the check); pushed down to SQL on the slow-query / backfill path |
 | `blacklist_queries` | `[]` | Regex patterns matched against SQL query text. Matching spans are excluded |
+| `redact_queries[].pattern` | — | Regex pattern matched against SQL query text after blacklist filtering and before export. Required when a redaction rule is present |
+| `redact_queries[].replacement` | `[REDACTED]` | Replacement text used for matches. Empty or omitted uses the default replacement |
 
 Note: `blacklist_operations` runs at the SQL level *before* data is fetched. `whitelist_operations` runs *after* fetch in Go. The blacklist always takes precedence because matching spans never reach the whitelist check.
 
@@ -512,6 +520,10 @@ metrics:
   enabled: false                          # Enable scrape + admin endpoints
   listen_address: ":9090"                 # Scrape listener — /metrics + legacy /health (default: :9090)
   admin_listen_address: "127.0.0.1:9091"  # Admin listener — POST /flush (default: 127.0.0.1:9091)
+  otlp:
+    enabled: false                        # Optional push path for self-metrics
+    inherit_otel_connection: true          # Reuse exporters.otel[0] when enabled
+    interval_seconds: 10
 ```
 
 | Field | Default | Description |
@@ -519,6 +531,14 @@ metrics:
 | `enabled` | `false` | Start both the scrape and admin HTTP listeners. Gates both — setting `false` also disables HTTP `POST /flush` (`SIGUSR1` still works) |
 | `listen_address` | `:9090` | Scrape listener (`/metrics`, legacy `/health`) — safe to expose to your scraper |
 | `admin_listen_address` | `127.0.0.1:9091` | Admin listener (`POST /flush`) — loopback by default; non-loopback binds emit a startup `WARN` |
+| `otlp.enabled` | `false` | Push click-dog self-metrics over OTLP. Additive to the `/metrics` scrape endpoint; it may run with `metrics.enabled: false` |
+| `otlp.inherit_otel_connection` | `true` when OTLP metrics are enabled and the key is omitted | Reuse `exporters.otel[0]` connection settings for the self-metrics exporter |
+| `otlp.collector_address` | — | Standalone OTLP metrics collector address, required when `inherit_otel_connection: false` |
+| `otlp.secure` | `false` | Enable TLS for a standalone OTLP metrics connection. Use inheritance when CA or mTLS settings are needed |
+| `otlp.host` | OS hostname | Host identity used on pushed self-metrics |
+| `otlp.service_name` | `exporters.otel[0].service_name`, then `click-dog-monitor` | Service name used on pushed self-metrics |
+| `otlp.interval_seconds` | `10` | Push interval. Must be greater than 0 when `otlp.enabled` is true |
+| `otlp.rename` | `{}` | Optional map from canonical self-metric keys to emitted OTLP metric names. Keys are validated at load time |
 
 > The `metrics:` and `health:` blocks are **independent**. `metrics.enabled` does
 > not control the Kubernetes-shaped `/healthz` / `/readyz` / `/status` probes —
@@ -536,13 +556,22 @@ deployment recipes (systemd / Docker / Kubernetes).
 ```yaml
 health:
   enabled: false              # Off by default; install.sh enables it on :8686
-  listen_address: ":8686"     # /healthz, /readyz, /status (default: :8686)
+  listen_address: ":8686"     # /healthz, /readyz, /status (default when enabled)
+  cluster:
+    enabled: false            # Leader-only /clusterz aggregate endpoint
+    self: ""                  # Routable host:port for this instance
+    peer_timeout_ms: 3000
+    peers: []
 ```
 
 | Field | Default | Description |
 |-------|---------|-------------|
 | `enabled` | `false` | Start the health listener. Independent of `metrics.enabled` |
-| `listen_address` | `:8686` | `/healthz` (liveness), `/readyz` (readiness — pings ClickHouse), `/status` (JSON report). If this normalizes to the same socket as `metrics.listen_address`, the handlers are mounted on the metrics listener so only one port is opened |
+| `listen_address` | `:8686` when `health.enabled: true` | `/healthz` (liveness), `/readyz` (readiness — pings ClickHouse), `/status` (JSON report). If this normalizes to the same socket as `metrics.listen_address`, the handlers are mounted on the metrics listener so only one port is opened |
+| `health.cluster.enabled` | `false` | Mount leader-only `/clusterz` aggregate health when `health.enabled` is also true |
+| `health.cluster.self` | — | Routable `host:port` for this instance's `/readyz`; required when cluster health is enabled |
+| `health.cluster.peer_timeout_ms` | `3000` | Per-peer `/readyz` fanout deadline |
+| `health.cluster.peers` | `[]` | Static list of peer `host:port` addresses to include in `/clusterz` |
 
 `/healthz` always returns `200`; `/readyz` returns `503` while ClickHouse is
 unreachable or the circuit breaker is open. `/status` is a reporting endpoint

@@ -34,7 +34,7 @@ theme:
     # navigation.instant (SPA-style link swapping) is intentionally OFF: the
     # homepage (overrides/home.html) is a standalone, non-Material template, so
     # instant-loading it from a docs page swaps broken markup into the Material
-    # shell and the page renders broken. Full page loads keep "Home" working.
+    # shell and the page renders broken. Full page loads keep the landing page working.
     - navigation.tracking
     - navigation.sections
     - navigation.expand
@@ -47,9 +47,9 @@ theme:
     repo: fontawesome/brands/github
 
 nav:
-  - Home: index.md
+  - Main Site: index.md
   - Overview: overview.md
-  - Get started:
+  - Setup:
     - Getting Started: getting-started.md
     - Install: install.md
     - Configuration: configuration.md
@@ -59,7 +59,7 @@ nav:
     - Honeycomb: integrations/honeycomb.md
     - Generic OTLP: integrations/generic-otlp.md
     - Splunk HEC: integrations/splunk-hec.md
-  - Query analysis:
+  - Analysis:
     - Query Analysis: query-analysis.md
     - Span Attributes: span-attributes.md
   - Operate:

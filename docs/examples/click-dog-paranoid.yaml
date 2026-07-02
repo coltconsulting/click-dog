@@ -56,4 +56,22 @@ monitor:
     enabled: true
     threshold_duration_ms: 60000
 
+filters:
+  # Both lists are ACTIVE here (unlike minimal's commented block): paranoid's
+  # max_spans_per_cycle budget would otherwise fill with engine-internal spans
+  # instead of the slow query spans it exists to catch, and aggressive dropping
+  # is the profile's whole point. Engine ops carry no clickhouse.query_id.
+  blacklist_queries:
+    - "^SYSTEM"
+    - "^INSERT INTO.*\\.inner\\."
+  blacklist_operations:
+    - "MergeTreeSource"
+    - "MergeTreeMarksLoader"
+    - "MergeTreeIndex"
+    - "MergeTreeSequentialSource"
+    - "VFSWrite"
+    - "WriteBufferFromS3"
+    - "ConcurrentJoin"
+    - "QueryPipelineEx"
+
 log_level: warn

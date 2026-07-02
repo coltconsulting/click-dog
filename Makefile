@@ -3,7 +3,7 @@
        preflight tag release version fmt fmt-check lint deps dev-setup vulncheck \
        integration-up integration-test integration-down integration \
        integration-degradation \
-       k8s-validate docs-social-card
+       k8s-validate docs-social-card update-public
 
 DOCKER_REPO ?= ghcr.io/coltconsulting/click-dog
 DOCKER_TAG  ?= latest
@@ -215,6 +215,30 @@ release: ## preflight + tag + push in one step
 	fi; \
 	$(MAKE) tag v=$(v) q=$(q) && \
 	git push origin "$$TAG"
+
+# ── Public mirror ───────────────────────────────────────────────────
+
+# Throw a GA release over the fence to the PUBLIC click-dog repo as a single
+# squashed commit + tag. The tree comes from `git archive <tag>`, so no internal
+# history, and .gitattributes export-ignore drops internal-only paths
+# (docs/development, openspec, this tooling). Wraps scripts/publish-to-public.sh;
+# see docs/development/specs/open-source-clean-slate-migration.md.
+#
+# DRY RUN by default — previews the squashed diff and stops. To actually commit
+# and push, pass PUSH=1. Overrides:
+#   TAG=vYY.MM.idx   release to publish (default: latest GA tag)
+#   PUBLIC_DIR=path  clean checkout of the public repo (default: ../click-dog-public)
+#
+#   make update-public                 # preview latest GA release
+#   make update-public TAG=v26.07.1    # preview a specific release
+#   make update-public PUSH=1          # actually publish
+update-public: ## Publish a GA release to the public repo (squash; DRY RUN unless PUSH=1)
+	@test -f scripts/publish-to-public.sh || { \
+		echo "update-public is internal-only — the publish tooling is export-ignored and not shipped to the public repo."; \
+		exit 2; }
+	@scripts/publish-to-public.sh $(TAG) \
+		$(if $(PUBLIC_DIR),--public-dir $(PUBLIC_DIR),) \
+		$(if $(filter 1 true yes,$(PUSH)),--push,)
 
 # ── Docker ──────────────────────────────────────────────────────────
 

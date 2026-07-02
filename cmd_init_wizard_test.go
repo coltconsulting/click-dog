@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -346,6 +347,96 @@ func TestWizard_ParityWithProfileTemplates(t *testing.T) {
 					profile, wizCfg, profCfg)
 			}
 		})
+	}
+}
+
+// blacklistOpsRe pulls each quoted operation name out of a rendered
+// blacklist_operations list, whether the lines are active (`  - "X"`) or
+// commented (`#     - "X"`). Anchored on the `- "` list-item prefix so the
+// blacklist_queries entries above it (which are regex strings, not op names)
+// don't get scooped up when the scanner is pointed at the whole filters block.
+var blacklistOpsRe = regexp.MustCompile(`(?m)^\s*#?\s*-\s*"([A-Za-z][A-Za-z0-9]*)"\s*$`)
+
+// extractBlacklistOps returns the operation names under the
+// blacklist_operations: key in a rendered YAML fragment, in order. It scopes to
+// that section so the production block's blacklist_queries: entries (regex
+// patterns like "^SYSTEM") are excluded.
+func extractBlacklistOps(block string) []string {
+	_, ops, _ := strings.Cut(block, "blacklist_operations:")
+	var out []string
+	for _, m := range blacklistOpsRe.FindAllStringSubmatch(ops, -1) {
+		out = append(out, m[1])
+	}
+	return out
+}
+
+// quotedListItemRe matches any quoted YAML list item; used for blacklist_queries
+// patterns, which (unlike op names) carry regex metacharacters like ^ . * \.
+var quotedListItemRe = regexp.MustCompile(`(?m)^\s*#?\s*-\s*"(.+)"\s*$`)
+
+// extractBlacklistQueries returns the quoted patterns under blacklist_queries:,
+// scoped to that section — it stops at blacklist_operations:, which follows it
+// in every block that carries both.
+func extractBlacklistQueries(block string) []string {
+	_, after, found := strings.Cut(block, "blacklist_queries:")
+	if !found {
+		return nil
+	}
+	if before, _, ok := strings.Cut(after, "blacklist_operations:"); ok {
+		after = before
+	}
+	var out []string
+	for _, m := range quotedListItemRe.FindAllStringSubmatch(after, -1) {
+		out = append(out, m[1])
+	}
+	return out
+}
+
+// TestBlacklistOpsConsistentAcrossProfiles closes the drift gap called out in
+// review: the engine-internal operation list is now hand-copied across five
+// places — active in production and paranoid, commented in minimal, plus the
+// matching docs/examples/ files for minimal and paranoid. The parity gate is
+// blind to comment text (and doesn't diff active lists op-by-op), so without
+// this a copy could silently diverge from production. Assert every source
+// carries the identical list, in the same order.
+func TestBlacklistOpsConsistentAcrossProfiles(t *testing.T) {
+	prod := extractBlacklistOps(monitorSectionForProfile("production"))
+	if len(prod) == 0 {
+		t.Fatal("no ops extracted from production block — the rendered format changed; update extractBlacklistOps")
+	}
+
+	readExample := func(profile string) string {
+		b, err := os.ReadFile(filepath.Join("docs", "examples", "click-dog-"+profile+".yaml"))
+		if err != nil {
+			t.Fatalf("read %s example: %v", profile, err)
+		}
+		return string(b)
+	}
+
+	for _, src := range []struct{ name, block string }{
+		{"minimal profile (commented)", monitorSectionForProfile("minimal")},
+		{"paranoid profile (active)", monitorSectionForProfile("paranoid")},
+		{"docs/examples/click-dog-minimal.yaml", readExample("minimal")},
+		{"docs/examples/click-dog-paranoid.yaml", readExample("paranoid")},
+	} {
+		if got := extractBlacklistOps(src.block); !reflect.DeepEqual(prod, got) {
+			t.Errorf("%s blacklist drifted from production:\n production=%v\n %s=%v", src.name, prod, src.name, got)
+		}
+	}
+
+	// blacklist_queries is active in production and paranoid only (not minimal);
+	// keep paranoid's copies identical to production's.
+	prodQ := extractBlacklistQueries(monitorSectionForProfile("production"))
+	if len(prodQ) == 0 {
+		t.Fatal("no queries extracted from production block — the rendered format changed; update extractBlacklistQueries")
+	}
+	for _, src := range []struct{ name, block string }{
+		{"paranoid profile (active)", monitorSectionForProfile("paranoid")},
+		{"docs/examples/click-dog-paranoid.yaml", readExample("paranoid")},
+	} {
+		if got := extractBlacklistQueries(src.block); !reflect.DeepEqual(prodQ, got) {
+			t.Errorf("%s blacklist_queries drifted from production:\n production=%v\n %s=%v", src.name, prodQ, src.name, got)
+		}
 	}
 }
 

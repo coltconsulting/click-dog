@@ -7,6 +7,9 @@
 
 # Click-Dog
 
+> [!NOTE]
+> **Public beta.** Click-Dog is newly open source — the public API and config may still change. It has been extensively tested and running in production for months.
+
 Operational query observability without making the source system harder to run.
 
 Click-Dog turns database telemetry into traces, dashboards, and query-analysis
@@ -112,6 +115,7 @@ click-dog -validate -config click-dog.yaml
 | **Backfill** | One-shot historical export over an RFC 3339 range: `-backfill-start YYYY-MM-DDT00:00:00Z -backfill-end YYYY-MM-DDT00:00:00Z` |
 | **Validate** | Check config and exit: `-validate` |
 | **Dry-run** | Read real data, discard exports, print a one-shot summary and exit: `--dry-run` |
+| **Analyze** | Local read-only query reports: `analyze queries` and `analyze trace` |
 
 `click-dog deploy <kubernetes\|docker\|status>` is a separate subcommand
 family that emits deployment manifests or reports installed state —
@@ -121,7 +125,7 @@ see [Operation Modes](docs/modes.md#click-dog-deploy-manifest-generators).
 
 - [Install Guide](docs/install.md) — single-node `install.sh`, Kubernetes / Docker template rendering, Ansible playbook for fleet rollouts
 - [Configuration Reference](docs/configuration.md) — narrative reference; [config.yaml.example](config.yaml.example) is the fully commented YAML companion
-- [Operation Modes](docs/modes.md) — scheduled, backfill, validate
+- [Operation Modes](docs/modes.md) — scheduled, backfill, validate, dry-run, analyze, and deploy
 - [Observability](docs/observability.md) — `/metrics`, `/healthz`, `/readyz`, `/status`, webhooks, per-sink export counters
 - [Operating Contract](docs/operating.md) — beta delivery guarantees & loss windows, compatibility matrix, performance tuning, cost estimation, cluster/sidecar topology, config-at-scale
 - [Span Attributes](docs/span-attributes.md) — live spans, backfill query attributes, normalized query family

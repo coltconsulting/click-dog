@@ -9,6 +9,8 @@
 #   - log_level             → defaults to "info"
 #   - monitor.circuit_breaker / backoff → minimal leaves resilience blocks out;
 #     switch to `production` before a real deployment to materialize them
+#   - filters.blacklist_operations → shipped commented-out below (inactive);
+#     uncomment it (or switch to `production`) to drop engine-internal spans
 # If you copy this file as a base for a real deployment, fill those in
 # explicitly so the operating envelope is visible at a glance.
 
@@ -27,5 +29,20 @@ monitor:
   enabled: true
   min_trace_duration_ms: 1000
   check_interval_s: 30
+
+# Recommended before real use: drop high-volume engine-internal spans at the
+# SQL level. They carry no clickhouse.query_id, so leaving them in drives the
+# Health dashboard's "spans with query_id" tile toward zero and inflates ingest
+# ~10-100x. The production profile enables this list; uncomment to use it here.
+# filters:
+#   blacklist_operations:
+#     - "MergeTreeSource"
+#     - "MergeTreeMarksLoader"
+#     - "MergeTreeIndex"
+#     - "MergeTreeSequentialSource"
+#     - "VFSWrite"
+#     - "WriteBufferFromS3"
+#     - "ConcurrentJoin"
+#     - "QueryPipelineEx"
 
 log_level: info

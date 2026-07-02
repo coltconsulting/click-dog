@@ -134,8 +134,21 @@ func TestRunInit_MinimalProfile(t *testing.T) {
 	}
 	// Structural assertions — checks that the generated file matches the
 	// "minimal" intent (omits the production-only knobs) without tying the
-	// test to specific comment wording in the rendered output.
+	// test to specific comment wording in the rendered output. Comment lines
+	// are stripped first: minimal intentionally ships a commented-out
+	// filters.blacklist_operations block (visible, inactive) so the bare
+	// profile isn't a silent query_id/ingest trap, so the check is that these
+	// knobs aren't ACTIVE — not that the words never appear.
 	body := string(data)
+	var active strings.Builder
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		active.WriteString(line)
+		active.WriteByte('\n')
+	}
+	activeBody := active.String()
 	for _, mustNotContain := range []string{
 		"circuit_breaker:",
 		"max_spans_per_cycle:",
@@ -144,8 +157,8 @@ func TestRunInit_MinimalProfile(t *testing.T) {
 		"metrics:",
 		"health:",
 	} {
-		if strings.Contains(body, mustNotContain) {
-			t.Errorf("minimal profile should not include %q, got:\n%s", mustNotContain, body)
+		if strings.Contains(activeBody, mustNotContain) {
+			t.Errorf("minimal profile should not include active %q, got:\n%s", mustNotContain, body)
 		}
 	}
 }
@@ -169,6 +182,12 @@ func TestRunInit_ParanoidProfile(t *testing.T) {
 	}
 	if !cfg.Monitor.Canary.Enabled {
 		t.Errorf("paranoid profile should enable canary by default")
+	}
+	// paranoid ships the engine-internal blacklist ACTIVE (not commented like
+	// minimal): with max_spans_per_cycle=100, unfiltered engine spans would
+	// crowd out the slow query spans the profile exists to catch.
+	if len(cfg.Filters.BlacklistOperations) == 0 {
+		t.Errorf("paranoid profile should ship blacklist_operations active, got none")
 	}
 }
 

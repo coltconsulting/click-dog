@@ -91,7 +91,7 @@ operations from the sections below.
 
 -   __[Operation Modes](modes.md)__
 
-    Scheduled vs. backfill — the two long-running modes.
+    Scheduled, backfill, validation, dry-run, analysis, and manifest generation.
 
 -   __[Filtering](filtering.md)__
 

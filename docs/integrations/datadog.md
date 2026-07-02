@@ -336,8 +336,11 @@ Click-dog can push its own low-cardinality exporter health metrics over OTLP:
 cycle counts and outcomes, export totals, errors, circuit-breaker state,
 backoff interval, last-success timestamp, and last-cycle duration / spans.
 Enable `metrics.otlp.enabled: true`; by default click-dog reuses
-`exporters.otel[0]` and sends self-metrics to the same collector as spans. Set
-`metrics.otlp.host` in containers if you want a stable `host.name` dashboard
+`exporters.otel[0]` and sends self-metrics to the same collector as spans. The
+`production` init profile (the default for `click-dog init`) now writes this
+block for you, so a guided install already feeds the Health dashboard — if you
+generated your config that way it's on already; delete the block to opt out.
+Set `metrics.otlp.host` in containers if you want a stable `host.name` dashboard
 variable instead of the pod/container hostname.
 
 Standalone `metrics.otlp` connections currently expose plaintext/TLS settings

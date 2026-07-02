@@ -1,7 +1,16 @@
 version: 2
 
+# The repo is coltconsulting/click-dog-internal, so GoReleaser would otherwise
+# derive the project name — and thus the default binary and artifact names —
+# from the git remote as "click-dog-internal". Pin it: shipped artifacts and the
+# binary are "click-dog", which is also what the Dockerfile COPYs
+# (${TARGETPLATFORM}/click-dog). Without this pin the docker build fails with
+# "/linux/<arch>/click-dog: not found" (the v26.07.1 release failure).
+project_name: click-dog
+
 builds:
   - id: click-dog
+    binary: click-dog
     env:
       - CGO_ENABLED=0
     goos:

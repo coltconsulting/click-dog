@@ -3,6 +3,14 @@
 <!-- Click-Dog: brand fonts, favicon, and social-card meta for all DOCS pages.
      The marketing homepage uses home.html instead and is unaffected. -->
 
+<!-- Public-beta status bar, shown at the top of every DOCS page. "Beta" here
+     means newly open-sourced with a public API that may still shift — not
+     unproven code; the assurance clause is deliberate. Persistent (no dismiss)
+     so the maturity status stays visible while the project is pre-1.0. -->
+{% block announce %}
+  <strong>Public beta.</strong> Newly open source — the public API and config may still change. Click-Dog has been extensively tested and running in production for months.
+{% endblock %}
+
 {% block extrahead %}
   {{ super() }}
 

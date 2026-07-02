@@ -218,6 +218,13 @@ log_level: info                     # debug, info, warn, error
 #   whitelist_ips: []
 #     # - "10.0.0.0/8"
 #     # - "192.168.1.100"
+#
+#   # Rewrite sensitive SQL fragments before export. Runs after blacklist
+#   # filtering; if a query is blacklisted, it is dropped rather than redacted.
+#   redact_queries:
+#     - pattern: |
+#         (?i)identified\s+by\s+'[^']*'
+#       replacement: "IDENTIFIED BY '[REDACTED]'"
 
 # ── High Availability ────────────────────────────────────────────────
 #
@@ -265,6 +272,17 @@ log_level: info                     # debug, info, warn, error
 #   enabled: false                       # Enable /metrics and legacy /health
 #   listen_address: ":9090"              # Scrape listener (default: :9090)
 #   admin_listen_address: "127.0.0.1:9091"  # Admin listener (POST /flush)
+#
+#   # Optional OTLP push path for click-dog self-metrics. Additive to /metrics:
+#   # it can run with metrics.enabled false, or alongside the scrape listener.
+#   otlp:
+#     enabled: false
+#     inherit_otel_connection: true       # Reuse exporters.otel[0] when enabled
+#     interval_seconds: 10
+#     # collector_address: metrics-collector:4317  # Required if inherit=false
+#     # secure: true
+#     # host: clickhouse-prod-01
+#     # service_name: click-dog-monitor
 
 # ── Kubernetes-shaped Health Endpoints ─────────────────────────────
 #
@@ -280,6 +298,16 @@ log_level: info                     # debug, info, warn, error
 # health:
 #   enabled: false
 #   listen_address: ":8686"              # default
+#
+#   # Optional HA leader aggregate endpoint. The leader serves /clusterz by
+#   # fanning out /readyz to peers; followers return {"status":"not_leader"}.
+#   cluster:
+#     enabled: false
+#     self: "node-0:8686"                # Routable host:port for this instance
+#     peer_timeout_ms: 3000
+#     peers:
+#       - "node-0:8686"
+#       - "node-1:8686"
 
 # ── Webhook Notifications ──────────────────────────────────────────
 #

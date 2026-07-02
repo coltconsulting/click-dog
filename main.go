@@ -80,6 +80,31 @@ func otlpMetricsSinkNames(cfg *config.Config, dryRun bool) map[string]string {
 	return names
 }
 
+// selfMetricsStatusLine renders a one-line startup summary of the OTLP
+// self-metrics push state. The disabled state used to be entirely silent, and
+// the enabled state logged an init line without the resolved endpoint/source —
+// so an operator staring at a blank Datadog Health dashboard had no single
+// line telling them whether, and where, the metrics it reads were being
+// pushed. This is now the sole enabled-state startup line (the export package's
+// init log was dropped to avoid a redundant back-to-back Info); it echoes the
+// resolved endpoint/interval/host so a wrong host.name tag (the dashboard's
+// per-host grouping) is caught at a glance too.
+func selfMetricsStatusLine(cfg *config.Config) string {
+	if !cfg.Metrics.OTLP.Enabled {
+		return "Self-metrics: OTLP push disabled; the Datadog Health dashboard needs metrics.otlp.enabled=true"
+	}
+	endpoint := cfg.Metrics.OTLP.CollectorAddress
+	source := "standalone"
+	if cfg.Metrics.OTLP.InheritOTELConnection {
+		source = "inherit otel[0]"
+		if len(cfg.Exporters.OTEL) > 0 {
+			endpoint = cfg.Exporters.OTEL[0].CollectorAddress
+		}
+	}
+	return fmt.Sprintf("Self-metrics: OTLP push → %s (%s), every %ds (service=%s, host=%s)",
+		endpoint, source, cfg.Metrics.OTLP.IntervalSeconds, cfg.Metrics.OTLP.ServiceName, cfg.Metrics.OTLP.Host)
+}
+
 // sameListenAddress reports whether two ListenAndServe addresses would bind
 // to the same TCP socket. Literal string equality misses the common case
 // where one address is written as ":9090" and the other as "0.0.0.0:9090"
@@ -344,6 +369,24 @@ func main() {
 		if cfg.Metrics.Enabled {
 			fmt.Printf("  Metrics:     %s (admin: %s)\n", cfg.Metrics.ListenAddress, cfg.Metrics.AdminListenAddress)
 		}
+		// Always print the self-metrics state, on or off. Its silence in this
+		// summary is exactly why a blank Datadog Health dashboard is hard to
+		// diagnose: the dashboard reads OTLP-pushed click_dog.* metrics, and
+		// nothing here told the operator whether that push was configured.
+		if cfg.Metrics.OTLP.Enabled {
+			endpoint := cfg.Metrics.OTLP.CollectorAddress
+			source := "standalone"
+			if cfg.Metrics.OTLP.InheritOTELConnection {
+				source = "inherit otel[0]"
+				if len(cfg.Exporters.OTEL) > 0 {
+					endpoint = cfg.Exporters.OTEL[0].CollectorAddress
+				}
+			}
+			fmt.Printf("  Self-metrics: OTLP → %s (%s), %ds, host=%s\n",
+				endpoint, source, cfg.Metrics.OTLP.IntervalSeconds, cfg.Metrics.OTLP.Host)
+		} else {
+			fmt.Printf("  Self-metrics: OTLP push off\n")
+		}
 		if cfg.Health.Enabled {
 			fmt.Printf("  Health:      %s\n", cfg.Health.ListenAddress)
 		}
@@ -596,6 +639,10 @@ func main() {
 			}
 		}()
 	}
+	// One startup line for both states: the enabled branch reaches here only
+	// after a successful init (it Fatals out on failure), the disabled branch
+	// falls straight through. selfMetricsStatusLine picks the message.
+	clicklog.Info("%s", selfMetricsStatusLine(cfg))
 
 	f, err := filter.NewQueryFilter(cfg.Filters)
 	if err != nil {

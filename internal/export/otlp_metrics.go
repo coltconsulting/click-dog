@@ -80,7 +80,10 @@ func NewOTLPMetricsExporter(ctx context.Context, opts OTLPMetricsOptions) (*OTLP
 		return nil, fmt.Errorf("register OTLP self-metrics observers: %w", err)
 	}
 
-	clicklog.Info("OTLP self-metrics exporter initialized: interval=%s service.name=%s host.name=%s", opts.Interval, opts.ServiceName, opts.Host)
+	// The caller (main) logs the operator-facing startup line via
+	// selfMetricsStatusLine — a superset of interval/service/host that also
+	// carries the resolved endpoint and connection source — so this no longer
+	// logs on success to avoid a redundant back-to-back Info at startup.
 	return &OTLPMetricsExporter{provider: provider}, nil
 }
 

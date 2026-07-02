@@ -46,7 +46,7 @@ monitor:
 
 **Closed** (normal operation): All requests pass through. Consecutive failures are tracked.
 
-**Open** (blocking): All requests are blocked. After `reset_timeout_s` seconds, transitions to half-open.
+**Open** (blocking): Full polling cycles are blocked. If canary mode is enabled, click-dog may still run the lightweight canary query and export its synthetic canary span. After `reset_timeout_s` seconds, transitions to half-open.
 
 **Half-Open** (testing): Allows requests through. If the first `success_threshold` requests succeed, the circuit closes. Any failure immediately re-opens the circuit.
 
@@ -117,7 +117,7 @@ Enable adaptive backoff when:
 
 Circuit breaker and adaptive backoff complement each other:
 
-- **Circuit breaker** provides fast failure detection and hard stops
+- **Circuit breaker** provides fast failure detection and hard stops for full polling cycles
 - **Adaptive backoff** provides gradual recovery and load reduction
 
 ```yaml
@@ -137,7 +137,7 @@ monitor:
 
 1. Failure 1 — backoff increases interval to 30s
 2. Failure 2 — backoff increases interval to 60s
-3. Failure 3 — circuit breaker opens, all requests blocked for 60s. Backoff continues to 120s
+3. Failure 3 — circuit breaker opens, full polling cycles are blocked for 60s. Backoff continues to 120s; canary mode, if enabled, may still run lightweight probes
 4. After 60s — circuit transitions to half-open, allows one request
 5. If success — circuit closes, backoff resets to 15s base interval
 6. If failure — circuit re-opens for another 60s
@@ -163,7 +163,7 @@ clickhouse:
 
 ## Rate Limiting
 
-Additional rate-limiting settings protect both ClickHouse and your OTEL collector:
+Additional rate-limiting settings protect both ClickHouse and your configured exporter sinks:
 
 ```yaml
 monitor:
@@ -173,7 +173,7 @@ monitor:
   export_timeout_s: 30         # Fail stuck exporter calls into retry/backoff (0 disables)
 ```
 
-If an export call times out, Click-Dog treats that batch as failed and retries it in full on the next cycle through the lookback overlap. Any spans the collector accepted before the timeout may appear again; downstream collectors should deduplicate by trace/span identity.
+If an export call times out, Click-Dog treats that batch as failed and retries it in full on the next cycle through the lookback overlap. Any spans an exporter accepted before the timeout may appear again. OTEL collectors and trace backends can deduplicate by trace/span identity; Splunk HEC receives stable IDs for downstream dedup/search.
 
 See [Filtering](filtering.md) for duration-based and content-based filtering options.
 

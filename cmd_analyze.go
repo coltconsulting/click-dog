@@ -93,7 +93,8 @@ Usage:
 Builds a bounded, read-only analysis report from system.query_log and
 system.opentelemetry_span_log: query-family resource outliers, log_comment
 attribution gaps, user/client/host skew, and coverage prerequisites. No
-exporter credentials are read and nothing is written to ClickHouse.
+exporter connections are opened and nothing is written to ClickHouse. Config
+loading still expands env vars and reads configured *_file secret fields.
 
 JSON reports are operational artifacts: normalized SQL and dimension values
 can reveal schema and ownership shape, so treat reports like logs/traces.
