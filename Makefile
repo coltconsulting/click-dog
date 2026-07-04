@@ -198,11 +198,13 @@ tag: ## Compute + create the next release tag (q=test|alpha|beta|ga)
 	echo "Tag $$TAG created. To publish:" && \
 	echo "  git push origin $$TAG" && \
 	echo "" && \
-	echo "This will trigger release.yml which:" && \
-	echo "  1. Runs the full test/lint/build/govulncheck/integration gate via ci.yml" && \
-	echo "  2. Runs GoReleaser (binaries + signed checksums + GitHub release)" && \
-	echo "  3. Builds and pushes Docker images to ghcr.io/coltconsulting/click-dog" && \
-	echo "     (prerelease tags do NOT update :latest)"
+	echo "On INTERNAL this runs release.yml as a gate only:" && \
+	echo "  - Full test/lint/build/govulncheck/integration gate via ci.yml" && \
+	echo "" && \
+	echo "The artifact build (GoReleaser binaries + signed checksums + GitHub" && \
+	echo "release + docker on ghcr.io/coltconsulting/click-dog) runs on the PUBLIC" && \
+	echo "repo when you mirror the tag: 'make update-public PUSH=1'." && \
+	echo "  (prerelease tags do NOT update :latest)"
 
 # Shortcut: preflight + tag + push in one command.
 # `&&` between the sub-make and push ensures a failed tag aborts the push.

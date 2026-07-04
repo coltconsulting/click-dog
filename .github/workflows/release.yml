@@ -31,6 +31,14 @@ jobs:
 
   release:
     needs: ci
+    # Build/sign/publish only in the PUBLIC repo. release.yml ships to the
+    # public tree, so a GA tag triggers this workflow in BOTH repos; without
+    # this guard GoReleaser runs twice (two Releases, two ghcr pushes) and only
+    # the public one is ever consumed. Internal is gate-only (the `ci` job
+    # above); public is the sole artifact builder, and its cosign identity is
+    # the one deploy/install.sh and internal/updater/github.go pin. See
+    # docs/development/specs/release-build-dedup.md.
+    if: github.repository == 'coltconsulting/click-dog'
     runs-on: ubuntu-latest
     permissions:
       contents: write

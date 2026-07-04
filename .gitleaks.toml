@@ -1,0 +1,19 @@
+# gitleaks config for click-dog. Extends the default ruleset and suppresses one
+# known false-positive class so the secret-scan gate (scripts/publish-to-public.sh
+# and any CI gitleaks run) stays trustworthy instead of being routinely skipped.
+[extend]
+useDefault = true
+
+# The query analyzers in internal/analysis/ define metric thresholds with
+# snake_case struct-key literals, e.g. key: "p95_duration_ms"
+# (internal/analysis/resource_hog.go:67), which trip the built-in generic-api-key
+# rule on the entropy of the value. Scope the exemption to that package only —
+# it holds pure query-stat analysis logic and never credentials — rather than
+# allowlisting the snake_case value shape repo-wide. gitleaks `paths` exempts at
+# the file level, so a real secret ANYWHERE ELSE (and a snake_case value outside
+# this package) is still caught.
+[[allowlists]]
+description = "internal/analysis metric-key literals (analyzer logic, no credentials)"
+paths = [
+  '''internal/analysis/.*\.go$''',
+]

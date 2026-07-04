@@ -70,6 +70,15 @@ dockers_v2:
     platforms:
       - linux/amd64
       - linux/arm64
+    # Pin the OCI source to the PUBLIC repo. Otherwise GoReleaser derives it
+    # from the build's git remote — which was click-dog-internal, so the public
+    # image advertised the private repo AND GHCR auto-linked the package to
+    # click-dog-internal (inheriting its access, blocking pushes from the public
+    # release). See docs/development/specs/release-build-dedup.md.
+    labels:
+      org.opencontainers.image.source: "https://github.com/coltconsulting/click-dog"
+      org.opencontainers.image.url: "https://click-dog.com"
+      org.opencontainers.image.documentation: "https://click-dog.com"
 
   # `latest` image — same content, separate block so we can gate the
   # whole entry with a templated disable. Prerelease tags
@@ -86,6 +95,10 @@ dockers_v2:
     platforms:
       - linux/amd64
       - linux/arm64
+    labels:
+      org.opencontainers.image.source: "https://github.com/coltconsulting/click-dog"
+      org.opencontainers.image.url: "https://click-dog.com"
+      org.opencontainers.image.documentation: "https://click-dog.com"
     disable: "{{ if .Prerelease }}true{{ else }}false{{ end }}"
 
 # Cosign keyless signing of pushed images. Signs by digest.
