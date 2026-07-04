@@ -1,0 +1,1062 @@
+
+<!DOCTYPE html>
+<html lang="en" data-palette="brand" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="theme-color" content="#0a0b0d" />
+<link rel="canonical" href="https://click-dog.com/" />
+<title>Click-Dog — Source-safe query observability</title>
+<meta name="description" content="Source-safe query observability for ClickHouse today, with more telemetry sources planned" />
+
+<!-- Fonts: preconnect + load early (replaces a render-blocking @import that was buried in the stylesheet) -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+
+<!-- Favicon (absolute: this standalone landing bypasses Material's shared head) -->
+<link rel="icon" href="https://click-dog.com/assets/favicon.png" />
+<link rel="icon" sizes="32x32" href="https://click-dog.com/assets/favicon-32.png" />
+<link rel="apple-touch-icon" href="https://click-dog.com/assets/favicon.png" />
+
+<!-- Open Graph / Twitter social card -->
+<meta property="og:type" content="website" />
+<meta property="og:title" content="Click-Dog — Source-safe query observability" />
+<meta property="og:description" content="Source-safe query observability for ClickHouse today, with more telemetry sources planned" />
+<meta property="og:url" content="https://click-dog.com/" />
+<meta property="og:image" content="https://click-dog.com/assets/social-card.png" />
+<meta property="og:image:alt" content="Click-Dog — source-safe query observability for ClickHouse" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Click-Dog — Source-safe query observability" />
+<meta name="twitter:description" content="Source-safe query observability for ClickHouse today, with more telemetry sources planned" />
+<meta name="twitter:image" content="https://click-dog.com/assets/social-card.png" />
+<meta name="twitter:image:alt" content="Click-Dog — source-safe query observability for ClickHouse" />
+<style>
+/* ============================================================
+   Click-Dog — home3 (merge candidate)
+   Base: overrides/home.html (dark-first developer-tool aesthetic).
+   Adds: numbered safety checklists, "what ships" grid, deploy cards.
+   ============================================================ */
+
+:root {
+  --bg:        #0a0b0d;
+  --bg-1:      #101217;
+  --bg-2:      #161a21;
+  --bg-3:      #1c212a;
+  --line:      rgba(255,255,255,.07);
+  --line-2:    rgba(255,255,255,.12);
+  --text:      #e9ebee;
+  --text-dim:  #9aa1ad;
+  --text-faint:#6a717d;
+
+  --accent:    #f2960c;
+  --accent-2:  #7c5cff;
+  --accent-ink:#241400;
+  --accent-soft: rgba(242,150,12,.14);
+  --accent-line: rgba(242,150,12,.36);
+
+  --ch: #ffc400;
+  --dd: #7c5cff;
+  --hc: #2e77e5;
+  --gf: #f46800;
+
+  --font-display: 'Space Grotesk', system-ui, sans-serif;
+  --font-body:    'IBM Plex Sans', system-ui, sans-serif;
+  --font-mono:    'JetBrains Mono', ui-monospace, monospace;
+
+  --radius:   14px;
+  --radius-sm: 9px;
+  --maxw: 1180px;
+  --pad: clamp(20px, 5vw, 64px);
+  --ok: #2fae8f;
+  --warn: #f0a020;
+  --crit: #ef5a5a;
+
+  /* badge palette for the "what ships" numbered grid */
+  --b-blue:   #5b8cff;
+  --b-purple: #7c5cff;
+  --b-gold:   #f2960c;
+  --b-teal:   #2dd4bf;
+  --b-green:  #2fae8f;
+  --b-red:    #ef5a5a;
+}
+
+[data-palette="brand"]  { --accent:#f2960c; --accent-2:#7c5cff; --accent-ink:#241400; --accent-soft:rgba(242,150,12,.14); --accent-line:rgba(242,150,12,.36); }
+
+/* ---- light theme ---- */
+[data-theme="light"] {
+  --bg:#f7f5f1; --bg-1:#ffffff; --bg-2:#f3f1ec; --bg-3:#ebe8e1;
+  --line:rgba(30,22,10,.10); --line-2:rgba(30,22,10,.17);
+  --text:#1c1813; --text-dim:#5a544a; --text-faint:#6f685c;
+}
+[data-theme="light"] .win { box-shadow: 0 28px 56px -34px rgba(40,30,10,.30); }
+[data-theme="light"] .code .num { color:#7c3aed; }
+[data-theme="light"] .code .str { color:#c2700a; }
+[data-theme="light"] .hero-grid { opacity:.6; }
+[data-theme="light"] .cta { box-shadow: 0 30px 70px -44px rgba(40,30,10,.30); }
+[data-theme="light"] ::selection { background: var(--accent); color:#fff; }
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+a { color: inherit; text-decoration: none; }
+h1,h2,h3,h4 { font-family: var(--font-display); font-weight: 600; letter-spacing: -.02em; line-height: 1.05; margin: 0; }
+p { margin: 0; }
+::selection { background: var(--accent); color: var(--accent-ink); }
+
+.wrap { max-width: var(--maxw); margin: 0 auto; padding-left: var(--pad); padding-right: var(--pad); }
+.mono { font-family: var(--font-mono); }
+.accent { color: var(--accent); }
+.eyebrow {
+  font-family: var(--font-mono); font-size: 12.5px; font-weight: 500;
+  letter-spacing: .14em; text-transform: uppercase; color: var(--accent);
+  display: inline-flex; align-items: center; gap: 9px;
+}
+.eyebrow::before { content:""; width: 22px; height: 1px; background: var(--accent-line); }
+
+/* ============================================================ A11Y */
+.skip-link { position: absolute; left: 8px; top: -48px; z-index: 100; background: var(--accent); color: var(--accent-ink); padding: 9px 16px; border-radius: 0 0 9px 9px; font-weight: 600; font-size: 14px; transition: top .15s; }
+.skip-link:focus { top: 0; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+
+/* ============================================================ NAV */
+.nav {
+  position: sticky; top: 0; z-index: 50;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  backdrop-filter: blur(14px) saturate(1.2);
+  border-bottom: 1px solid var(--line);
+}
+.nav-in { display: flex; align-items: center; gap: 28px; height: 72px; }
+.brand { display: flex; align-items: center; gap: 12px; font-family: var(--font-display); font-weight: 700; font-size: 21px; letter-spacing: -.025em; white-space: nowrap; }
+.brand .dogmark {
+  width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; flex: none;
+  color: #fff; border-radius: 9px; overflow: hidden;
+  background: linear-gradient(135deg, #facb73 0%, #f5a51e 54%, #ef8e00 100%);
+  box-shadow: 0 8px 24px -14px rgba(242,150,12,.9);
+}
+.brand .nav-mark { width: 34px; height: 34px; border-radius: 10px; }
+.brand .dogmark svg { width: 23px; height: auto; }
+.brand .nav-mark svg { width: 24px; }
+.brand svg { display: block; }
+.nav-links { display: flex; gap: 26px; margin-left: 14px; }
+.nav-links a { font-size: 14.5px; color: var(--text-dim); transition: color .15s; white-space: nowrap; }
+.nav-links a:hover { color: var(--text); }
+.nav-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+.nav-right .nav-link { font-size: 14.5px; color: var(--text-dim); transition: color .15s; white-space: nowrap; }
+.nav-right .nav-link:hover { color: var(--text); }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 9px; cursor: pointer;
+  font-family: var(--font-body); font-size: 14.5px; font-weight: 500;
+  padding: 9px 16px; border-radius: 10px; border: 1px solid transparent;
+  transition: transform .12s, background .15s, border-color .15s, box-shadow .15s;
+  white-space: nowrap;
+}
+.btn:active { transform: translateY(1px); }
+.btn-primary { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.btn-primary:hover { box-shadow: 0 8px 30px -8px var(--accent-line); }
+.btn-ghost { background: transparent; color: var(--text); border-color: var(--line-2); }
+.btn-ghost:hover { background: var(--bg-2); border-color: var(--text-faint); }
+.btn-sm { padding: 7px 13px; font-size: 13.5px; }
+
+.gh-star {
+  display: inline-flex; align-items: center; gap: 0; border: 1px solid var(--line-2);
+  border-radius: 10px; overflow: hidden; font-size: 13.5px;
+}
+.gh-star .gh-l { display: flex; align-items: center; gap: 7px; padding: 7px 12px; color: var(--text); }
+.gh-star .gh-l:hover { background: var(--bg-2); }
+.gh-star .gh-n { padding: 7px 12px; border-left: 1px solid var(--line-2); color: var(--text-dim); font-family: var(--font-mono); background: var(--bg-1); }
+.gh-star .gh-n[hidden] { display: none; }
+
+.os-pill { display: inline-flex; align-items: center; gap: 9px; font-family: var(--font-mono); font-size: 12.5px; color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-line); padding: 6px 13px 6px 11px; border-radius: 999px; }
+.os-pill b { color: var(--text); font-weight: 600; }
+.os-pill .lic { color: var(--text-dim); }
+.os-pill .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 0 var(--accent-line); animation: pulse 2.4s ease-out infinite; }
+@keyframes pulse { 0%{box-shadow:0 0 0 0 var(--accent-line);} 70%{box-shadow:0 0 0 7px transparent;} 100%{box-shadow:0 0 0 0 transparent;} }
+@media (prefers-reduced-motion: reduce){ .os-pill .pulse{ animation:none; } }
+
+.cta .dogmark, .arch-center .dogmark { color: var(--accent); }
+
+/* ============================================================ HERO */
+.hero { position: relative; padding-top: clamp(38px, 6vh, 70px); padding-bottom: clamp(34px, 5vh, 62px); overflow: hidden; }
+.hero-grid {
+  position: absolute; inset: 0; pointer-events: none; opacity: .5;
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 46px 46px;
+  mask-image: radial-gradient(120% 80% at 75% 0%, #000 30%, transparent 78%);
+}
+.hero-glow {
+  position: absolute; pointer-events: none; z-index: 0;
+  width: 720px; height: 720px; right: -160px; top: -260px; border-radius: 50%;
+  background: radial-gradient(circle, var(--accent-soft), transparent 62%);
+  filter: blur(8px);
+}
+.hero-in {
+  position: relative; z-index: 2;
+  max-width: min(1560px, 100vw);
+  display: grid; grid-template-columns: minmax(0, 1fr);
+  gap: clamp(26px, 4vw, 52px);
+  align-items: start;
+}
+.hero-top {
+  display: grid;
+  grid-template-columns: minmax(0, .9fr) minmax(460px, .72fr);
+  gap: clamp(34px, 6vw, 86px);
+  align-items: center;
+}
+.hero-top > * { min-width: 0; }
+.hero-copy { position: relative; z-index: 3; max-width: 940px; }
+.hero h1 { font-size: clamp(36px, 4.6vw, 58px); font-weight: 600; letter-spacing: -.035em; }
+.hero h1 .grad { background: linear-gradient(102deg, var(--accent), var(--accent-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.hero-sub { margin-top: 20px; font-size: clamp(15.5px, 1.25vw, 18px); color: var(--text-dim); max-width: 46em; line-height: 1.55; }
+.hero-cta { margin-top: 30px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.hero-meta { margin-top: 26px; display: flex; flex-wrap: wrap; gap: 18px 26px; }
+.hmeta { display: flex; align-items: center; gap: 9px; font-size: 13.5px; color: var(--text-dim); }
+.hmeta svg { color: var(--accent); flex: none; }
+.hero-chart {
+  position: relative; z-index: 2; justify-self: end;
+  width: min(100%, 610px);
+  margin: 0;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--bg-1) 88%, transparent);
+  border: 1px solid var(--line-2);
+  border-radius: 20px;
+  box-shadow: 0 34px 70px -44px rgba(0,0,0,.55);
+}
+[data-theme="light"] .hero-chart { background: rgba(255,255,255,.72); box-shadow: 0 28px 60px -42px rgba(40,30,10,.36); }
+.trace-head {
+  display: flex; align-items: center; gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-mono);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.trace-dots { display: flex; gap: 7px; flex: none; }
+.trace-dots i { width: 10px; height: 10px; border-radius: 50%; display: block; }
+.trace-dots i:nth-child(1){ background:#ef5a5a; }
+.trace-dots i:nth-child(2){ background:#f0a020; }
+.trace-dots i:nth-child(3){ background:#4fc26b; }
+.trace-title { overflow: hidden; text-overflow: ellipsis; }
+.trace-live {
+  margin-left: auto; flex: none;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.trace-body { padding: 18px; }
+.trace-query {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 18px;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  margin-bottom: 16px;
+}
+.trace-query b { color: var(--text); }
+.trace-total { color: #c97073; font-weight: 700; white-space: nowrap; }
+.trace-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 160px) minmax(0, 1fr) 54px;
+  gap: 12px;
+  align-items: center;
+  min-height: 35px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.trace-lane {
+  position: relative;
+  height: 24px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--text-faint) 14%, transparent);
+  border-radius: 7px;
+}
+.trace-span {
+  position: absolute; top: 0; bottom: 0;
+  left: var(--x); width: var(--w);
+  min-width: 42px;
+  display: flex; align-items: center;
+  padding: 0 10px;
+  border-radius: inherit;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,.55);
+  font-size: 11px;
+  background: linear-gradient(90deg, var(--c), color-mix(in srgb, var(--c) 72%, #fff));
+  box-shadow: 0 8px 18px -12px var(--c);
+}
+.trace-ms { text-align: right; color: var(--text-faint); font-size: 12px; }
+.hero-visual {
+  position: relative; min-width: 0;
+  justify-self: center; z-index: 1;
+  width: 100%;
+}
+.hero-visual a { display: block; }
+.hero-art {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  border-radius: 12px;
+  filter: drop-shadow(0 34px 70px rgba(0,0,0,.42));
+}
+[data-theme="light"] .hero-art { filter: drop-shadow(0 26px 48px rgba(40,30,10,.18)); }
+
+/* install command */
+.cmd {
+  display: flex; align-items: center; gap: 12px; width: 100%; max-width: 460px;
+  background: var(--bg-1); border: 1px solid var(--line-2); border-radius: 12px;
+  padding: 13px 14px 13px 16px; font-family: var(--font-mono); font-size: 14px;
+}
+.cmd .pr { color: var(--accent); user-select: none; }
+.cmd code { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.cmd .copy { margin-left: auto; background: var(--bg-3); border: 1px solid var(--line-2); color: var(--text-dim); cursor: pointer; border-radius: 8px; padding: 6px 8px; display: inline-flex; transition: .15s; flex: none; }
+.cmd .copy:hover { color: var(--text); border-color: var(--text-faint); }
+.install-verify {
+  display: flex; align-items: center; gap: 8px;
+  max-width: 520px; margin-top: 10px;
+  color: var(--text-dim);
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.45;
+}
+.install-verify::before {
+  content: ""; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 16%, transparent);
+  flex: none;
+}
+.install-verify b { color: var(--text); font-weight: 600; }
+
+/* ---------- window chrome (shared) ---------- */
+.win { background: var(--bg-1); border: 1px solid var(--line-2); border-radius: var(--radius); overflow: hidden; box-shadow: 0 40px 80px -40px rgba(0,0,0,.65); }
+.win-bar { display: flex; align-items: center; gap: 8px; padding: 11px 14px; border-bottom: 1px solid var(--line); background: var(--bg-2); white-space: nowrap; }
+.dot { width: 11px; height: 11px; border-radius: 50%; }
+.dot.r{background:#ff5f57} .dot.y{background:#febc2e} .dot.g{background:#28c840}
+.win-title { margin-left: 8px; font-family: var(--font-mono); font-size: 12.5px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; }
+.win-tag { margin-left: auto; flex: none; font-family: var(--font-mono); font-size: 11px; color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-line); padding: 3px 8px; border-radius: 999px; }
+
+/* ============================================================ SECTION */
+section { position: relative; }
+.section-pad { padding: clamp(64px, 9vh, 120px) 0; }
+.section-head { max-width: 640px; margin-bottom: 48px; }
+.section-head h2 { font-size: clamp(28px, 3.4vw, 44px); margin-top: 16px; }
+.section-head p { margin-top: 16px; color: var(--text-dim); font-size: 17px; }
+.center { text-align: center; margin-left: auto; margin-right: auto; }
+/* Operating themes uses the standard 1180px body column (the live template
+   widened #product to 1560px to match its wide hero; home3's body is a single
+   1180px column, so that override is dropped to keep every section aligned). */
+#product .section-head { max-width: 760px; }
+
+/* logos strip */
+.logos { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 26px 0; }
+.logos .wrap { max-width: min(1560px, 100vw); }
+.logos-in { display: flex; align-items: center; gap: clamp(18px,3vw,42px); flex-wrap: wrap; justify-content: flex-start; }
+.logos .lbl { font-family: var(--font-mono); font-size: 11.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--text-faint); }
+.logo-chip { display: flex; align-items: center; gap: 9px; color: var(--text-dim); font-size: 15px; font-weight: 500; opacity: .82; transition: opacity .15s, color .15s; }
+.logo-chip:hover { opacity: 1; color: var(--text); }
+.logo-chip svg { flex: none; }
+
+/* theme cards */
+.themes { display: grid; grid-template-columns: repeat(3,1fr); gap: 18px; }
+.theme-card { background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--radius); padding: 26px 24px 28px; transition: border-color .2s, transform .2s; }
+.theme-card:hover { border-color: var(--accent-line); transform: translateY(-3px); }
+.theme-ic { width: 42px; height: 42px; border-radius: 11px; background: var(--accent-soft); border: 1px solid var(--accent-line); display: grid; place-items: center; color: var(--accent); margin-bottom: 18px; }
+.theme-card h3 { font-size: 20px; margin-bottom: 10px; }
+.theme-card p { color: var(--text-dim); font-size: 14.5px; line-height: 1.6; }
+.theme-card .k { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 7px; }
+.theme-card .k span { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); border: 1px solid var(--line-2); border-radius: 6px; padding: 3px 8px; white-space: nowrap; }
+
+/* ============================================================ WHAT SHIPS — numbered grid */
+.pieces { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.piece { position: relative; background: var(--bg-1); border: 1px solid var(--line); border-radius: var(--radius); padding: 24px; transition: border-color .2s, transform .2s; }
+.piece:hover { border-color: var(--line-2); transform: translateY(-3px); }
+.piece .pn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 38px; height: 38px; border-radius: 10px; margin-bottom: 16px;
+  font-family: var(--font-mono); font-weight: 600; font-size: 14px; color: #fff;
+}
+.pn.b-blue   { background: linear-gradient(135deg, color-mix(in srgb, var(--b-blue) 80%, #000), var(--b-blue)); }
+.pn.b-purple { background: linear-gradient(135deg, color-mix(in srgb, var(--b-purple) 80%, #000), var(--b-purple)); }
+.pn.b-gold   { background: linear-gradient(135deg, color-mix(in srgb, var(--b-gold) 82%, #000), var(--b-gold)); color: var(--accent-ink); }
+.pn.b-teal   { background: linear-gradient(135deg, color-mix(in srgb, var(--b-teal) 80%, #000), var(--b-teal)); color: #04140f; }
+.pn.b-green  { background: linear-gradient(135deg, color-mix(in srgb, var(--b-green) 80%, #000), var(--b-green)); }
+.pn.b-red    { background: linear-gradient(135deg, color-mix(in srgb, var(--b-red) 80%, #000), var(--b-red)); }
+.piece h3 { font-size: 18px; font-family: var(--font-display); margin-bottom: 8px; }
+.piece p { color: var(--text-dim); font-size: 14px; line-height: 1.58; }
+
+/* ============================================================ ARCHITECTURE */
+.arch { background: var(--bg-1); border: 1px solid var(--line); border-radius: 20px; padding: clamp(28px,4vw,52px); }
+.arch-flow { display: grid; grid-template-columns: 1fr auto 1.25fr auto 1fr; gap: clamp(10px,1.5vw,20px); align-items: stretch; }
+.arch-col { display: flex; flex-direction: column; gap: 12px; }
+.arch-node { background: var(--bg-2); border: 1px solid var(--line-2); border-radius: 12px; padding: 16px 16px; }
+.arch-node .nt { display: flex; align-items: center; gap: 9px; font-weight: 600; font-size: 15px; }
+.arch-node .nt svg { color: var(--accent); flex:none; }
+.arch-node .nd { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-faint); margin-top: 6px; }
+.arch-center { background: linear-gradient(180deg, var(--accent-soft), transparent), var(--bg-2); border: 1px solid var(--accent-line); position: relative; }
+.arch-center .nt svg { color: var(--accent); }
+.arch-pipe { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+.arch-pipe span { font-family: var(--font-mono); font-size: 10.5px; color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-line); border-radius: 6px; padding: 3px 7px; white-space: nowrap; }
+.arch-arrow { display: grid; place-items: center; color: var(--text-faint); }
+.arch-arrow svg { width: 26px; }
+.arch-label { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-faint); margin-bottom: 4px; }
+.arch-note { font-family: var(--font-mono); font-size: 10px; color: var(--ok); margin-top: 7px; text-align: center; }
+
+/* ============================================================ QUERY ANALYSIS */
+.qa-grid { display: grid; grid-template-columns: 1fr 1.15fr; gap: clamp(28px,4vw,56px); align-items: center; }
+.qa-list { display: flex; flex-direction: column; gap: 4px; margin-top: 26px; }
+.qa-item { display: flex; gap: 14px; padding: 16px 0; border-top: 1px solid var(--line); }
+.qa-item:last-child { border-bottom: 1px solid var(--line); }
+.qa-item .qi { color: var(--accent); flex: none; margin-top: 2px; }
+.qa-item h3 { font-size: 16px; font-family: var(--font-display); margin-bottom: 4px; }
+.qa-item p { color: var(--text-dim); font-size: 14px; }
+
+/* query families table */
+.qtable { padding: 6px 0 2px; }
+.qrow { display: grid; grid-template-columns: 1fr 64px 78px 56px; gap: 10px; align-items: center; padding: 11px 16px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.qrow.head { color: var(--text-faint); font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; }
+.qrow .qfam { font-family: var(--font-mono); color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qrow .qfam b { color: var(--accent); font-weight: 500; }
+.qrow .num { font-family: var(--font-mono); text-align: right; color: var(--text-dim); }
+.qrow .p95 { font-family: var(--font-mono); text-align: right; font-weight: 600; }
+.spark { height: 22px; display: flex; align-items: flex-end; gap: 2px; }
+.spark i { flex: 1; background: var(--accent); border-radius: 1px; opacity: .55; }
+.sev-hi { color: var(--crit); } .sev-md { color: var(--warn); } .sev-lo { color: var(--ok); }
+
+/* ============================================================ SAFETY CHECKLISTS */
+.safety-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+.safety-panel { padding: 28px 26px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--bg-1); }
+.safety-panel h3 { font-size: 21px; margin-bottom: 20px; display: flex; align-items: center; gap: 10px; }
+.safety-panel h3 .sp-ic { color: var(--accent); flex: none; }
+.check-list { display: grid; gap: 14px; }
+.check { display: grid; grid-template-columns: 26px 1fr; gap: 12px; align-items: start; }
+.check i {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border-radius: 999px;
+  background: var(--accent-soft); border: 1px solid var(--accent-line);
+  color: var(--accent); font-style: normal; font-weight: 700; font-size: 12.5px;
+  font-family: var(--font-mono);
+}
+.check b { display: block; font-size: 15px; }
+.check span { display: block; margin-top: 3px; color: var(--text-dim); font-size: 14px; line-height: 1.55; }
+
+/* ============================================================ DEPLOYMENT PATHS */
+.deploy-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+.deploy { padding: 22px 20px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-1); transition: border-color .2s, transform .2s; }
+.deploy:hover { border-color: var(--accent-line); transform: translateY(-3px); }
+.deploy .di { color: var(--accent); margin-bottom: 14px; }
+.deploy h3 { font-size: 17px; }
+.deploy p { margin-top: 9px; font-size: 14px; color: var(--text-dim); line-height: 1.55; }
+
+/* code / config */
+.config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: stretch; }
+.code { font-family: var(--font-mono); font-size: 13px; line-height: 1.75; padding: 20px 22px; overflow:auto; }
+.code .cm { color: var(--text-faint); }
+.code .key { color: var(--accent-2); }
+.code .val { color: var(--text); }
+.code .str { color: var(--accent); }
+.code .num { color: #c79bff; }
+.code .pr { color: var(--accent); }
+
+/* ============================================================ CTA */
+.cta { position: relative; overflow: hidden; background: var(--bg-1); border: 1px solid var(--accent-line); border-radius: 22px; padding: clamp(40px,6vw,72px); text-align: center; }
+.cta::before { content:""; position: absolute; inset: 0; background: radial-gradient(80% 120% at 50% -20%, var(--accent-soft), transparent 60%); pointer-events: none; }
+.cta h2 { font-size: clamp(30px,4vw,50px); position: relative; }
+.cta p { color: var(--text-dim); margin-top: 16px; font-size: 18px; position: relative; }
+.cta-row { margin-top: 32px; display: flex; gap: 13px; justify-content: center; flex-wrap: wrap; position: relative; }
+
+/* ============================================================ FOOTER */
+.footer { border-top: 1px solid var(--line); padding: 56px 0 40px; }
+.footer-in { display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; gap: 32px; }
+.footer .brand { margin-bottom: 14px; }
+.footer p { color: var(--text-faint); font-size: 13.5px; max-width: 26em; }
+.footer .fcol h3 { font-family: var(--font-mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--text-faint); margin: 0 0 14px; font-weight: 500; }
+.footer .fcol a { display: block; color: var(--text-dim); font-size: 14px; padding: 5px 0; transition: color .15s; }
+.footer .fcol a:hover { color: var(--text); }
+.footer-bot { margin-top: 44px; padding-top: 24px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; font-size: 13px; color: var(--text-faint); font-family: var(--font-mono); }
+
+/* reveal */
+.reveal { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: no-preference) {
+  html.js .reveal { opacity: 0; transform: translateY(20px); }
+  html.js .reveal.in { animation: revealIn .7s cubic-bezier(.2,.7,.2,1) forwards; }
+}
+@keyframes revealIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: none; } }
+
+/* responsive */
+@media (max-width: 1120px) {
+  .hero-top { grid-template-columns: 1fr; }
+  .hero-chart { justify-self: start; max-width: 620px; }
+}
+@media (max-width: 920px) {
+  .hero { padding-top: clamp(36px, 7vh, 58px); }
+  .hero-in { max-width: var(--maxw); }
+  .hero-copy { max-width: 680px; }
+  .hero-chart { max-width: 680px; width: 100%; }
+  .hero-visual { width: auto; margin: 0 calc(var(--pad) * -0.45); }
+  .hero-art { width: 100%; }
+  .qa-grid { grid-template-columns: 1fr; }
+  .config-grid { grid-template-columns: 1fr; }
+  .themes { grid-template-columns: 1fr; }
+  .pieces { grid-template-columns: 1fr 1fr; }
+  .safety-grid { grid-template-columns: 1fr; }
+  .deploy-grid { grid-template-columns: 1fr 1fr; }
+  .footer-in { grid-template-columns: 1fr 1fr; }
+  .arch-flow { grid-template-columns: 1fr; }
+  .arch-arrow { transform: rotate(90deg); padding: 4px 0; }
+  .nav-links { display: none; }
+  .logos-in { justify-content: center; }
+}
+@media (max-width: 560px) {
+  .nav-in { gap: 14px; }
+  .nav-right { gap: 8px; }
+  .gh-star { display: none; }
+  .nav-right .theme-toggle { display: none; }
+  .footer-theme { display: inline-flex; }
+  .trace-head { padding: 13px 14px; gap: 9px; }
+  .trace-title { display: none; }
+  .trace-live { margin-left: auto; }
+  .trace-body { padding: 14px; }
+  .trace-query { display: block; margin-bottom: 14px; }
+  .trace-total { display: block; margin-top: 4px; }
+  .trace-row { grid-template-columns: 1fr; gap: 5px; margin-bottom: 9px; }
+  .trace-ms { display: none; }
+  .pieces { grid-template-columns: 1fr; }
+  .deploy-grid { grid-template-columns: 1fr; }
+  .footer-in { grid-template-columns: 1fr; }
+  .hero-meta { gap: 12px 18px; }
+  .hero-art { border-radius: 9px; }
+}
+/* Phones (≤720px): the <picture> swaps in the portrait crop — central flow only
+   (ClickHouse → Click-Dog → Datadog/Splunk/Honeycomb). Match its 4:5 box so the
+   art isn't letterboxed, and centre it instead of going edge-to-edge. */
+@media (max-width: 720px) {
+  .hero-visual { margin: 0; }
+  .hero-art {
+    aspect-ratio: 4 / 5;
+    width: 100%;
+    max-width: 420px;
+    margin-inline: auto;
+  }
+}
+
+/* --- theme toggle --- */
+.theme-toggle{display:inline-flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:10px;border:1px solid var(--line-2);background:transparent;color:var(--text-dim);cursor:pointer;transition:background .15s,color .15s,border-color .15s;}
+.theme-toggle:hover{background:var(--bg-2);color:var(--text);border-color:var(--text-faint);}
+.theme-toggle .ic-moon{display:none;}
+[data-theme="dark"] .theme-toggle .ic-sun{display:none;}
+[data-theme="dark"] .theme-toggle .ic-moon{display:inline-block;}
+.footer-theme{display:none;}
+</style>
+<script>(function(){try{var k="cd-theme",s=localStorage.getItem(k),d=document.documentElement;if(s){d.setAttribute("data-theme",s);}else if(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches){d.setAttribute("data-theme","dark");}}catch(e){}})();</script>
+</head>
+<body>
+<a class="skip-link" href="#top">Skip to content</a>
+
+<!-- ===== NAV ===== -->
+<nav class="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="#top" aria-label="Click-Dog home">
+      <span class="dogmark nav-mark" aria-hidden="true"></span>
+      <span class="brand-name">Click-Dog</span>
+    </a>
+    <div class="nav-links">
+      <a href="#product">Product</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#analysis">Query analysis</a>
+      <a href="#safety">Safety</a>
+      <a href="#deploy">Deploy</a>
+      <a href="#install">Quickstart</a>
+    </div>
+    <div class="nav-right">
+      <a class="nav-link" href="/overview/">Docs</a>
+      <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle light or dark theme" title="Toggle theme"><svg class="ic-sun" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="ic-moon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg></button>
+      <a class="gh-star" href="https://github.com/coltconsulting/click-dog" target="_blank" rel="noopener">
+        <span class="gh-l">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38l-.01-1.49c-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48l-.01 2.2c0 .21.15.46.55.38A8 8 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+          Star
+        </span>
+        <span class="gh-n" id="ghStars" hidden></span>
+        <span class="sr-only"> (opens in a new tab)</span>
+      </a>
+      <a class="btn btn-primary btn-sm" href="/getting-started/">Get started</a>
+    </div>
+  </div>
+</nav>
+
+<span id="top"></span>
+
+<!-- ===== HERO ===== -->
+<header class="hero">
+  <div class="hero-grid"></div>
+  <div class="hero-glow"></div>
+  <div class="wrap hero-in">
+    <div class="hero-top">
+      <div class="hero-copy">
+        <div class="eyebrow"><span>Open-source · ClickHouse observability</span></div>
+        <h1 style="margin-top:18px"><span>Turn ClickHouse telemetry into</span> <span class="grad">query insight.</span></h1>
+        <p class="hero-sub">Click-Dog reads spans and query logs straight from ClickHouse and turns them into traces, query families, and dashboards for Datadog, Splunk, Honeycomb, Grafana Tempo, and any OTLP backend — read-only and bounded, so it never becomes another production load risk.</p>
+
+        <div class="cmd" style="margin-top:28px">
+          <span class="pr">$</span>
+          <code id="installCmd">curl -fsSL https://github.com/coltconsulting/click-dog/releases/latest/download/install.sh -o install.sh && sudo bash install.sh</code>
+          <button class="copy" id="copyBtn" aria-label="Copy install command">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+          </button>
+        </div>
+        <p class="install-verify"><b>Verified before install:</b> cosign-signed checksums, SHA-256 checked archives, fail-closed on mismatch.</p>
+
+        <div class="hero-cta">
+          <a class="btn btn-primary" href="/getting-started/">Get started</a>
+          <a class="btn btn-ghost" href="https://github.com/coltconsulting/click-dog" target="_blank" rel="noopener">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38l-.01-1.49c-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48l-.01 2.2c0 .21.15.46.55.38A8 8 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+            View on GitHub<span class="sr-only"> (opens in a new tab)</span>
+          </a>
+        </div>
+
+        <div class="os-pill" style="margin-top:22px"><span class="pulse"></span><b>Truly open source</b><span class="lic">Apache-2.0 · no restrictions, ever</span></div>
+
+        <div class="hero-meta">
+          <div class="hmeta"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 4 5v6c0 5 3.5 9 8 11 4.5-2 8-6 8-11V5l-8-3Z"/></svg>Read-only, non-invasive</div>
+          <div class="hmeta"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>Single static binary</div>
+          <div class="hmeta"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7c0-2 4-3 8-3s8 1 8 3-4 3-8 3-8-1-8-3ZM4 7v10c0 2 4 3 8 3s8-1 8-3V7"/></svg>Fork it freely</div>
+        </div>
+      </div>
+
+      <figure class="hero-chart" aria-label="Example slow query trace waterfall">
+        <div class="trace-head">
+          <span class="trace-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="trace-title">trace · slow-query-monitor</span>
+          <span class="trace-live">live · clickhouse</span>
+        </div>
+        <div class="trace-body">
+          <div class="trace-query">
+            <span>SELECT <b>events</b> JOIN <b>users</b> GROUP BY day</span>
+            <span class="trace-total">1,284 ms</span>
+          </div>
+          <div class="trace-row"><span>query · root</span><span class="trace-lane"><span class="trace-span" style="--x:0%;--w:100%;--c:#ef686c">1284ms</span></span><span class="trace-ms"></span></div>
+          <div class="trace-row"><span>read events</span><span class="trace-lane"><span class="trace-span" style="--x:4%;--w:42%;--c:#d27d08">487ms</span></span><span class="trace-ms"></span></div>
+          <div class="trace-row"><span>merge parts</span><span class="trace-lane"><span class="trace-span" style="--x:12%;--w:30%;--c:#d2901c">312ms</span></span><span class="trace-ms"></span></div>
+          <div class="trace-row"><span>hash join users</span><span class="trace-lane"><span class="trace-span" style="--x:43%;--w:36%;--c:#ef7668">436ms</span></span><span class="trace-ms"></span></div>
+          <div class="trace-row"><span>aggregate day</span><span class="trace-lane"><span class="trace-span" style="--x:74%;--w:19%;--c:#7c5cff">231ms</span></span><span class="trace-ms"></span></div>
+          <div class="trace-row"><span>sort + limit</span><span class="trace-lane"><span class="trace-span" style="--x:88%;--w:12%;--c:#747985">140ms</span></span><span class="trace-ms"></span></div>
+        </div>
+      </figure>
+    </div>
+
+    <!-- hero conduit artwork (portrait crop on phones — central flow only) -->
+    <div class="hero-visual">
+      <a href="/assets/click-dog-hero.svg" aria-label="Open the full Click-Dog telemetry conduit diagram">
+        <picture>
+          <source media="(max-width: 720px)" srcset="/assets/click-dog-hero-mobile.svg" width="720" height="900" />
+          <img
+            class="hero-art"
+            src="/assets/click-dog-hero.svg"
+            alt="Click-Dog telemetry conduit diagram showing a read-only ClickHouse source feeding Click-Dog and fanning out to Datadog, Splunk, and Honeycomb"
+            width="1600"
+            height="900"
+            loading="eager"
+            fetchpriority="high"
+            decoding="async"
+          />
+        </picture>
+      </a>
+    </div>
+  </div>
+</header>
+
+<!-- ===== LOGOS ===== -->
+<div class="logos">
+  <div class="wrap logos-in">
+    <span class="lbl">Exports to</span>
+    <span class="logo-chip"><svg style="color:var(--dd)" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="9"/></svg>Datadog</span>
+    <span class="logo-chip"><svg style="color:#5aa86a" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l9 6-9 6"/></svg>Splunk</span>
+    <span class="logo-chip"><svg style="color:var(--hc)" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3Z"/></svg>Honeycomb</span>
+    <span class="logo-chip"><svg style="color:var(--gf)" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>Grafana Tempo</span>
+    <span class="logo-chip"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M12 3v18"/><circle cx="12" cy="12" r="9"/></svg>Jaeger</span>
+    <span class="logo-chip"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7c0-2 4-3 8-3s8 1 8 3-4 3-8 3-8-1-8-3ZM4 7v10c0 2 4 3 8 3s8-1 8-3V7"/></svg>Elastic</span>
+    <span class="logo-chip"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 12h8"/></svg>Any OTLP</span>
+  </div>
+</div>
+
+<!-- ===== OPERATING THEMES ===== -->
+<section class="section-pad" id="product">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <div class="eyebrow">Operating themes</div>
+      <h2>Built to run in production.</h2>
+      <p>Three things shape Click-Dog: it's manageable to run, it stays out of your source system's way, and it explains what your queries are doing.</p>
+    </div>
+    <div class="themes">
+      <div class="theme-card reveal">
+        <div class="theme-ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 4 5v6c0 5 3.5 9 8 11 4.5-2 8-6 8-11V5l-8-3Z"/><path d="M9 12l2 2 4-4"/></svg></div>
+        <h3>Manageable in production</h3>
+        <p>Run it as a single static binary, a container, or generated Kubernetes / Docker Compose manifests. Validate config before it talks to anything, dry-run exports, and monitor Click-Dog itself.</p>
+        <div class="k"><span>health</span><span>readiness</span><span>status</span><span>metrics</span></div>
+      </div>
+      <div class="theme-card reveal" style="transition-delay:.06s">
+        <div class="theme-ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="M12 8v4"/><circle cx="12" cy="15" r=".6" fill="currentColor"/></svg></div>
+        <h3>Low-impact source safety</h3>
+        <p>The non-invasive property. Read-only connections, bounded polling, SQL-level filtering, batching, circuit-breaker protection, and adaptive backoff — so your source system stays in control.</p>
+        <div class="k"><span>read-only</span><span>circuit breaker</span><span>backoff</span><span>leader-gated HA</span></div>
+      </div>
+      <div class="theme-card reveal" style="transition-delay:.12s">
+        <div class="theme-ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 14l3-4 3 3 4-6"/></svg></div>
+        <h3>Query analysis, not trace shipping</h3>
+        <p>Click-Dog exports spans, but the goal is to explain queries: slow-query traces, query-log enrichment, normalized query families, log-comment context, and ready-made dashboards.</p>
+        <div class="k"><span>slow queries</span><span>query families</span><span>per-sink health</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== WHAT SHIPS — numbered grid ===== -->
+<section class="section-pad" style="padding-top:0">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <div class="eyebrow">What ships out of the box</div>
+      <h2>The useful pieces are included from day one.</h2>
+      <p>Click-Dog does more than forward spans. It packages the reports, dashboards, export health, and rollout controls a team needs before trusting a production telemetry path.</p>
+    </div>
+    <div class="pieces">
+      <article class="piece reveal"><span class="pn b-blue">01</span><h3>Slow-query traces</h3><p>Export ClickHouse native spans enriched with query-log context so slow traces carry the database behavior that caused them.</p></article>
+      <article class="piece reveal" style="transition-delay:.04s"><span class="pn b-purple">02</span><h3>Query families</h3><p>Group thousands of statements into normalized shapes that make p95, volume, and trend changes easier to reason about.</p></article>
+      <article class="piece reveal" style="transition-delay:.08s"><span class="pn b-gold">03</span><h3>Ready dashboards</h3><p>Provision Datadog application query-analysis dashboards without starting from a blank canvas.</p></article>
+      <article class="piece reveal"><span class="pn b-teal">04</span><h3>Per-sink health</h3><p>Know which backend is accepting spans, which one is failing, and when fan-out needs operator attention.</p></article>
+      <article class="piece reveal" style="transition-delay:.04s"><span class="pn b-green">05</span><h3>Deployment assets</h3><p>Run as a static binary, systemd service, Docker Compose stack, Kubernetes deployment, or Ansible-managed sidecar fleet.</p></article>
+      <article class="piece reveal" style="transition-delay:.08s"><span class="pn b-red">06</span><h3>Local analysis reports</h3><p>Generate bounded read-only reports, including redacted JSON for downstream tooling and AI-assisted review.</p></article>
+    </div>
+  </div>
+</section>
+
+<!-- ===== ARCHITECTURE ===== -->
+<section class="section-pad" id="architecture" style="padding-top:0">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <div class="eyebrow">How it flows</div>
+      <h2>One bounded pipeline, from source to sink.</h2>
+      <p>Click-Dog sits beside your database — never in the request path — reads telemetry over a read-only connection, filters and batches at the source, then fans out to one or more backends.</p>
+    </div>
+
+    <div class="arch reveal">
+      <div class="arch-flow">
+        <div class="arch-col">
+          <div class="arch-label">Source</div>
+          <div class="arch-node">
+            <div class="nt"><svg style="color:var(--ch)" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>ClickHouse</div>
+            <div class="nd">system.opentelemetry_span_log</div>
+          </div>
+          <div class="arch-node">
+            <div class="nt"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v6H4zM4 14h16v6H4z"/></svg>Query log</div>
+            <div class="nd">system.query_log · backfill</div>
+          </div>
+          <div class="arch-note">read-only · no DDL</div>
+        </div>
+
+        <div class="arch-arrow"><svg viewBox="0 0 32 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 8h26M22 3l6 5-6 5"/></svg></div>
+
+        <div class="arch-col">
+          <div class="arch-label">Click-Dog</div>
+          <div class="arch-node arch-center" style="flex:1">
+            <div class="nt"><span class="dogmark sm" aria-hidden="true"></span>Collector</div>
+            <div class="nd">poll → filter → dedupe → batch</div>
+            <div class="arch-pipe">
+              <span>SQL filter</span><span>LRU dedupe</span><span>batch</span><span>circuit breaker</span><span>backoff</span><span>leader election</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="arch-arrow"><svg viewBox="0 0 32 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 8h26M22 3l6 5-6 5"/></svg></div>
+
+        <div class="arch-col">
+          <div class="arch-label">Sinks · fan-out</div>
+          <div class="arch-node"><div class="nt"><svg style="color:var(--dd)" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="8"/></svg>Datadog</div><div class="nd">OTLP/gRPC</div></div>
+          <div class="arch-node"><div class="nt"><svg style="color:var(--hc)" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/></svg>Honeycomb</div><div class="nd">OTLP · Tempo · Jaeger</div></div>
+          <div class="arch-note">Splunk HEC + OTLP</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== QUERY ANALYSIS ===== -->
+<section class="section-pad" id="analysis" style="padding-top:0">
+  <div class="wrap qa-grid">
+    <div class="reveal">
+      <div class="eyebrow">Query analysis</div>
+      <h2 style="font-size:clamp(28px,3.4vw,42px);margin-top:16px">Explain what your queries are doing.</h2>
+      <div class="qa-list">
+        <div class="qa-item"><span class="qi" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></span><div><h3>Normalized query families</h3><p>Group thousands of statements into the handful of shapes that matter.</p></div></div>
+        <div class="qa-item"><span class="qi" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 6v6l4 2"/><circle cx="12" cy="12" r="9"/></svg></span><div><h3>Slow-query traces</h3><p>Every span enriched with query-log context and log-comment metadata.</p></div></div>
+        <div class="qa-item"><span class="qi" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><rect x="7" y="10" width="3" height="8"/><rect x="13" y="6" width="3" height="12"/></svg></span><div><h3>Ready-made dashboards</h3><p>Datadog dashboards for application query analysis, out of the box.</p></div></div>
+        <div class="qa-item"><span class="qi" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span><div><h3>Per-sink export health</h3><p>Know exactly which backend is healthy and which is dropping spans.</p></div></div>
+      </div>
+    </div>
+
+    <div class="win reveal" style="transition-delay:.08s">
+      <div class="win-bar">
+        <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+        <span class="win-title">query families · p95 last 24h</span>
+        <span class="win-tag">12 shapes</span>
+      </div>
+      <div class="qtable">
+        <div class="qrow head"><span>Query family</span><span style="text-align:right">Calls</span><span style="text-align:right">p95</span><span style="text-align:right">Trend</span></div>
+        <div class="qrow"><span class="qfam">SELECT <b>events</b> JOIN <b>users</b> …</span><span class="num">48.2k</span><span class="p95 sev-hi">1.28s</span><span><span class="spark" data-spark="3,4,5,6,7,9,8,12"></span></span></div>
+        <div class="qrow"><span class="qfam">SELECT count() FROM <b>orders</b> …</span><span class="num">211k</span><span class="p95 sev-md">340ms</span><span><span class="spark" data-spark="6,5,7,6,8,6,7,7"></span></span></div>
+        <div class="qrow"><span class="qfam">INSERT INTO <b>metrics</b> …</span><span class="num">1.9M</span><span class="p95 sev-lo">22ms</span><span><span class="spark" data-spark="4,4,5,4,4,5,4,4"></span></span></div>
+        <div class="qrow"><span class="qfam">SELECT * FROM <b>sessions</b> WHERE …</span><span class="num">17.4k</span><span class="p95 sev-md">512ms</span><span><span class="spark" data-spark="5,6,5,7,6,8,7,6"></span></span></div>
+        <div class="qrow"><span class="qfam">SELECT <b>uniq</b>(uid) FROM <b>events</b> …</span><span class="num">9.1k</span><span class="p95 sev-hi">2.04s</span><span><span class="spark" data-spark="4,5,6,7,8,10,11,13"></span></span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== SAFETY CHECKLISTS ===== -->
+<section class="section-pad" id="safety" style="padding-top:0">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <div class="eyebrow">Why it is safe to run</div>
+      <h2>Conservative by default — it runs next to your production database.</h2>
+      <p>Click-Dog should make query telemetry easier to trust without making the source system harder to operate.</p>
+    </div>
+    <div class="safety-grid">
+      <div class="safety-panel reveal">
+        <h3><svg class="sp-ic" aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 4 5v6c0 5 3.5 9 8 11 4.5-2 8-6 8-11V5l-8-3Z"/></svg>Source protection</h3>
+        <div class="check-list">
+          <div class="check"><i>1</i><div><b>Read-only ClickHouse sessions</b><span>All runtime connections enforce readonly=2.</span></div></div>
+          <div class="check"><i>2</i><div><b>No schema changes</b><span>No DDL requirement and no write grants to your database.</span></div></div>
+          <div class="check"><i>3</i><div><b>Bounded polling</b><span>SQL-level filters, lookback windows, and max spans per cycle cap load.</span></div></div>
+          <div class="check"><i>4</i><div><b>Failure backpressure</b><span>Circuit breaker and adaptive backoff reduce pressure during incidents.</span></div></div>
+        </div>
+      </div>
+      <div class="safety-panel reveal" style="transition-delay:.06s">
+        <h3><svg class="sp-ic" aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>Rollout control</h3>
+        <div class="check-list">
+          <div class="check"><i>1</i><div><b>Validate offline</b><span>Check configuration before connecting to source or sink.</span></div></div>
+          <div class="check"><i>2</i><div><b>Dry-run real reads</b><span>Exercise the fetch and filter path while discarding exports.</span></div></div>
+          <div class="check"><i>3</i><div><b>Probe readiness</b><span>Expose health, readiness, status, and metrics for operations.</span></div></div>
+          <div class="check"><i>4</i><div><b>Use secure transport</b><span>TLS and mTLS are available for collector and source links.</span></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== DEPLOYMENT PATHS ===== -->
+<section class="section-pad" id="deploy" style="padding-top:0">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <div class="eyebrow">Deployment paths</div>
+      <h2>Start small, then roll it out like infrastructure.</h2>
+    </div>
+    <div class="deploy-grid">
+      <article class="deploy reveal">
+        <div class="di" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h5"/></svg></div>
+        <h3>Single binary</h3><p>Static Linux binary for a quick first node or a controlled manual install.</p>
+      </article>
+      <article class="deploy reveal" style="transition-delay:.04s">
+        <div class="di" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+        <h3>Systemd</h3><p>Installer-generated service, config validation, and local health checks.</p>
+      </article>
+      <article class="deploy reveal" style="transition-delay:.08s">
+        <div class="di" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 3 7v10l9 5 9-5V7l-9-5Z"/><path d="M12 12 3 7M12 12v10M12 12l9-5"/></svg></div>
+        <h3>Kubernetes</h3><p>Generated manifests for a centralized cluster reader with readiness probes.</p>
+      </article>
+      <article class="deploy reveal" style="transition-delay:.12s">
+        <div class="di" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="12" r="3"/><path d="M9 6h6a3 3 0 0 1 3 3M9 18h6a3 3 0 0 0 3-3"/></svg></div>
+        <h3>Ansible</h3><p>Fleet rollout, canary playbook, bounded concurrency, and repeatable config.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ===== INSTALL / CONFIG ===== -->
+<section class="section-pad" id="install" style="padding-top:0">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <div class="eyebrow">Quick example</div>
+      <h2>Point it at ClickHouse. Pick your sinks. Run.</h2>
+      <p>One YAML file and one command. Validate it, dry-run the export, then turn it on.</p>
+    </div>
+    <div class="config-grid reveal">
+      <div class="win">
+        <div class="win-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="win-title">click-dog.yaml</span></div>
+        <pre class="code"><span class="key">clickhouse</span>:
+  <span class="key">host</span>: <span class="val">localhost</span>
+  <span class="key">port</span>: <span class="num">9000</span>
+  <span class="key">username</span>: <span class="val">default</span>
+  <span class="key">password</span>: <span class="str">${CLICKHOUSE_PASSWORD}</span>
+
+<span class="key">exporters</span>:
+  <span class="key">otel</span>:
+    - <span class="key">collector_address</span>: <span class="val">localhost:4317</span>
+      <span class="key">service_name</span>: <span class="val">click-dog-monitor</span>
+
+<span class="key">monitor</span>:
+  <span class="key">enabled</span>: <span class="num">true</span>
+  <span class="key">min_trace_duration_ms</span>: <span class="num">1000</span>
+  <span class="key">check_interval_s</span>: <span class="num">30</span>
+
+<span class="key">log_level</span>: <span class="val">info</span></pre>
+      </div>
+      <div class="win">
+        <div class="win-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="win-title">terminal</span><span class="win-tag">~/click-dog</span></div>
+        <pre class="code"><span class="cm"># 1 · validate before it talks to anything</span>
+<span class="pr">$</span> ./click-dog -validate -config click-dog.yaml
+<span class="val">✓ config valid · 1 source · 1 sink</span>
+
+<span class="cm"># 2 · dry-run the export pipeline</span>
+<span class="pr">$</span> ./click-dog --dry-run -config click-dog.yaml
+<span class="val">→ 248 spans matched · 0 sent (dry-run)</span>
+
+<span class="cm"># 3 · run it</span>
+<span class="pr">$</span> export CLICKHOUSE_PASSWORD=<span class="str">"secret"</span>
+<span class="pr">$</span> ./click-dog -config click-dog.yaml
+<span class="accent">●</span> <span class="val">collector up · leader · exporting</span>
+  <span class="cm">clickhouse → otel://localhost:4317 healthy</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== CTA ===== -->
+<section class="section-pad" style="padding-top:0">
+  <div class="wrap">
+    <div class="cta reveal">
+      <span class="dogmark lg" aria-hidden="true" style="margin:0 auto 22px;display:block"></span>
+      <h2>Put a watchdog on your queries.</h2>
+      <p>Truly open source under Apache 2.0 — permissive, unrestricted, yours to run and fork. Source-safe by design, and live in minutes.</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="/getting-started/">Get started — it's free</a>
+        <a class="btn btn-ghost" href="https://github.com/coltconsulting/click-dog" target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38l-.01-1.49c-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48l-.01 2.2c0 .21.15.46.55.38A8 8 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+          Star on GitHub<span class="sr-only"> (opens in a new tab)</span>
+        </a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== FOOTER ===== -->
+<footer class="footer">
+  <div class="wrap footer-in">
+    <div>
+      <div class="brand"><span class="dogmark" aria-hidden="true"></span>Click-Dog</div>
+      <p>Operational query observability without making the source system harder to run.</p>
+    </div>
+    <div class="fcol">
+      <h3>Product</h3>
+      <a href="/getting-started/">Getting started</a>
+      <a href="/architecture/">Architecture</a>
+      <a href="/query-analysis/">Query analysis</a>
+      <a href="/modes/">Operating modes</a>
+    </div>
+    <div class="fcol">
+      <h3>Integrations</h3>
+      <a href="/integrations/datadog/">Datadog</a>
+      <a href="/integrations/honeycomb/">Honeycomb</a>
+      <a href="/integrations/generic-otlp/">Generic OTLP</a>
+    </div>
+    <div class="fcol">
+      <h3>Resources</h3>
+      <a href="https://github.com/coltconsulting/click-dog">GitHub</a>
+      <a href="/changelog/">Changelog</a>
+      <a href="/span-attributes/">Span attributes</a>
+    </div>
+  </div>
+  <div class="wrap footer-bot">
+    <span>© 2026 Colt Consulting Ltd · Apache 2.0</span>
+    <span>Click-Dog — built for ClickHouse, ready for more.</span>
+    <button class="theme-toggle footer-theme" type="button" aria-label="Toggle light or dark theme" title="Toggle theme"><svg class="ic-sun" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="ic-moon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg></button>
+  </div>
+</footer>
+
+<!-- dog mark template -->
+<template id="dogmark-svg">
+  <svg viewBox="0 0 603 531" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path fill="currentColor" fill-rule="evenodd" d="M2 528.52c0-.26 4.65-6.23 10.34-13.25 50.37-62.24 80.86-124.5 88.17-180.07 2.99-22.72 2.62-26.15-13.98-129.2-5.18-32.18-9.3-58.04-16.63-104.5C58.3 27.94 55.95 11.73 56.59 9.59 57.87 5.35 62.12 2 66.22 2c3.91 0 5.29.86 41.78 26.15 3.58 2.48 13.25 9.14 21.5 14.81 8.25 5.66 15.78 10.98 16.73 11.81 1.57 1.36 2.22 1.13 7-2.52 20.64-15.78 51.7-28.91 81.99-34.67 74.03-14.09 159.96 19.04 195.1 75.21 12.13 19.4 13.03 20.57 17.68 22.88 2.48 1.22 14.18 4.9 26 8.17 72.82 20.13 115.94 32.44 118.92 33.94 4.31 2.17 6.97 5.74 7.72 10.41.58 3.55-9.09 27.27-34.52 84.65-9.32 21.04-22.04 33.11-42.62 40.44-9.93 3.54-17.48 4.43-57 6.76-19.25 1.14-37.75 2.7-41.12 3.47-15.96 3.65-31.05 13.94-40.33 27.49-17.8 25.97-18.04 48.58-1.17 110.02 10.17 37.02 23.12 85.67 23.12 86.85 0 .84-52.82 1.13-202.5 1.13C93.12 529 2 528.78 2 528.52M84 41l40 261 54.02-64.65 47.55 78.76 35.96-21.71-47.55-78.75L294 186Zm260.73 95.87a21.51 21.51 0 1 0 43.03 0 21.51 21.51 0 1 0-43.03 0"></path>
+  </svg>
+</template>
+
+<script>
+document.documentElement.classList.add('js');
+
+// ---- dog mark injection ----
+(function(){
+  const tpl = document.getElementById('dogmark-svg');
+  document.querySelectorAll('.dogmark').forEach(el=>{
+    const svg = tpl.content.firstElementChild.cloneNode(true);
+    let s = 24;
+    if (el.classList.contains('sm')) s = 17;
+    if (el.classList.contains('nav-mark')) s = 32;
+    if (el.classList.contains('lg')) s = 52;
+    const w = Math.round(s * 603/531);
+    svg.setAttribute('width', w); svg.setAttribute('height', s);
+    el.appendChild(svg);
+  });
+})();
+
+// ---- copy install command ----
+document.getElementById('copyBtn').addEventListener('click', async (e)=>{
+  const txt = document.getElementById('installCmd').textContent;
+  try { await navigator.clipboard.writeText(txt); } catch(_){}
+  const b = e.currentTarget; b.style.color = 'var(--accent)';
+  b.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>';
+  setTimeout(()=>{ b.style.color=''; b.innerHTML='<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>'; }, 1400);
+});
+
+// ---- sparklines ----
+document.querySelectorAll('[data-spark]').forEach(el=>{
+  el.dataset.spark.split(',').forEach(v=>{
+    const i = document.createElement('i'); i.style.height = (parseInt(v)/13*100)+'%'; el.appendChild(i);
+  });
+});
+
+// ---- reveal on scroll ----
+const io = new IntersectionObserver((es)=>{
+  es.forEach(e=>{ if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); } });
+}, {threshold:.12, rootMargin:'0px 0px -8% 0px'});
+document.querySelectorAll('.reveal').forEach(el=>{
+  if (el.getBoundingClientRect().top < window.innerHeight * 0.92) { el.classList.add('in'); }
+  else { io.observe(el); }
+});
+
+// ---- github star count (show only if > 100) ----
+(function(){
+  const el = document.getElementById('ghStars'); if(!el) return;
+  fetch('https://api.github.com/repos/coltconsulting/click-dog')
+    .then(r => r.ok ? r.json() : null)
+    .then(d => {
+      const n = d && d.stargazers_count;
+      if (typeof n === 'number' && n > 100){
+        el.textContent = n >= 1000 ? (n/1000).toFixed(n >= 10000 ? 0 : 1).replace(/\.0$/,'') + 'k' : String(n);
+        el.hidden = false;
+      }
+    })
+    .catch(()=>{});
+})();
+
+// ---- theme toggle (persists to localStorage) ----
+(function(){
+  var d = document.documentElement;
+  function flip(){
+    var n = d.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    d.setAttribute('data-theme', n);
+    try { localStorage.setItem('cd-theme', n); } catch(e){}
+  }
+  document.querySelectorAll('.theme-toggle').forEach(function(b){ b.addEventListener('click', flip); });
+})();
+</script>
+
+</body>
+</html>

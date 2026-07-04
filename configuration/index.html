@@ -1,0 +1,3009 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Source-safe query observability for ClickHouse today, with more telemetry sources planned">
+      
+      
+      
+        <link rel="canonical" href="https://click-dog.com/configuration/">
+      
+      
+        <link rel="prev" href="../install/">
+      
+      
+        <link rel="next" href="../integrations/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Configuration - Click-Dog</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=IBM+Plex+Sans:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"IBM Plex Sans";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  
+
+  <!-- Brand fonts (match the landing) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <!-- Favicon -->
+  <link rel="icon" href="../assets/favicon.png">
+  <link rel="icon" sizes="32x32" href="../assets/favicon-32.png">
+  <link rel="apple-touch-icon" href="../assets/favicon.png">
+
+  <!-- Open Graph / Twitter social card.
+       Guard `page` — it is None on the generated 404 page, which also
+       extends this template. -->
+  
+  
+  
+  
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Configuration">
+  <meta property="og:description" content="Source-safe query observability for ClickHouse today, with more telemetry sources planned">
+  <meta property="og:image" content="https://click-dog.com/assets/social-card.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Configuration">
+  <meta name="twitter:description" content="Source-safe query observability for ClickHouse today, with more telemetry sources planned">
+  <meta name="twitter:image" content="https://click-dog.com/assets/social-card.png">
+
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="amber">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#configuration-reference" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+        <aside class="md-banner">
+          <div class="md-banner__inner md-grid md-typeset">
+            
+            
+  <strong>Public beta.</strong> Newly open source — the public API and config may still change. Click-Dog has been extensively tested and running in production for months.
+
+          </div>
+          
+        </aside>
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Click-Dog" class="md-header__button md-logo" aria-label="Click-Dog" data-md-component="logo">
+      
+  <img src="../assets/click-dog-logo-light.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Click-Dog
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Configuration
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="amber"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="amber"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/coltconsulting/click-dog" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    coltconsulting/click-dog
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Click-Dog" class="md-nav__button md-logo" aria-label="Click-Dog" data-md-component="logo">
+      
+  <img src="../assets/click-dog-logo-light.svg" alt="logo">
+
+    </a>
+    Click-Dog
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/coltconsulting/click-dog" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    coltconsulting/click-dog
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Main Site
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Setup
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#environment-variable-expansion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Environment Variable Expansion
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#clickhouse-connection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ClickHouse Connection
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ClickHouse Connection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#connection-details" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Connection Details
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TLS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cluster-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cluster Mode
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Cluster Mode">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cluster-mode-is-always-leader-gated" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cluster mode is always leader-gated
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#topology-self-audit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Topology self-audit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#connection-pool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Connection Pool
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#otel-exporter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OTEL Exporter
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="OTEL Exporter">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#multiple-export-backends" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multiple Export Backends
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#high-availability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High Availability
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#monitor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Monitor
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Monitor">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#duration-filtering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Duration Filtering
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#polling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Polling
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rate-limiting-batching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rate Limiting &amp; Batching
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#circuit-breaker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Circuit Breaker
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#adaptive-backoff" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adaptive Backoff
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#filters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Filters
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Logging
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Logging">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#log-file-permissions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Log file permissions
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metrics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#health-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Health Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#webhook-notifications" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Webhook Notifications
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#complete-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Complete Example
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integrations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integrations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/datadog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Datadog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/honeycomb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Honeycomb
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/generic-otlp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Generic OTLP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/splunk-hec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Splunk HEC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analysis
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Analysis
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../query-analysis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Query Analysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../span-attributes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Span Attributes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Observability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../resilience/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resilience
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../operating/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operating Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../kubernetes-clickhouse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kubernetes — ClickHouse Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../modes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operation Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../filtering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Filtering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../support/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Support
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#environment-variable-expansion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Environment Variable Expansion
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#clickhouse-connection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ClickHouse Connection
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ClickHouse Connection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#connection-details" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Connection Details
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TLS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cluster-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cluster Mode
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Cluster Mode">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cluster-mode-is-always-leader-gated" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cluster mode is always leader-gated
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#topology-self-audit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Topology self-audit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#connection-pool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Connection Pool
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#otel-exporter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OTEL Exporter
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="OTEL Exporter">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#multiple-export-backends" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multiple Export Backends
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#high-availability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High Availability
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#monitor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Monitor
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Monitor">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#duration-filtering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Duration Filtering
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#polling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Polling
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rate-limiting-batching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rate Limiting &amp; Batching
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#circuit-breaker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Circuit Breaker
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#adaptive-backoff" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Adaptive Backoff
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#filters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Filters
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Logging
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Logging">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#log-file-permissions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Log file permissions
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metrics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#health-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Health Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#webhook-notifications" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Webhook Notifications
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#complete-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Complete Example
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="configuration-reference">Configuration Reference<a class="headerlink" href="#configuration-reference" title="Permanent link">&para;</a></h1>
+<p>Click-Dog uses YAML configuration with environment variable support. When
+<code>-config</code> is omitted, it first looks for
+<code>/etc/click-dog/click-dog.yaml</code>, then falls back to <code>./click-dog.yaml</code> in the
+current directory. Override with <code>-config</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>./click-dog<span class="w"> </span>-config<span class="w"> </span>/path/to/config.yaml
+</code></pre></div>
+<p>Unknown keys are rejected at load time, so a typo like <code>check_intervla_s</code> fails fast instead of being silently ignored. Use <code>-validate</code> to check that your config parses and passes validation without starting the service.</p>
+<h2 id="environment-variable-expansion">Environment Variable Expansion<a class="headerlink" href="#environment-variable-expansion" title="Permanent link">&para;</a></h2>
+<p>Sensitive fields support <code>${VAR}</code> and <code>$VAR</code> syntax. Unset variables resolve to empty strings.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">clickhouse</span><span class="p">:</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span><span class="nt">host</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${CLICKHOUSE_HOST}</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span><span class="nt">username</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${CLICKHOUSE_USERNAME}</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">password</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${CLICKHOUSE_PASSWORD}</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="nt">exporters</span><span class="p">:</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span><span class="nt">otel</span><span class="p">:</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">collector_address</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${OTEL_COLLECTOR_ADDRESS}</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">      </span><span class="nt">ca_cert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${OTEL_CA_CERT}</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">      </span><span class="nt">client_cert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${OTEL_CLIENT_CERT}</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">      </span><span class="nt">client_key</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${OTEL_CLIENT_KEY}</span>
+</code></pre></div>
+<p>The following fields support environment variable expansion:
+- <code>clickhouse.host</code>, <code>clickhouse.username</code>, <code>clickhouse.password</code>, <code>clickhouse.ca_cert</code>
+- <code>exporters.otel[].collector_address</code>, <code>exporters.otel[].ca_cert</code>, <code>exporters.otel[].client_cert</code>, <code>exporters.otel[].client_key</code>
+- <code>exporters.splunk_hec[].endpoint</code>, <code>exporters.splunk_hec[].token</code>
+- <code>ha.keeper.auth_user</code>, <code>ha.keeper.auth_password</code>
+- <code>webhook.url</code></p>
+<p>The <code>*_file</code> secret-path fields (<code>clickhouse.password_file</code>, <code>exporters.splunk_hec[].token_file</code>, <code>ha.keeper.auth_password_file</code>) are also expanded, so the path can reference an environment variable — e.g. <code>password_file: ${SECRET_PATH}</code>.</p>
+<hr />
+<h2 id="clickhouse-connection">ClickHouse Connection<a class="headerlink" href="#clickhouse-connection" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">clickhouse</span><span class="p">:</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">host</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">localhost</span><span class="w">              </span><span class="c1"># ClickHouse hostname</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">9000</span><span class="w">                   </span><span class="c1"># Native protocol port (default: 9000)</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">database</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default</span><span class="w">            </span><span class="c1"># Database name</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">username</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default</span><span class="w">            </span><span class="c1"># Username (supports env vars)</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">  </span><span class="nt">password</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${CLICKHOUSE_PASSWORD}</span><span class="w">  </span><span class="c1"># Password (supports env vars)</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">  </span><span class="c1"># TLS</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">  </span><span class="nt">secure</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">                </span><span class="c1"># Enable TLS (default: false)</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">  </span><span class="nt">insecure_skip_verify</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">  </span><span class="c1"># Skip cert verification (TESTING ONLY)</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">  </span><span class="nt">ca_cert</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w">                  </span><span class="c1"># Path to CA cert for self-signed certs</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="w">  </span><span class="c1"># Cluster</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="w">  </span><span class="nt">cluster</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w">                  </span><span class="c1"># Cluster name for distributed queries</span>
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="w">  </span><span class="nt">use_cluster_queries</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">   </span><span class="c1"># Use cluster() function (default: false)</span>
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="w">  </span><span class="c1"># Connection pool</span>
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="w">  </span><span class="nt">max_open_conns</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span><span class="w">            </span><span class="c1"># Max open connections (default: 2)</span>
+<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="w">  </span><span class="nt">max_idle_conns</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span><span class="w">            </span><span class="c1"># Max idle connections (default: 1)</span>
+<a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a><span class="w">  </span><span class="nt">query_timeout_s</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30</span><span class="w">          </span><span class="c1"># Query timeout in seconds (default: 30)</span>
+<a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a>
+<a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a><span class="w">  </span><span class="c1"># Memory</span>
+<a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a><span class="w">  </span><span class="nt">max_memory_usage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">104857600</span><span class="w">  </span><span class="c1"># Per-query memory limit in bytes (default: 100MB)</span>
+</code></pre></div>
+<h3 id="connection-details">Connection Details<a class="headerlink" href="#connection-details" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>host</code></td>
+<td>—</td>
+<td>ClickHouse server hostname</td>
+</tr>
+<tr>
+<td><code>port</code></td>
+<td><code>9000</code></td>
+<td>Native protocol port</td>
+</tr>
+<tr>
+<td><code>database</code></td>
+<td>—</td>
+<td>Database name</td>
+</tr>
+<tr>
+<td><code>username</code></td>
+<td>—</td>
+<td>Username</td>
+</tr>
+<tr>
+<td><code>password</code></td>
+<td>—</td>
+<td>Password (supports <code>${ENV}</code> expansion). Mutually exclusive with <code>password_file</code></td>
+</tr>
+<tr>
+<td><code>password_file</code></td>
+<td>—</td>
+<td>Path to a file holding the password (read at load; one trailing newline — CRLF or LF — trimmed). Path supports <code>${VAR}</code> expansion. Keeps the secret out of the process environment. Mutually exclusive with <code>password</code>; an empty file is rejected — for an intentionally-empty password use the inline <code>password: ""</code> form</td>
+</tr>
+</tbody>
+</table>
+<h3 id="tls">TLS<a class="headerlink" href="#tls" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>secure</code></td>
+<td><code>false</code></td>
+<td>Enable TLS encryption</td>
+</tr>
+<tr>
+<td><code>insecure_skip_verify</code></td>
+<td><code>false</code></td>
+<td>Skip certificate verification. <strong>Insecure</strong> — use only for testing</td>
+</tr>
+<tr>
+<td><code>ca_cert</code></td>
+<td>—</td>
+<td>Path to CA certificate file for TLS verification with self-signed or internal CA certs</td>
+</tr>
+</tbody>
+</table>
+<h3 id="cluster-mode">Cluster Mode<a class="headerlink" href="#cluster-mode" title="Permanent link">&para;</a></h3>
+<p>There is one concept — <strong>a reader and the scope it covers</strong> — giving two
+topologies. <strong><code>single</code> is just <code>sidecar</code> with n=1</strong> (identical config; only the
+instance count differs).</p>
+<p><strong>Sidecar (default, recommended):</strong> Deploy one Click-Dog instance per ClickHouse
+node. Each instance reads only its <strong>local</strong> <code>system.opentelemetry_span_log</code>;
+the partitions are disjoint by host, so the union gives full cluster coverage
+with zero coordination. This is the topology that distributes the expensive
+cluster-wide read. Each instance has minimal permissions and generates minimal
+load. No Keeper, no leader election. Deploy the same config once per node.</p>
+<p><strong>Cluster (<code>use_cluster_queries: true</code>):</strong> A Click-Dog instance reads the
+<strong>whole cluster</strong> by wrapping the span query as
+<code>cluster('cluster_name', system.opentelemetry_span_log)</code> (one replica per shard).
+Requires the ClickHouse user to have cross-node query permissions and network
+access to all nodes, and a non-empty <code>cluster:</code> name. Cluster mode is <strong>always
+leader-gated</strong> (see below): run <strong>1</strong> instance (the leader of an election of
+one) or <strong>2–3</strong> for automatic failover. Adding instances doesn't divvy up the
+read — they <strong>stand by</strong> behind one active exporter.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cluster</code></td>
+<td>—</td>
+<td>Cluster name. Required when <code>use_cluster_queries</code> is <code>true</code></td>
+</tr>
+<tr>
+<td><code>use_cluster_queries</code></td>
+<td><code>false</code></td>
+<td>When <code>true</code>, uses <code>cluster('name', table)</code> to read one replica per shard across the cluster (<strong>cluster</strong> topology). When <code>false</code>, reads only this node's local tables (<strong>sidecar</strong> topology). Optional normalized query attributes are enabled in cluster query mode only after <code>clusterAllReplicas('name', system.columns)</code> verifies every replica exposes <code>normalized_query_hash</code>; mixed or unknown clusters keep the safe fallback</td>
+</tr>
+</tbody>
+</table>
+<h4 id="cluster-mode-is-always-leader-gated">Cluster mode is always leader-gated<a class="headerlink" href="#cluster-mode-is-always-leader-gated" title="Permanent link">&para;</a></h4>
+<p>In cluster mode the fetch/export cycle runs <strong>only on the election leader</strong>;
+other instances stand by (recorded as skipped cycles, so a standby's
+last-success gauge legitimately stays at zero). The rule is <strong>export iff no
+election is active, or this instance is the leader</strong> — so:</p>
+<ul>
+<li>A <strong>single</strong> cluster reader with <strong>no Keeper</strong> configured is valid and common:
+  no election starts, so it always exports (no regression for existing
+  <code>use_cluster_queries: true</code> users).</li>
+<li>With <strong>Keeper</strong> (2–3 instances), one is elected leader and exports; the rest
+  defer. On leader loss a standby promotes within ~one Keeper session TTL (≤10s)
+  and re-reads from <code>now - lookback</code>, so the only overlap at failover is a
+  deduped re-send — never a permanent gap.</li>
+<li>Leader election is driven <strong>solely by the presence of <code>ha.keeper.hosts</code></strong> —
+  there is no separate enable flag. Configure Keeper hosts and instances
+  coordinate (only the leader exports); omit them and each instance runs
+  standalone. This is uniform across topologies: a cluster reader or a sidecar
+  fleet both opt into coordination the same way.</li>
+</ul>
+<p>The delivery contract is <strong>best-effort, deduplicated downstream by
+<code>(trace_id, span_id)</code></strong> → effectively-once at the backend. The guarantee is
+"<strong>no steady-state duplication</strong>," not "never duplicates": under a healthy
+Keeper exactly one leader exports. Every Keeper disruption after an instance has
+joined <strong>fails open</strong> — a session loss, reconnect, partition, or watch error
+drops candidate state so the instance keeps exporting (rather than stalling as a
+gated standby), and the election goroutine retries until it rejoins. The
+resulting duplicate window is therefore <strong>bounded</strong> and recovers to a single
+exporter when Keeper returns. (Keeper unreachable <em>at startup</em>, before any join,
+is the one exception: that instance runs standalone until restarted.) Click-Dog
+does <strong>not</strong> fail closed — it prefers availability.</p>
+<div class="admonition note">
+<p class="admonition-title">Pick one topology per fleet</p>
+<p>Don't run per-node sidecars with <code>use_cluster_queries: true</code>. Leader-gating
+now prevents steady-state duplication when those instances share an
+election, but sidecars that are <strong>not</strong> sharing an election (different
+<code>base_path</code>, or no Keeper) would each go cluster-wide and duplicate. If you
+want whole-cluster reads, run <strong>cluster</strong> mode with a shared Keeper; if you
+want one reader per node, leave <code>use_cluster_queries</code> off. See
+<a href="../operating/#cluster-topology-and-sidecar-placement">Operating · Cluster topology</a>.</p>
+<p>This is no longer <strong>only</strong> documented: when <code>use_cluster_queries: true</code>,
+click-dog runs an in-process <strong>topology self-audit</strong> that detects more than
+one instance doing whole-cluster reads and surfaces it via the
+<code>click_dog_topology_warning</code> metric, the <code>/status</code> <code>topology_warning</code> field,
+a throttled WARN log, and the Datadog health dashboard. It is
+observability-only — it never gates readiness or de-rotates a node — and is a
+backstop for the case leader-gating can't reach (instances not sharing an
+election). See <a href="#topology-self-audit"><code>monitor.topology_audit</code></a> below.</p>
+</div>
+<h3 id="topology-self-audit">Topology self-audit<a class="headerlink" href="#topology-self-audit" title="Permanent link">&para;</a></h3>
+<p>When <code>clickhouse.use_cluster_queries: true</code>, click-dog periodically checks
+whether more than one instance is running whole-cluster span reads — the sidecar
++ <code>use_cluster_queries</code> anti-pattern that causes N× duplicate exports. It is a
+hard <strong>no-op</strong> unless this instance itself uses cluster queries (zero cost for
+the default per-node sidecar topology), and is <strong>observability-only</strong>: it emits
+the <code>click_dog_topology_warning{reason}</code> gauge, the <code>/status</code> <code>topology_warning</code>
+field, and a throttled WARN, but never affects <code>/readyz</code> or <code>/healthz</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>monitor.topology_audit.enabled</code></td>
+<td><code>true</code></td>
+<td>Enable the self-audit (still a no-op unless <code>use_cluster_queries</code> is on)</td>
+</tr>
+<tr>
+<td><code>monitor.topology_audit.interval_s</code></td>
+<td><code>300</code></td>
+<td>Audit tick interval in seconds</td>
+</tr>
+<tr>
+<td><code>monitor.topology_audit.debounce_count</code></td>
+<td><code>2</code></td>
+<td>Consecutive positive ticks before a warning latches (absorbs rollout/restart transients)</td>
+</tr>
+<tr>
+<td><code>monitor.topology_audit.query_log_lookback_minutes</code></td>
+<td><code>15</code></td>
+<td>Window of <code>system.query_log</code> scanned for distinct cluster readers</td>
+</tr>
+</tbody>
+</table>
+<p>First detection lands roughly <code>interval_s × debounce_count</code> after a misconfig
+appears — <strong>~10 minutes at the defaults</strong>. Lower <code>interval_s</code> for faster
+detection. The <code>reason</code> label is <code>sidecar_cluster_queries</code> when this instance's
+<code>clickhouse.host</code> is loopback (co-located sidecars) and
+<code>multi_instance_cluster_queries</code> otherwise (separate readers not sharing an
+election).</p>
+<blockquote>
+<p><strong>Keep <code>interval_s</code> well above the poll cadence.</strong> The auditor counts a host as
+a live cluster reader only if its most recent whole-cluster read falls inside a
+recency window it derives from <code>monitor.check_interval_s</code>, capped at
+<code>interval_s / 2</code>. If you raise <code>check_interval_s</code> past <code>interval_s / 2</code>, that cap
+drops the window <em>below</em> the poll cadence, so a genuinely-concurrent reader —
+which only reads once per <code>check_interval_s</code> — can fall outside it between ticks:
+the misconfig goes undetected, or the warning flaps. Keep
+<code>interval_s ≥ 6 × check_interval_s</code> to preserve the full window. click-dog emits a
+load-time <code>WARN</code> when this combination is detected.</p>
+</blockquote>
+<h3 id="connection-pool">Connection Pool<a class="headerlink" href="#connection-pool" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>max_open_conns</code></td>
+<td><code>2</code></td>
+<td>Maximum number of open connections</td>
+</tr>
+<tr>
+<td><code>max_idle_conns</code></td>
+<td><code>1</code></td>
+<td>Maximum number of idle connections</td>
+</tr>
+<tr>
+<td><code>query_timeout_s</code></td>
+<td><code>30</code></td>
+<td>Query timeout in seconds. Prevents runaway queries</td>
+</tr>
+<tr>
+<td><code>max_memory_usage</code></td>
+<td><code>104857600</code></td>
+<td>Per-query memory limit in bytes (100 MB). Prevents a single monitoring query from consuming excessive memory</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="otel-exporter">OTEL Exporter<a class="headerlink" href="#otel-exporter" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">exporters</span><span class="p">:</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">otel</span><span class="p">:</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">collector_address</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">localhost:4317</span><span class="w">  </span><span class="c1"># OTEL collector gRPC address</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">      </span><span class="nt">service_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">click-dog-monitor</span><span class="w">     </span><span class="c1"># Service name in traces</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">      </span><span class="nt">max_query_length</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100000</span><span class="w">     </span><span class="c1"># Truncate queries longer than this (default: 100000)</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">      </span><span class="c1"># TLS</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">      </span><span class="nt">secure</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">                </span><span class="c1"># Enable TLS for gRPC (default: false)</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">      </span><span class="nt">insecure_skip_verify</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">  </span><span class="c1"># Skip cert verification (TESTING ONLY)</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">      </span><span class="nt">ca_cert</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w">                  </span><span class="c1"># Path to CA cert</span>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">      </span><span class="nt">client_cert</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w">              </span><span class="c1"># Client cert for mTLS</span>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="w">      </span><span class="nt">client_key</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w">               </span><span class="c1"># Client key for mTLS</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>collector_address</code></td>
+<td>—</td>
+<td>OTEL collector gRPC endpoint (e.g., <code>localhost:4317</code>)</td>
+</tr>
+<tr>
+<td><code>service_name</code></td>
+<td><code>click-dog-monitor</code></td>
+<td>Service name that appears in traces</td>
+</tr>
+<tr>
+<td><code>max_query_length</code></td>
+<td><code>100000</code></td>
+<td>Truncate SQL query text longer than this in exported spans. <code>0</code> or omitted is coerced to the <code>100000</code> default; the limit is not disabled at config load</td>
+</tr>
+<tr>
+<td><code>secure</code></td>
+<td><code>false</code></td>
+<td>Enable TLS for the gRPC connection</td>
+</tr>
+<tr>
+<td><code>insecure_skip_verify</code></td>
+<td><code>false</code></td>
+<td>Skip TLS cert verification. <strong>Insecure</strong></td>
+</tr>
+<tr>
+<td><code>ca_cert</code></td>
+<td>—</td>
+<td>CA certificate path for TLS verification</td>
+</tr>
+<tr>
+<td><code>client_cert</code></td>
+<td>—</td>
+<td>Client certificate for mutual TLS (mTLS). Must be used with <code>client_key</code></td>
+</tr>
+<tr>
+<td><code>client_key</code></td>
+<td>—</td>
+<td>Client key for mTLS. Must be used with <code>client_cert</code></td>
+</tr>
+</tbody>
+</table>
+<div class="admonition note">
+<p class="admonition-title">Authentication</p>
+<p>Click-Dog supports TLS and mTLS for the gRPC connection. It does not currently support bearer tokens, API keys, or custom gRPC metadata headers. If your OTEL collector requires header-based auth, place an authenticating proxy in front of it or use mTLS for client authentication.</p>
+</div>
+<h3 id="multiple-export-backends">Multiple Export Backends<a class="headerlink" href="#multiple-export-backends" title="Permanent link">&para;</a></h3>
+<p>The <code>exporters</code> section accepts any number of OTLP/gRPC sinks under <code>exporters.otel[]</code>, and can be combined with Splunk HEC under <code>exporters.splunk_hec[]</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nt">exporters</span><span class="p">:</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">otel</span><span class="p">:</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">collector_address</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">primary-collector:4317</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">      </span><span class="nt">service_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">click-dog-monitor</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">collector_address</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">backup-collector:4317</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">      </span><span class="nt">service_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">clickdog-backup</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span><span class="nt">splunk_hec</span><span class="p">:</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">endpoint</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">https://splunk.internal:8088</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">      </span><span class="nt">token</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${SPLUNK_HEC_TOKEN}</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">      </span><span class="nt">index</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">clickhouse</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="w">      </span><span class="nt">source</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">click-dog</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="w">      </span><span class="nt">source_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">_json</span>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="w">      </span><span class="nt">allow_insecure_http</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="w">      </span><span class="nt">max_query_length</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100000</span>
+</code></pre></div>
+<p>Each <code>exporters.splunk_hec[]</code> entry takes a Splunk HTTP Event Collector endpoint, a token (env-expandable), and optional <code>index</code>, <code>source</code>, <code>source_type</code>, <code>max_query_length</code>, and TLS fields. Use <code>https://</code> endpoints by default because the HEC token is sent in the <code>Authorization</code> header; <code>http://</code> endpoints are accepted only when <code>allow_insecure_http: true</code> is set explicitly for local, development, or test HEC receivers. The token can also be supplied via <code>token_file</code> (a path, itself <code>${VAR}</code>-expandable, read at load with one trailing newline — CRLF or LF — trimmed) to keep it out of the process environment; <code>token</code> and <code>token_file</code> are mutually exclusive.</p>
+<p>When more than one exporter is configured, spans are sent to all backends sequentially under the default <strong><code>PolicyAllRequired</code></strong> contract: any backend failure — partial or total — is treated as a real export error. The cycle is marked an error (<code>click_dog_cycle_results_total{result="error"}</code>), feeds the circuit breaker and adaptive backoff, and shows up as the most recent error on <code>/status</code> and <code>/readyz</code>. The per-sink counters (<code>click_dog_export_{attempts,accepted,errors}_total{sink}</code>) plus warning log summaries surface exactly which backend failed, so a dead sink can't silently drop out of the fan-out.</p>
+<p>A span is marked as "seen" in the dedup cache only if <strong>every</strong> backend accepts it. If any backend fails, no span from that batch is marked seen, and the next cycle re-delivers the full batch to <em>every</em> sink. Backends that already accepted those spans will see the same <code>(trace_id, span_id)</code> pair again — accepted by design as an at-least-once delivery trade-off. OTEL collectors and trace backends can deduplicate by that identity; Splunk HEC receives the same stable IDs, but duplicate collapse depends on downstream Splunk searches or index-time posture. The same contract applies to backfill mode: a partial multi-sink failure counts the query as <code>Failed</code> in the run summary, the process exits non-zero, and re-running the window re-delivers to every sink.</p>
+<p>An alternate <code>PolicyAnySuccess</code> policy exists in code — spans are marked seen as soon as one sink accepts them, while failed sinks remain visible through <code>ExportResult</code> and the per-sink metrics. It is not exposed via YAML today; production configs use the strict default policy. The per-call deadline applied to every backend in the fan-out is <code>monitor.export_timeout_s</code> (see <a href="#monitor">Monitor</a> below).</p>
+<hr />
+<h2 id="high-availability">High Availability<a class="headerlink" href="#high-availability" title="Permanent link">&para;</a></h2>
+<p>Leader election via ClickHouse Keeper for multi-node deployments. <strong>Configuring
+<code>keeper.hosts</code> is what turns election on</strong> — there is no separate enable flag.
+Omit the <code>ha</code> block entirely and each instance runs standalone.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nt">ha</span><span class="p">:</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">keeper</span><span class="p">:</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="nt">hosts</span><span class="p">:</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">keeper-01:9181</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">keeper-02:9181</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">keeper-03:9181</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">    </span><span class="nt">secure</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">                 </span><span class="c1"># Enable TLS to Keeper (default: false)</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">    </span><span class="nt">session_timeout_s</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span><span class="w">        </span><span class="c1"># Session timeout (default: 10, range: 5-30)</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">    </span><span class="nt">base_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/click-dog/election</span><span class="w">  </span><span class="c1"># Znode path prefix</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">    </span><span class="c1"># auth_user: &quot;&quot;              # Optional digest auth</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">    </span><span class="c1"># auth_password: &quot;&quot;          # Optional digest auth</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>keeper.hosts</code></td>
+<td>—</td>
+<td>ClickHouse Keeper (ZooKeeper-compatible) endpoints. <strong>Presence enables leader election</strong>; empty/omitted means standalone</td>
+</tr>
+<tr>
+<td><code>keeper.secure</code></td>
+<td><code>false</code></td>
+<td>Enable TLS for the Keeper connection. Use with Keeper digest auth on untrusted networks so credentials are not sent in plaintext</td>
+</tr>
+<tr>
+<td><code>keeper.session_timeout_s</code></td>
+<td><code>10</code></td>
+<td>Session timeout in seconds. Must be 5-30</td>
+</tr>
+<tr>
+<td><code>keeper.base_path</code></td>
+<td><code>/click-dog/election</code></td>
+<td>Znode path prefix. Must be exactly <code>/click-dog</code> or under <code>/click-dog/</code>; paths overlapping ClickHouse's own Keeper paths (<code>/clickhouse...</code>) are rejected</td>
+</tr>
+<tr>
+<td><code>keeper.auth_user</code></td>
+<td>—</td>
+<td>Optional digest authentication username (supports <code>${ENV}</code> expansion)</td>
+</tr>
+<tr>
+<td><code>keeper.auth_password</code></td>
+<td>—</td>
+<td>Optional digest authentication password (supports <code>${ENV}</code> expansion). Mutually exclusive with <code>keeper.auth_password_file</code></td>
+</tr>
+<tr>
+<td><code>keeper.auth_password_file</code></td>
+<td>—</td>
+<td>Path to a file holding the digest auth password (read at load; one trailing newline — CRLF or LF — trimmed). Path supports <code>${VAR}</code> expansion. Mutually exclusive with <code>keeper.auth_password</code></td>
+</tr>
+</tbody>
+</table>
+<p>Each click-dog instance creates an ephemeral sequential znode. The lowest sequence number becomes leader. When the leader dies, its session expires, the znode is deleted, and the next candidate auto-promotes (~10 seconds failover).</p>
+<p>When <code>keeper.auth_user</code> is omitted, election znodes use Keeper world ACLs; click-dog emits a startup warning so that choice is visible. Configure digest auth for shared Keeper ensembles, and set <code>keeper.secure: true</code> when Keeper supports TLS.</p>
+<div class="admonition note">
+<p class="admonition-title">Leader gating depends on topology</p>
+<p>In <strong>cluster</strong> mode (<code>use_cluster_queries: true</code>), leadership gates the data path: only the leader fetches and exports; standbys skip each cycle (recorded as a skipped cycle, no export) so the cluster's spans aren't duplicated. In <strong>sidecar</strong> mode each instance reads its own node's disjoint local scope and always exports regardless of leader status — there leadership only drives coordination duties (flush, <code>/clusterz</code>). Either way, configuring <code>ha.keeper.hosts</code> is what activates election.</p>
+</div>
+<p>If Keeper is unreachable at startup, click-dog logs a warning and falls back to standalone mode — it continues exporting normally without leader election.</p>
+<hr />
+<h2 id="monitor">Monitor<a class="headerlink" href="#monitor" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nt">monitor</span><span class="p">:</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">                </span><span class="c1"># Enable scheduled monitoring (default: true)</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="c1"># Duration thresholds (milliseconds)</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nt">min_trace_duration_ms</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1000</span><span class="w">  </span><span class="c1"># Find traces with spans &gt;= this (required)</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="nt">min_span_duration_ms</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span><span class="w">      </span><span class="c1"># Only export spans &gt;= this (0 = all)</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span><span class="nt">max_trace_duration_ms</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span><span class="w">     </span><span class="c1"># Skip traces with spans &gt; this (0 = no limit)</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">  </span><span class="nt">max_span_duration_ms</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span><span class="w">      </span><span class="c1"># Skip spans &gt; this (0 = no limit)</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">  </span><span class="nt">max_query_length</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100000</span><span class="w">     </span><span class="c1"># Skip queries with SQL &gt; this chars (see also exporters.otel[].max_query_length which truncates instead)</span>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a>
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="w">  </span><span class="c1"># Polling</span>
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="w">  </span><span class="nt">check_interval_s</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30</span><span class="w">         </span><span class="c1"># Polling interval in seconds</span>
+<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="w">  </span><span class="nt">lookback_s</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">40</span><span class="w">               </span><span class="c1"># How far back to look (default: check_interval_s + lookback_buffer_s)</span>
+<a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a><span class="w">  </span><span class="nt">lookback_buffer_s</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span><span class="w">        </span><span class="c1"># Extra seconds added when defaulting lookback_s (default: 10)</span>
+<a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a>
+<a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a><span class="w">  </span><span class="c1"># Rate limiting</span>
+<a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a><span class="w">  </span><span class="nt">max_spans_per_cycle</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1000</span><span class="w">    </span><span class="c1"># Max spans fetched and exported per polling cycle (default: 1000)</span>
+<a id="__codelineno-6-19" name="__codelineno-6-19" href="#__codelineno-6-19"></a>
+<a id="__codelineno-6-20" name="__codelineno-6-20" href="#__codelineno-6-20"></a><span class="w">  </span><span class="c1"># Batch processing</span>
+<a id="__codelineno-6-21" name="__codelineno-6-21" href="#__codelineno-6-21"></a><span class="w">  </span><span class="nt">batch_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span><span class="w">                </span><span class="c1"># Batch size (0 = no batching)</span>
+<a id="__codelineno-6-22" name="__codelineno-6-22" href="#__codelineno-6-22"></a><span class="w">  </span><span class="nt">batch_delay_ms</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span><span class="w">            </span><span class="c1"># Delay between batches (0 = no delay)</span>
+<a id="__codelineno-6-23" name="__codelineno-6-23" href="#__codelineno-6-23"></a><span class="w">  </span><span class="nt">export_timeout_s</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30</span><span class="w">         </span><span class="c1"># Per-call exporter deadline in seconds (0 disables)</span>
+<a id="__codelineno-6-24" name="__codelineno-6-24" href="#__codelineno-6-24"></a>
+<a id="__codelineno-6-25" name="__codelineno-6-25" href="#__codelineno-6-25"></a><span class="w">  </span><span class="c1"># Deduplication</span>
+<a id="__codelineno-6-26" name="__codelineno-6-26" href="#__codelineno-6-26"></a><span class="w">  </span><span class="nt">dedup_cache_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10000</span><span class="w">      </span><span class="c1"># LRU cache entries (default: 10000)</span>
+</code></pre></div>
+<h3 id="duration-filtering">Duration Filtering<a class="headerlink" href="#duration-filtering" title="Permanent link">&para;</a></h3>
+<p>Click-Dog uses a two-tier duration filtering approach:</p>
+<ol>
+<li><strong>Trace-level</strong> (<code>min_trace_duration_ms</code> / <code>max_trace_duration_ms</code>): Find traces that contain at least one span within this duration range</li>
+<li><strong>Span-level</strong> (<code>min_span_duration_ms</code> / <code>max_span_duration_ms</code>): From those traces, only export individual spans within this duration range</li>
+</ol>
+<p>All duration filtering happens in SQL for maximum efficiency.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>enabled</code></td>
+<td><code>true</code></td>
+<td>Enable scheduled monitoring. Set <code>false</code> for backfill-only usage</td>
+</tr>
+<tr>
+<td><code>min_trace_duration_ms</code></td>
+<td>—</td>
+<td><strong>Required.</strong> Find traces containing spans &gt;= this duration (ms)</td>
+</tr>
+<tr>
+<td><code>min_span_duration_ms</code></td>
+<td><code>0</code></td>
+<td>Only export spans &gt;= this (ms). <code>0</code> = export all spans from matching traces</td>
+</tr>
+<tr>
+<td><code>max_trace_duration_ms</code></td>
+<td><code>0</code></td>
+<td>Skip traces with spans &gt; this (ms). <code>0</code> = no upper limit</td>
+</tr>
+<tr>
+<td><code>max_span_duration_ms</code></td>
+<td><code>0</code></td>
+<td>Skip individual spans &gt; this (ms). <code>0</code> = no upper limit</td>
+</tr>
+<tr>
+<td><code>max_query_length</code></td>
+<td><code>100000</code></td>
+<td>Skip queries with SQL text longer than this (chars) and truncate live <code>query_log.normalized_query</code> previews to this length. <code>0</code> or omitted is coerced to the <code>100000</code> default; the limit is not disabled at config load. Different from <code>exporters.otel[].max_query_length</code> which truncates at export time</td>
+</tr>
+</tbody>
+</table>
+<h3 id="polling">Polling<a class="headerlink" href="#polling" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>check_interval_s</code></td>
+<td><code>30</code></td>
+<td>How often to poll ClickHouse (seconds). Must be greater than 0 when <code>enabled</code> is true</td>
+</tr>
+<tr>
+<td><code>lookback_s</code></td>
+<td><code>check_interval_s + lookback_buffer_s</code></td>
+<td>How far back to look for spans. Defaults to interval + the buffer below, to avoid gaps between polls. Overlapping spans are caught by the dedup cache and skipped before export — they do not count against <code>max_spans_per_cycle</code>. Set this explicitly to override the computed default</td>
+</tr>
+<tr>
+<td><code>lookback_buffer_s</code></td>
+<td><code>10</code></td>
+<td>Seconds added to <code>check_interval_s</code> when computing the default <code>lookback_s</code>. Absorbs clock skew and slow poll cycles; increase under high load if you see missed spans. Ignored when <code>lookback_s</code> is set explicitly</td>
+</tr>
+</tbody>
+</table>
+<h3 id="rate-limiting-batching">Rate Limiting &amp; Batching<a class="headerlink" href="#rate-limiting-batching" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>max_spans_per_cycle</code></td>
+<td><code>1000</code></td>
+<td>Maximum number of <strong>spans</strong> fetched and exported per polling cycle. Applied as a SQL <code>LIMIT</code> on the spans query (and as an upper bound on the trace ID query, since each trace contributes at least one span). When the cap is hit, a trace can be exported in pieces across cycles: the lookback overlap re-selects the same trace next cycle and the dedup cache skips already-exported spans, so the remainder is exported as long as the trace stays within <code>lookback_s</code>. Spans that are still in flight when their trace ages out of the lookback window are dropped. A <code>debug</code>-level log line reports the total span count per cycle. The absolute ceiling is <code>100000</code> spans per cycle to bound memory; the spans query clamps to it, and config validation rejects larger values at load</td>
+</tr>
+<tr>
+<td><code>batch_size</code></td>
+<td><code>0</code></td>
+<td>Process spans in batches of this size. <code>0</code> = process all at once</td>
+</tr>
+<tr>
+<td><code>batch_delay_ms</code></td>
+<td><code>0</code></td>
+<td>Milliseconds to wait between batches. <code>0</code> = no delay</td>
+</tr>
+<tr>
+<td><code>export_timeout_s</code></td>
+<td><code>30</code></td>
+<td>Per-call deadline for exporter calls. Applies to live span batches, backfill query exports, and degraded-mode canary span exports so a stuck collector fails into the normal retry, backoff, and circuit-breaker path. Set to <code>0</code> to disable the client-side export deadline</td>
+</tr>
+<tr>
+<td><code>dedup_cache_size</code></td>
+<td><code>10000</code></td>
+<td>Size of the LRU cache for span deduplication, keyed by the composite OTLP span identity <code>(trace_id, span_id)</code>. OTLP span IDs are only unique within a trace, so dedup must include the trace ID; a span-id-only cache would silently drop sibling spans in different traces that collide on the 64-bit ID. Each entry's <code>SpanKey</code> is 24 B (16 B trace_id + 8 B span_id), but the LRU container adds doubly-linked-list pointers and a map bucket, so the practical cost is ~80–100 B per entry on 64-bit. 10,000 entries ≈ 1 MiB. Memory scales linearly. Increase for high-throughput scenarios. The cache is in-memory only; after a restart, spans still inside <code>lookback_s</code> are re-exported once and deduped downstream by collectors</td>
+</tr>
+<tr>
+<td><code>extract_log_comment</code></td>
+<td><code>true</code></td>
+<td>Extract <code>log_comment</code> from URI attributes and promote JSON keys as span attributes prefixed with <code>log_comment.</code>. See <a href="../span-attributes/#log_comment-extraction">Span Attributes</a></td>
+</tr>
+<tr>
+<td><code>enrich_from_query_log</code></td>
+<td><code>true</code></td>
+<td>Enrich spans with metadata from <code>system.query_log</code> (user, client, tables, query stats) by joining on <code>query_id</code> (from the <code>clickhouse.query_id</code> span attribute). <strong>Note:</strong> includes <code>query_log.user</code>, <code>query_log.client_address</code>, and <code>query_log.client_hostname</code> which may contain PII/internal network info — see <a href="../span-attributes/#query_log-enrichment">privacy note</a>. See <a href="../span-attributes/#query_log-enrichment">Span Attributes</a></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="circuit-breaker">Circuit Breaker<a class="headerlink" href="#circuit-breaker" title="Permanent link">&para;</a></h2>
+<p>Protects ClickHouse by stopping queries after repeated failures.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nt">monitor</span><span class="p">:</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">circuit_breaker</span><span class="p">:</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">             </span><span class="c1"># Enable circuit breaker (default: false)</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">    </span><span class="nt">failure_threshold</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span><span class="w">       </span><span class="c1"># Open after N consecutive failures</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">    </span><span class="nt">success_threshold</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span><span class="w">       </span><span class="c1"># Close after N successes in half-open state</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">    </span><span class="nt">reset_timeout_s</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">60</span><span class="w">        </span><span class="c1"># Try again after N seconds when open</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>enabled</code></td>
+<td><code>false</code></td>
+<td>Enable the circuit breaker. Note: the <a href="../install/">install script</a> enables this by default in generated configs</td>
+</tr>
+<tr>
+<td><code>failure_threshold</code></td>
+<td><code>3</code></td>
+<td>Number of consecutive failures before opening the circuit</td>
+</tr>
+<tr>
+<td><code>success_threshold</code></td>
+<td><code>1</code></td>
+<td>Number of successful requests needed in half-open state to close the circuit</td>
+</tr>
+<tr>
+<td><code>reset_timeout_s</code></td>
+<td><code>60</code></td>
+<td>Seconds to wait before transitioning from open to half-open</td>
+</tr>
+</tbody>
+</table>
+<p>See <a href="../resilience/">Resilience</a> for details on circuit breaker behavior.</p>
+<hr />
+<h2 id="adaptive-backoff">Adaptive Backoff<a class="headerlink" href="#adaptive-backoff" title="Permanent link">&para;</a></h2>
+<p>Increases polling interval when errors occur, reducing load on a struggling ClickHouse.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nt">monitor</span><span class="p">:</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">backoff</span><span class="p">:</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">             </span><span class="c1"># Enable adaptive backoff (default: false)</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">    </span><span class="nt">max_interval_s</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">300</span><span class="w">        </span><span class="c1"># Maximum polling interval (default: 300 = 5 min)</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">    </span><span class="nt">backoff_factor</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2.0</span><span class="w">        </span><span class="c1"># Multiply interval on failure (default: 2.0)</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>enabled</code></td>
+<td><code>false</code></td>
+<td>Enable adaptive backoff. Note: the <a href="../install/">install script</a> enables this by default in generated configs</td>
+</tr>
+<tr>
+<td><code>max_interval_s</code></td>
+<td><code>300</code></td>
+<td>Maximum polling interval in seconds (5 minutes)</td>
+</tr>
+<tr>
+<td><code>backoff_factor</code></td>
+<td><code>2.0</code></td>
+<td>Multiply the current interval by this factor on each failure</td>
+</tr>
+</tbody>
+</table>
+<p>See <a href="../resilience/">Resilience</a> for details on backoff behavior.</p>
+<hr />
+<h2 id="filters">Filters<a class="headerlink" href="#filters" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nt">filters</span><span class="p">:</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">whitelist_operations</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[]</span><span class="w">     </span><span class="c1"># Operation names to INCLUDE (supports * wildcard)</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="nt">blacklist_operations</span><span class="p">:</span><span class="w">        </span><span class="c1"># Operation name substrings to EXCLUDE at SQL level</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;MergeTreeIndex&quot;</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;VFSWrite&quot;</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">  </span><span class="nt">whitelist_ips</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[]</span><span class="w">            </span><span class="c1"># IP addresses to INCLUDE</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">  </span><span class="nt">whitelist_users</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[]</span><span class="w">          </span><span class="c1"># ClickHouse users to INCLUDE (strict — drops spans with unknown user)</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">  </span><span class="nt">blacklist_users</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[]</span><span class="w">          </span><span class="c1"># ClickHouse users to EXCLUDE (defense-in-depth alongside CH user grants)</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="w">  </span><span class="nt">blacklist_queries</span><span class="p">:</span><span class="w">           </span><span class="c1"># Regex patterns to EXCLUDE</span>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;^SELECT</span><span class="nv"> </span><span class="s">\\*</span><span class="nv"> </span><span class="s">FROM</span><span class="nv"> </span><span class="s">system\\.&quot;</span>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;SHOW</span><span class="nv"> </span><span class="s">TABLES&quot;</span>
+<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;(?i)healthcheck&quot;</span>
+<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="w">  </span><span class="nt">redact_queries</span><span class="p">:</span><span class="w">              </span><span class="c1"># Regex replacements applied before export</span>
+<a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">pattern</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;(?i)identified\\s+by\\s+&#39;[^&#39;]*&#39;&quot;</span>
+<a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a><span class="w">      </span><span class="nt">replacement</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;IDENTIFIED</span><span class="nv"> </span><span class="s">BY</span><span class="nv"> </span><span class="s">&#39;[REDACTED]&#39;&quot;</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>whitelist_operations</code></td>
+<td><code>[]</code></td>
+<td>If set, only export spans with matching operation names. Supports <code>*</code> wildcard (e.g., <code>DB::Interpreter*::execute()</code>)</td>
+</tr>
+<tr>
+<td><code>blacklist_operations</code></td>
+<td><code>[]</code></td>
+<td>Substring patterns matched against <code>operation_name</code>. Pushed down to ClickHouse as <code>NOT LIKE '%pattern%'</code> so matching spans are never fetched. Use this to drop high-volume internal pipeline spans (<code>MergeTreeIndex</code>, <code>VFSWrite</code>, etc.) without affecting query-level spans</td>
+</tr>
+<tr>
+<td><code>whitelist_ips</code></td>
+<td><code>[]</code></td>
+<td>If set, only export spans from these client IP addresses. Entries may be exact IPs (<code>10.0.1.50</code>) or CIDR ranges (<code>10.0.0.0/8</code>)</td>
+</tr>
+<tr>
+<td><code>whitelist_users</code></td>
+<td><code>[]</code></td>
+<td>If set, only export spans whose <code>query_log.user</code> is on the list. Pushed down to enrichment SQL as <code>AND user IN (...)</code> and re-checked per span. Strict — spans with an unresolvable user are dropped</td>
+</tr>
+<tr>
+<td><code>blacklist_users</code></td>
+<td><code>[]</code></td>
+<td>Never export spans whose <code>query_log.user</code> is on the list. Enforced at the Go layer for the span path (pushing it to enrichment SQL would strip the user and let blacklisted spans bypass the check); pushed down to SQL on the slow-query / backfill path</td>
+</tr>
+<tr>
+<td><code>blacklist_queries</code></td>
+<td><code>[]</code></td>
+<td>Regex patterns matched against SQL query text. Matching spans are excluded</td>
+</tr>
+<tr>
+<td><code>redact_queries[].pattern</code></td>
+<td>—</td>
+<td>Regex pattern matched against SQL query text after blacklist filtering and before export. Required when a redaction rule is present</td>
+</tr>
+<tr>
+<td><code>redact_queries[].replacement</code></td>
+<td><code>[REDACTED]</code></td>
+<td>Replacement text used for matches. Empty or omitted uses the default replacement</td>
+</tr>
+</tbody>
+</table>
+<p>Note: <code>blacklist_operations</code> runs at the SQL level <em>before</em> data is fetched. <code>whitelist_operations</code> runs <em>after</em> fetch in Go. The blacklist always takes precedence because matching spans never reach the whitelist check.</p>
+<p>See <a href="../filtering/">Filtering</a> for detailed examples and evaluation order.</p>
+<hr />
+<h2 id="logging">Logging<a class="headerlink" href="#logging" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nt">log_level</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">info</span><span class="w">                </span><span class="c1"># debug, info, warn, error (default: info)</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="nt">log_file</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w">                   </span><span class="c1"># Log file path (default: stderr)</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="nt">log_format</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">text</span><span class="w">               </span><span class="c1"># text or json (default: text)</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="nt">log_rotation</span><span class="p">:</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">  </span><span class="nt">max_size_mb</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100</span><span class="w">             </span><span class="c1"># Rotate when the active file passes this size (default: 100; must be &gt;= 1)</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">  </span><span class="nt">max_files</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span><span class="w">                 </span><span class="c1"># Keep this many rotated files (default: 3; must be &gt;= 1)</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>log_level</code></td>
+<td><code>info</code></td>
+<td>Log verbosity: <code>debug</code>, <code>info</code>, <code>warn</code>, <code>error</code></td>
+</tr>
+<tr>
+<td><code>log_file</code></td>
+<td>—</td>
+<td>Optional file path. If empty, logs go to stderr (container-friendly)</td>
+</tr>
+<tr>
+<td><code>log_format</code></td>
+<td><code>text</code></td>
+<td>Output format: <code>text</code> (human-readable) or <code>json</code> (structured). JSON emits <code>{"ts":"...","level":"...","msg":"..."}</code></td>
+</tr>
+<tr>
+<td><code>log_rotation.max_size_mb</code></td>
+<td><code>100</code></td>
+<td>Rotation threshold per file. <strong>Omit</strong> the key to take the default; an explicit <code>0</code> is rejected (would disable rotation and produce unbounded growth).</td>
+</tr>
+<tr>
+<td><code>log_rotation.max_files</code></td>
+<td><code>3</code></td>
+<td>Number of rotated files to retain. Must be <code>&gt;= 1</code>.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="log-file-permissions">Log file permissions<a class="headerlink" href="#log-file-permissions" title="Permanent link">&para;</a></h3>
+<p>When <code>log_file</code> is set, click-dog creates the file with mode <strong><code>0640</code></strong>
+(owner: read/write, group: read, world: none). Operational metadata —
+client IPs, operation names, error traces — is sensitive enough to keep
+off world-readable storage but the service group still needs read access
+for log shipping.</p>
+<p>If a separate log-shipping agent runs alongside click-dog (Filebeat,
+Fluent Bit node agent, journald forwarder, Vector, Promtail, etc.) under
+a <strong>different UID</strong>, that agent must be in the click-dog service user's
+<strong>group</strong> for log shipping to work. Otherwise the agent will silently
+fail to read rotated files. Typical setup:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># Add the log shipper&#39;s user to click-dog&#39;s group</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>usermod<span class="w"> </span>-aG<span class="w"> </span>click-dog<span class="w"> </span>filebeat
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>systemctl<span class="w"> </span>restart<span class="w"> </span>filebeat
+</code></pre></div>
+<p>Earlier releases created the log file with mode <code>0644</code> (world-readable).
+Upgrading deployments that relied on an unprivileged log shipper reading
+the file via the world bit will need to adjust group membership as
+above.</p>
+<hr />
+<h2 id="metrics">Metrics<a class="headerlink" href="#metrics" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nt">metrics</span><span class="p">:</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">                          </span><span class="c1"># Enable scrape + admin endpoints</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span><span class="nt">listen_address</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;:9090&quot;</span><span class="w">                 </span><span class="c1"># Scrape listener — /metrics + legacy /health (default: :9090)</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">  </span><span class="nt">admin_listen_address</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;127.0.0.1:9091&quot;</span><span class="w">  </span><span class="c1"># Admin listener — POST /flush (default: 127.0.0.1:9091)</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">  </span><span class="nt">otlp</span><span class="p">:</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">                        </span><span class="c1"># Optional push path for self-metrics</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="w">    </span><span class="nt">inherit_otel_connection</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">          </span><span class="c1"># Reuse exporters.otel[0] when enabled</span>
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="w">    </span><span class="nt">interval_seconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>enabled</code></td>
+<td><code>false</code></td>
+<td>Start both the scrape and admin HTTP listeners. Gates both — setting <code>false</code> also disables HTTP <code>POST /flush</code> (<code>SIGUSR1</code> still works)</td>
+</tr>
+<tr>
+<td><code>listen_address</code></td>
+<td><code>:9090</code></td>
+<td>Scrape listener (<code>/metrics</code>, legacy <code>/health</code>) — safe to expose to your scraper</td>
+</tr>
+<tr>
+<td><code>admin_listen_address</code></td>
+<td><code>127.0.0.1:9091</code></td>
+<td>Admin listener (<code>POST /flush</code>) — loopback by default; non-loopback binds emit a startup <code>WARN</code></td>
+</tr>
+<tr>
+<td><code>otlp.enabled</code></td>
+<td><code>false</code></td>
+<td>Push click-dog self-metrics over OTLP. Additive to the <code>/metrics</code> scrape endpoint; it may run with <code>metrics.enabled: false</code></td>
+</tr>
+<tr>
+<td><code>otlp.inherit_otel_connection</code></td>
+<td><code>true</code> when OTLP metrics are enabled and the key is omitted</td>
+<td>Reuse <code>exporters.otel[0]</code> connection settings for the self-metrics exporter</td>
+</tr>
+<tr>
+<td><code>otlp.collector_address</code></td>
+<td>—</td>
+<td>Standalone OTLP metrics collector address, required when <code>inherit_otel_connection: false</code></td>
+</tr>
+<tr>
+<td><code>otlp.secure</code></td>
+<td><code>false</code></td>
+<td>Enable TLS for a standalone OTLP metrics connection. Use inheritance when CA or mTLS settings are needed</td>
+</tr>
+<tr>
+<td><code>otlp.host</code></td>
+<td>OS hostname</td>
+<td>Host identity used on pushed self-metrics</td>
+</tr>
+<tr>
+<td><code>otlp.service_name</code></td>
+<td><code>exporters.otel[0].service_name</code>, then <code>click-dog-monitor</code></td>
+<td>Service name used on pushed self-metrics</td>
+</tr>
+<tr>
+<td><code>otlp.interval_seconds</code></td>
+<td><code>10</code></td>
+<td>Push interval. Must be greater than 0 when <code>otlp.enabled</code> is true</td>
+</tr>
+<tr>
+<td><code>otlp.rename</code></td>
+<td><code>{}</code></td>
+<td>Optional map from canonical self-metric keys to emitted OTLP metric names. Keys are validated at load time</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>The <code>metrics:</code> and <code>health:</code> blocks are <strong>independent</strong>. <code>metrics.enabled</code> does
+not control the Kubernetes-shaped <code>/healthz</code> / <code>/readyz</code> / <code>/status</code> probes —
+those live in the separate <code>health:</code> block below. Disabling metrics will not
+turn off the health listener, and vice versa.</p>
+</blockquote>
+<p>See <a href="../observability/#metrics-endpoint">Observability</a> for the full
+endpoint table, the rationale for splitting scrape from admin, and
+deployment recipes (systemd / Docker / Kubernetes).</p>
+<hr />
+<h2 id="health-endpoints">Health Endpoints<a class="headerlink" href="#health-endpoints" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nt">health</span><span class="p">:</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">              </span><span class="c1"># Off by default; install.sh enables it on :8686</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">  </span><span class="nt">listen_address</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;:8686&quot;</span><span class="w">     </span><span class="c1"># /healthz, /readyz, /status (default when enabled)</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">  </span><span class="nt">cluster</span><span class="p">:</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">            </span><span class="c1"># Leader-only /clusterz aggregate endpoint</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">    </span><span class="nt">self</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w">                  </span><span class="c1"># Routable host:port for this instance</span>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="w">    </span><span class="nt">peer_timeout_ms</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3000</span>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="w">    </span><span class="nt">peers</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[]</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>enabled</code></td>
+<td><code>false</code></td>
+<td>Start the health listener. Independent of <code>metrics.enabled</code></td>
+</tr>
+<tr>
+<td><code>listen_address</code></td>
+<td><code>:8686</code> when <code>health.enabled: true</code></td>
+<td><code>/healthz</code> (liveness), <code>/readyz</code> (readiness — pings ClickHouse), <code>/status</code> (JSON report). If this normalizes to the same socket as <code>metrics.listen_address</code>, the handlers are mounted on the metrics listener so only one port is opened</td>
+</tr>
+<tr>
+<td><code>health.cluster.enabled</code></td>
+<td><code>false</code></td>
+<td>Mount leader-only <code>/clusterz</code> aggregate health when <code>health.enabled</code> is also true</td>
+</tr>
+<tr>
+<td><code>health.cluster.self</code></td>
+<td>—</td>
+<td>Routable <code>host:port</code> for this instance's <code>/readyz</code>; required when cluster health is enabled</td>
+</tr>
+<tr>
+<td><code>health.cluster.peer_timeout_ms</code></td>
+<td><code>3000</code></td>
+<td>Per-peer <code>/readyz</code> fanout deadline</td>
+</tr>
+<tr>
+<td><code>health.cluster.peers</code></td>
+<td><code>[]</code></td>
+<td>Static list of peer <code>host:port</code> addresses to include in <code>/clusterz</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>/healthz</code> always returns <code>200</code>; <code>/readyz</code> returns <code>503</code> while ClickHouse is
+unreachable or the circuit breaker is open. <code>/status</code> is a reporting endpoint
+that always returns <code>200</code> — assess health from its JSON body, not its status
+code.</p>
+<p>See <a href="../observability/#health-endpoints">Observability — Health Endpoints</a>
+for the full endpoint table, the <code>/status</code> JSON shape, Kubernetes probe
+recipes, and cluster-aware health roll-up.</p>
+<hr />
+<h2 id="webhook-notifications">Webhook Notifications<a class="headerlink" href="#webhook-notifications" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="nt">webhook</span><span class="p">:</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${SLACK_WEBHOOK_URL}</span><span class="w">    </span><span class="c1"># Webhook URL (supports env vars)</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">  </span><span class="nt">timeout_s</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span><span class="w">                </span><span class="c1"># HTTP timeout in seconds (default: 10)</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="w">  </span><span class="nt">events</span><span class="p">:</span><span class="w">                      </span><span class="c1"># Event filter (default: all events)</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">circuit_breaker_opened</span>
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">circuit_breaker_closed</span>
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">startup</span>
+<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shutdown</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>enabled</code></td>
+<td><code>false</code></td>
+<td>Enable webhook notifications</td>
+</tr>
+<tr>
+<td><code>url</code></td>
+<td>—</td>
+<td>HTTP POST endpoint. Supports <code>${VAR}</code> expansion. Must be <code>http://</code> or <code>https://</code> with a host; redirects are not followed</td>
+</tr>
+<tr>
+<td><code>timeout_s</code></td>
+<td><code>10</code></td>
+<td>HTTP request timeout in seconds</td>
+</tr>
+<tr>
+<td><code>events</code></td>
+<td><code>[]</code> (all)</td>
+<td>List of event names to fire on. Empty = all events</td>
+</tr>
+</tbody>
+</table>
+<p>Valid events: <code>circuit_breaker_opened</code>, <code>circuit_breaker_closed</code>, <code>backfill_complete</code>, <code>backfill_failed</code>, <code>error_spike</code>, <code>startup</code>, <code>shutdown</code>.</p>
+<p>See <a href="../observability/">Observability</a> for payload format, behavior details, and compatible services.</p>
+<hr />
+<h2 id="complete-example">Complete Example<a class="headerlink" href="#complete-example" title="Permanent link">&para;</a></h2>
+<p>See the <code>config.yaml.example</code> file in the repository root for a fully commented configuration file with all options.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/coltconsulting/click-dog" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tracking", "navigation.sections", "navigation.expand", "navigation.top", "search.suggest", "search.highlight", "content.code.copy", "content.code.annotate"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+  
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../javascripts/table-wbr.js"></script>
+      
+    
+  <!-- Make the "Click-Dog" wordmark in the docs header link to the homepage,
+       like the logo icon already does. We reuse the logo's href so the link is
+       correct from any depth; if JS is off the wordmark just stays plain text. -->
+  <script>
+    (function () {
+      var logo = document.querySelector('.md-header [data-md-component="logo"]');
+      var name = document.querySelector('.md-header__title .md-header__topic:not([data-md-component="header-topic"]) .md-ellipsis');
+      if (!logo || !name || name.querySelector('a')) return;
+      var a = document.createElement('a');
+      a.href = logo.getAttribute('href');
+      a.textContent = name.textContent.trim();
+      a.setAttribute('aria-label', 'Click-Dog home');
+      a.style.color = 'inherit';
+      a.style.textDecoration = 'none';
+      name.textContent = '';
+      name.appendChild(a);
+    })();
+  </script>
+
+  </body>
+</html>

@@ -1,0 +1,3045 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Source-safe query observability for ClickHouse today, with more telemetry sources planned">
+      
+      
+      
+        <link rel="canonical" href="https://click-dog.com/integrations/datadog/">
+      
+      
+        <link rel="prev" href="../">
+      
+      
+        <link rel="next" href="../honeycomb/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Datadog - Click-Dog</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=IBM+Plex+Sans:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"IBM Plex Sans";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  
+
+  <!-- Brand fonts (match the landing) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <!-- Favicon -->
+  <link rel="icon" href="../../assets/favicon.png">
+  <link rel="icon" sizes="32x32" href="../../assets/favicon-32.png">
+  <link rel="apple-touch-icon" href="../../assets/favicon.png">
+
+  <!-- Open Graph / Twitter social card.
+       Guard `page` — it is None on the generated 404 page, which also
+       extends this template. -->
+  
+  
+  
+  
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Datadog">
+  <meta property="og:description" content="Source-safe query observability for ClickHouse today, with more telemetry sources planned">
+  <meta property="og:image" content="https://click-dog.com/assets/social-card.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Datadog">
+  <meta name="twitter:description" content="Source-safe query observability for ClickHouse today, with more telemetry sources planned">
+  <meta name="twitter:image" content="https://click-dog.com/assets/social-card.png">
+
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="amber">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#datadog-integration" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+        <aside class="md-banner">
+          <div class="md-banner__inner md-grid md-typeset">
+            
+            
+  <strong>Public beta.</strong> Newly open source — the public API and config may still change. Click-Dog has been extensively tested and running in production for months.
+
+          </div>
+          
+        </aside>
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Click-Dog" class="md-header__button md-logo" aria-label="Click-Dog" data-md-component="logo">
+      
+  <img src="../../assets/click-dog-logo-light.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Click-Dog
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Datadog
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="amber"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="amber"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/coltconsulting/click-dog" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    coltconsulting/click-dog
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Click-Dog" class="md-nav__button md-logo" aria-label="Click-Dog" data-md-component="logo">
+      
+  <img src="../../assets/click-dog-logo-light.svg" alt="logo">
+
+    </a>
+    Click-Dog
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/coltconsulting/click-dog" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    coltconsulting/click-dog
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Main Site
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Setup
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integrations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integrations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Datadog
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Datadog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#fast-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fast Path
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#option-1-datadog-agent-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 1: Datadog Agent (Recommended)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Option 1: Datadog Agent (Recommended)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#configure-the-datadog-agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configure the Datadog Agent
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#configure-click-dog" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configure Click-Dog
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#with-tls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        With TLS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#verify" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verify
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#option-2-opentelemetry-collector" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 2: OpenTelemetry Collector
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Option 2: OpenTelemetry Collector">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#otel-collector-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OTEL Collector Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#click-dog-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Click-Dog Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#datadog-specific-attributes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Datadog-Specific Attributes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Datadog-Specific Attributes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#from-scheduled-mode-span-log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        From Scheduled Mode (span log)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#from-backfill-mode-query-log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        From Backfill Mode (query log)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#log_comment-attributes-scheduled-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        log_comment Attributes (Scheduled Mode)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dashboards-monitors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboards &amp; Monitors
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dashboards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboards
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Dashboards">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#option-1-click-dog-command" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 1: click-dog command
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-2-datadog-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 2: Datadog API
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#query-dashboard-data-source-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Query dashboard data-source contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#query-dashboard-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Query dashboard layout
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#click-dog-self-monitoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Click-Dog Self-Monitoring
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Click-Dog Self-Monitoring">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#legacy-datadog-agent-openmetrics-scrape-config" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Legacy Datadog Agent OpenMetrics scrape config
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mapped-metric-names" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mapped metric names
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#clickhouse-data-plane-health-signals-183" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ClickHouse data-plane health signals (#183)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#troubleshooting-no-data-on-the-health-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting "No data" on the health dashboard
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#health-endpoints-http-synthetic-check-alternative" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Health endpoints (HTTP / Synthetic check alternative)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recommended-monitors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommended Monitors
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Recommended Monitors">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tier-1-exporter-health-canonical" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tier 1: Exporter health (canonical)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tier-2-query-analytics-from-traces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tier 2: Query analytics (from traces)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tier-3-fallback-signals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tier 3: Fallback signals
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example-full-production-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example: Full Production Setup
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../honeycomb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Honeycomb
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../generic-otlp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Generic OTLP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../splunk-hec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Splunk HEC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analysis
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Analysis
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../query-analysis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Query Analysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../span-attributes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Span Attributes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Observability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../resilience/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resilience
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operating/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operating Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../kubernetes-clickhouse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kubernetes — ClickHouse Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../modes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operation Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../filtering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Filtering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../support/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Support
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#fast-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fast Path
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#option-1-datadog-agent-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 1: Datadog Agent (Recommended)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Option 1: Datadog Agent (Recommended)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#configure-the-datadog-agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configure the Datadog Agent
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#configure-click-dog" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configure Click-Dog
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#with-tls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        With TLS
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#verify" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verify
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#option-2-opentelemetry-collector" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 2: OpenTelemetry Collector
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Option 2: OpenTelemetry Collector">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#otel-collector-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OTEL Collector Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#click-dog-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Click-Dog Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#datadog-specific-attributes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Datadog-Specific Attributes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Datadog-Specific Attributes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#from-scheduled-mode-span-log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        From Scheduled Mode (span log)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#from-backfill-mode-query-log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        From Backfill Mode (query log)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#log_comment-attributes-scheduled-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        log_comment Attributes (Scheduled Mode)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dashboards-monitors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboards &amp; Monitors
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dashboards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboards
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Dashboards">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#option-1-click-dog-command" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 1: click-dog command
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-2-datadog-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 2: Datadog API
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#query-dashboard-data-source-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Query dashboard data-source contract
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#query-dashboard-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Query dashboard layout
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#click-dog-self-monitoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Click-Dog Self-Monitoring
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Click-Dog Self-Monitoring">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#legacy-datadog-agent-openmetrics-scrape-config" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Legacy Datadog Agent OpenMetrics scrape config
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mapped-metric-names" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mapped metric names
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#clickhouse-data-plane-health-signals-183" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ClickHouse data-plane health signals (#183)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#troubleshooting-no-data-on-the-health-dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting "No data" on the health dashboard
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#health-endpoints-http-synthetic-check-alternative" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Health endpoints (HTTP / Synthetic check alternative)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recommended-monitors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommended Monitors
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Recommended Monitors">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tier-1-exporter-health-canonical" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tier 1: Exporter health (canonical)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tier-2-query-analytics-from-traces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tier 2: Query analytics (from traces)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tier-3-fallback-signals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tier 3: Fallback signals
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example-full-production-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example: Full Production Setup
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="datadog-integration">Datadog Integration<a class="headerlink" href="#datadog-integration" title="Permanent link">&para;</a></h1>
+<p>Click-Dog's packaged Datadog path includes OTLP trace export, the
+<strong>Application Query Analysis</strong> dashboard, the <strong>Click-Dog: Health</strong> dashboard,
+and recommended monitors for exporter health and query regressions. You can send
+traces directly to the Datadog Agent or through an OpenTelemetry Collector.</p>
+<h2 id="fast-path">Fast Path<a class="headerlink" href="#fast-path" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Enable OTLP gRPC on the Datadog Agent.</li>
+<li>Install Click-Dog with the <a href="../../getting-started/">guided installer</a>.</li>
+<li>Run the readiness check:
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>click-dog<span class="w"> </span>check<span class="w"> </span>-config<span class="w"> </span>/etc/click-dog/click-dog.yaml
+</code></pre></div></li>
+<li>Provision dashboards:
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nv">DD_API_KEY</span><span class="o">=</span>...<span class="w"> </span><span class="nv">DD_APP_KEY</span><span class="o">=</span>...<span class="w"> </span>click-dog<span class="w"> </span>create-dashboards
+</code></pre></div></li>
+<li>In Datadog, open <strong>Click-Dog: Application Query Analysis</strong> and
+   <strong>Click-Dog: Health</strong>.</li>
+</ol>
+<h2 id="option-1-datadog-agent-recommended">Option 1: Datadog Agent (Recommended)<a class="headerlink" href="#option-1-datadog-agent-recommended" title="Permanent link">&para;</a></h2>
+<p>The Datadog Agent (v7.35+) can ingest OTLP traces directly.</p>
+<h3 id="configure-the-datadog-agent">Configure the Datadog Agent<a class="headerlink" href="#configure-the-datadog-agent" title="Permanent link">&para;</a></h3>
+<p>Edit <code>datadog.yaml</code> or use environment variables:</p>
+<p><strong>datadog.yaml:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">otlp_config</span><span class="p">:</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">receiver</span><span class="p">:</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">protocols</span><span class="p">:</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">      </span><span class="nt">grpc</span><span class="p">:</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">        </span><span class="nt">endpoint</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.0.0.0:4317</span>
+</code></pre></div></p>
+<p><strong>Environment variables (e.g., in Docker/Kubernetes):</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nv">DD_OTLP_CONFIG_RECEIVER_PROTOCOLS_GRPC_ENDPOINT</span><span class="o">=</span><span class="m">0</span>.0.0.0:4317
+</code></pre></div></p>
+<p>Restart the Datadog Agent after making changes.</p>
+<h3 id="configure-click-dog">Configure Click-Dog<a class="headerlink" href="#configure-click-dog" title="Permanent link">&para;</a></h3>
+<p>Point click-dog at the Datadog Agent's OTLP endpoint:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nt">exporters</span><span class="p">:</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">otel</span><span class="p">:</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">collector_address</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">localhost:4317</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">      </span><span class="nt">service_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">click-dog-monitor</span>
+</code></pre></div>
+<p>If the Datadog Agent is on a different host:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nt">exporters</span><span class="p">:</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">otel</span><span class="p">:</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">collector_address</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">datadog-agent.internal:4317</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">      </span><span class="nt">service_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">click-dog-monitor</span>
+</code></pre></div></p>
+<h3 id="with-tls">With TLS<a class="headerlink" href="#with-tls" title="Permanent link">&para;</a></h3>
+<p>If your Datadog Agent requires TLS:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nt">exporters</span><span class="p">:</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">otel</span><span class="p">:</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">collector_address</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">datadog-agent.internal:4317</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">      </span><span class="nt">service_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">click-dog-monitor</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">      </span><span class="nt">secure</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">      </span><span class="nt">ca_cert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/path/to/ca.pem</span>
+</code></pre></div>
+<h3 id="verify">Verify<a class="headerlink" href="#verify" title="Permanent link">&para;</a></h3>
+<p>Before sending traffic, confirm the ClickHouse data plane these dashboards rely
+on is actually ready:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>click-dog<span class="w"> </span>check<span class="w"> </span>-config<span class="w"> </span>/etc/click-dog/click-dog.yaml
+</code></pre></div>
+<p>This validates that <code>system.opentelemetry_span_log</code> and <code>system.query_log</code> are
+readable and granted, that recent spans exist, that <code>min_trace_duration_ms</code>
+isn't filtering everything out, that spans carry <code>clickhouse.query_id</code> (so
+query-log enrichment and user filters work), and that <code>normalized_query_hash</code>
+is available (so the query-family widgets populate). Warn/fail lines print the
+exact fix.</p>
+<p>Then, in Datadog, navigate to <strong>APM &gt; Traces</strong> and search for:
+- Service: <code>click-dog-monitor</code>
+- Look for spans with <code>db.statement</code>, <code>duration_ms</code>, and <code>hostname</code> attributes</p>
+<hr />
+<h2 id="option-2-opentelemetry-collector">Option 2: OpenTelemetry Collector<a class="headerlink" href="#option-2-opentelemetry-collector" title="Permanent link">&para;</a></h2>
+<p>If you're already running an OTEL Collector, you can route click-dog traces through it.</p>
+<h3 id="otel-collector-configuration">OTEL Collector Configuration<a class="headerlink" href="#otel-collector-configuration" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nt">receivers</span><span class="p">:</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">otlp</span><span class="p">:</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">    </span><span class="nt">protocols</span><span class="p">:</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">      </span><span class="nt">grpc</span><span class="p">:</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">        </span><span class="nt">endpoint</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.0.0.0:4317</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="nt">exporters</span><span class="p">:</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">  </span><span class="nt">datadog</span><span class="p">:</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="w">    </span><span class="nt">api</span><span class="p">:</span>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="w">      </span><span class="nt">key</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${DD_API_KEY}</span>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="w">      </span><span class="nt">site</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">datadoghq.com</span><span class="w">      </span><span class="c1"># or datadoghq.eu, etc.</span>
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>
+<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="nt">service</span><span class="p">:</span>
+<a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a><span class="w">  </span><span class="nt">pipelines</span><span class="p">:</span>
+<a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a><span class="w">    </span><span class="nt">traces</span><span class="p">:</span>
+<a id="__codelineno-8-16" name="__codelineno-8-16" href="#__codelineno-8-16"></a><span class="w">      </span><span class="nt">receivers</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">otlp</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-8-17" name="__codelineno-8-17" href="#__codelineno-8-17"></a><span class="w">      </span><span class="nt">exporters</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">datadog</span><span class="p p-Indicator">]</span>
+</code></pre></div>
+<h3 id="click-dog-configuration">Click-Dog Configuration<a class="headerlink" href="#click-dog-configuration" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nt">exporters</span><span class="p">:</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">otel</span><span class="p">:</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">collector_address</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">otel-collector.internal:4317</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">      </span><span class="nt">service_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">click-dog-monitor</span>
+</code></pre></div>
+<hr />
+<h2 id="datadog-specific-attributes">Datadog-Specific Attributes<a class="headerlink" href="#datadog-specific-attributes" title="Permanent link">&para;</a></h2>
+<p>Click-Dog spans appear in Datadog with these attributes:</p>
+<h3 id="from-scheduled-mode-span-log">From Scheduled Mode (span log)<a class="headerlink" href="#from-scheduled-mode-span-log" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Datadog Attribute</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Service</td>
+<td><code>exporters.otel[].service_name</code> config</td>
+</tr>
+<tr>
+<td>Operation</td>
+<td><code>operation_name</code> from span</td>
+</tr>
+<tr>
+<td>Duration</td>
+<td>Computed from span start/finish timestamps</td>
+</tr>
+<tr>
+<td><code>hostname</code></td>
+<td>ClickHouse server hostname</td>
+</tr>
+<tr>
+<td><code>duration_ms</code></td>
+<td>Duration in milliseconds (numeric, queryable)</td>
+</tr>
+<tr>
+<td><code>db.statement</code></td>
+<td>SQL query text</td>
+</tr>
+<tr>
+<td><code>client.address</code></td>
+<td>Client IP</td>
+</tr>
+<tr>
+<td><code>kind</code></td>
+<td>Span kind (INTERNAL, SERVER, CLIENT, etc.)</td>
+</tr>
+<tr>
+<td><code>query_log.query_duration_ms</code></td>
+<td>Query duration from live query_log enrichment (numeric)</td>
+</tr>
+<tr>
+<td><code>query_log.read_rows</code> / <code>query_log.read_bytes</code></td>
+<td>Data read from live query_log enrichment (numeric)</td>
+</tr>
+<tr>
+<td><code>query_log.written_rows</code> / <code>query_log.written_bytes</code></td>
+<td>Data written from live query_log enrichment (numeric)</td>
+</tr>
+<tr>
+<td><code>query_log.result_rows</code> / <code>query_log.result_bytes</code></td>
+<td>Result size from live query_log enrichment (numeric)</td>
+</tr>
+<tr>
+<td><code>query_log.memory_usage</code></td>
+<td>Peak memory use from live query_log enrichment (numeric)</td>
+</tr>
+<tr>
+<td><code>query_log.exception_code</code></td>
+<td>ClickHouse exception code from live query_log enrichment (numeric, when non-zero)</td>
+</tr>
+<tr>
+<td><code>query_log.normalized_query_hash</code></td>
+<td>Query-family grouping hash (intentionally a <strong>string</strong>, not numeric — it's a dimension, not a measure)</td>
+</tr>
+<tr>
+<td><code>query_log.databases</code></td>
+<td>Databases accessed from query_log enrichment (array facet)</td>
+</tr>
+<tr>
+<td><code>query_log.tables</code></td>
+<td>Tables accessed from query_log enrichment (array facet)</td>
+</tr>
+</tbody>
+</table>
+<p>The numeric <code>query_log.*</code> fields above are emitted as OTLP integer measures.
+ClickHouse stores <code>read_bytes</code> / <code>written_bytes</code> / <code>memory_usage</code> as <code>UInt64</code>,
+so a value above <code>2^63</code> (≈9.2 EB / 9.2×10¹⁸) is emitted as a <strong>string</strong> instead
+(OTLP integers are signed 64-bit) — rare in practice, but a measure widget over
+these fields should tolerate the occasional string-typed point.</p>
+<p>If you previously created Datadog facets for <code>query_log.databases</code> or
+<code>query_log.tables</code> while they were joined strings, recreate those facets after
+upgrading so new spans are indexed as multi-value array facets. Historical spans
+keep the old joined-string shape.</p>
+<h3 id="from-backfill-mode-query-log">From Backfill Mode (query log)<a class="headerlink" href="#from-backfill-mode-query-log" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Datadog Attribute</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Service</td>
+<td><code>exporters.otel[].service_name</code> config</td>
+</tr>
+<tr>
+<td>Operation</td>
+<td><code>clickhouse.query</code></td>
+</tr>
+<tr>
+<td><code>db.system</code></td>
+<td><code>clickhouse</code></td>
+</tr>
+<tr>
+<td><code>db.statement</code></td>
+<td>SQL query text</td>
+</tr>
+<tr>
+<td><code>db.query_duration_ms</code></td>
+<td>Query duration in ms</td>
+</tr>
+<tr>
+<td><code>db.user</code></td>
+<td>ClickHouse user</td>
+</tr>
+<tr>
+<td><code>client.address</code></td>
+<td>Client IP</td>
+</tr>
+<tr>
+<td><code>db.databases</code></td>
+<td>Databases accessed</td>
+</tr>
+<tr>
+<td><code>db.tables</code></td>
+<td>Tables accessed</td>
+</tr>
+<tr>
+<td><code>db.read_rows</code> / <code>db.read_bytes</code></td>
+<td>Data read</td>
+</tr>
+<tr>
+<td><code>db.memory_usage</code></td>
+<td>Memory used</td>
+</tr>
+<tr>
+<td><code>error</code></td>
+<td><code>true</code> if query failed</td>
+</tr>
+</tbody>
+</table>
+<h3 id="log_comment-attributes-scheduled-mode">log_comment Attributes (Scheduled Mode)<a class="headerlink" href="#log_comment-attributes-scheduled-mode" title="Permanent link">&para;</a></h3>
+<p>If your ClickHouse clients set the <code>log_comment</code> query setting with JSON, click-dog
+extracts the keys as span attributes. For example, a query with
+<code>log_comment={"app": "Dash8", "query_name": "what_watched"}</code> produces:</p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>@log_comment.app</code></td>
+<td><code>Dash8</code></td>
+</tr>
+<tr>
+<td><code>@log_comment.query_name</code></td>
+<td><code>what_watched</code></td>
+</tr>
+</tbody>
+</table>
+<p>These appear as filterable facets in Datadog APM. See <a href="../../span-attributes/#log_comment-extraction">Span Attributes</a>.</p>
+<h3 id="dashboards-monitors">Dashboards &amp; Monitors<a class="headerlink" href="#dashboards-monitors" title="Permanent link">&para;</a></h3>
+<p>Use these attributes to build Datadog dashboards and monitors:</p>
+<p><strong>Slow query monitor:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>avg:trace.duration{service:click-dog-monitor} &gt; 5000000000
+</code></pre></div></p>
+<p><strong>Query by duration_ms attribute:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>@duration_ms:&gt;5000
+</code></pre></div></p>
+<p><strong>Filter by ClickHouse host:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>@hostname:clickhouse-prod-01
+</code></pre></div></p>
+<p><strong>Filter by app (via log_comment):</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>@log_comment.app:Dash8
+</code></pre></div></p>
+<hr />
+<h2 id="dashboards">Dashboards<a class="headerlink" href="#dashboards" title="Permanent link">&para;</a></h2>
+<p>Click-dog ships two Datadog dashboards:</p>
+<ul>
+<li><strong>Click-Dog: Application Query Analysis</strong> (<a href="https://github.com/coltconsulting/click-dog/blob/master/dashboards/datadog-query-analysis.json"><code>datadog-query-analysis.json</code></a>) — live-span dashboard for <code>system.opentelemetry_span_log</code> data, filtered with <code>resource_name:query @click_dog.source:span_log</code> and grouped by <code>log_comment.*</code> plus live <code>query_log.*</code> enrichment</li>
+<li><strong>Click-Dog: Health</strong> (<a href="https://github.com/coltconsulting/click-dog/blob/master/dashboards/datadog-clickdog-health.json"><code>datadog-clickdog-health.json</code></a>) — self-monitoring metrics for current export state, error/export rates, backoff, circuit breaker, and lifetime counters</li>
+</ul>
+<h3 id="option-1-click-dog-command">Option 1: click-dog command<a class="headerlink" href="#option-1-click-dog-command" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="nv">DD_API_KEY</span><span class="o">=</span>...<span class="w"> </span><span class="nv">DD_APP_KEY</span><span class="o">=</span>...<span class="w"> </span>click-dog<span class="w"> </span>create-dashboards
+</code></pre></div>
+<h3 id="option-2-datadog-api">Option 2: Datadog API<a class="headerlink" href="#option-2-datadog-api" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="s2">&quot;https://api.datadoghq.com/api/v1/dashboard&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;DD-API-KEY: </span><span class="si">${</span><span class="nv">DD_API_KEY</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;DD-APPLICATION-KEY: </span><span class="si">${</span><span class="nv">DD_APP_KEY</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="w">  </span>-d<span class="w"> </span>@dashboards/datadog-query-analysis.json
+</code></pre></div>
+<p>The Application Query Analysis dashboard requires click-dog <code>v26.03.1</code> or
+newer for its <code>@click_dog.source:span_log</code> filter. If you cannot upgrade
+immediately, remove that filter from widget queries after import.</p>
+<p>For EU or other regions, replace <code>datadoghq.com</code> with your site (e.g. <code>datadoghq.eu</code>).</p>
+<div class="admonition tip">
+<p class="admonition-title">Running on Kubernetes?</p>
+<p>The dashboards only show data once ClickHouse is actually emitting spans
+and click-dog is exporting them. For the operator-based ClickHouse setup
+(enabling <code>system.opentelemetry_span_log</code> cluster-wide, the read-only
+monitoring user, sidecar vs centralized topology, and OTLP/Agent wiring),
+follow <a href="../../kubernetes-clickhouse/">Kubernetes — ClickHouse Setup</a>.</p>
+</div>
+<h3 id="query-dashboard-data-source-contract">Query dashboard data-source contract<a class="headerlink" href="#query-dashboard-data-source-contract" title="Permanent link">&para;</a></h3>
+<p>The shipped <strong>Application Query Analysis</strong> dashboard is live-span-only. It is
+designed for click-dog's scheduled mode, where ClickHouse native spans from
+<code>system.opentelemetry_span_log</code> arrive in Datadog as <code>click_dog.source=span_log</code>
+with <code>resource_name:query</code>. Its filters and template variables use live-span
+fields:</p>
+<ul>
+<li><code>@log_comment.app</code> and <code>@log_comment.query_name</code> from ClickHouse client
+  tagging</li>
+<li><code>@query_log.user</code>, <code>@query_log.client_name</code>,
+  <code>@query_log.normalized_query_hash</code>, and related <code>query_log.*</code> enrichment
+  joined onto live spans</li>
+<li><code>@query_log.read_rows</code>, <code>@query_log.memory_usage</code>, and other live
+  query_log stats as numeric OTLP attributes for measure-style widgets</li>
+</ul>
+<p>Compatibility: the <code>@click_dog.source:span_log</code> filter requires click-dog
+<code>v26.03.1</code> or newer, or any build that emits the <code>click_dog.source</code> attribute.
+Older binaries can still export spans, but this dashboard's source filter will
+not match them until click-dog is upgraded. If you cannot upgrade immediately,
+remove <code>@click_dog.source:span_log</code> from widget queries after import to restore
+the previous <code>resource_name:query</code>-only matching behavior.</p>
+<p>Backfill mode is intentionally separate. Backfill reads <code>system.query_log</code> and
+exports single-span traces named <code>clickhouse.query</code> with
+<code>click_dog.source=query_log</code> and <code>db.*</code> attributes (<code>db.user</code>,
+<code>db.read_rows</code>, <code>db.memory_usage</code>, <code>db.normalized_query_hash</code>, and so on). If
+you import only historical backfill data, the shipped query dashboard may show
+little or no data. For backfill analysis, use Datadog trace search or custom
+widgets with a query such as:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>service:click-dog-monitor resource_name:clickhouse.query @click_dog.source:query_log
+</code></pre></div>
+<p>Group those views by backfill fields such as <code>@db.user</code>, <code>@client.name</code>,
+<code>@db.normalized_query_hash</code>, <code>@db.tables</code>, or <code>@hostname</code>.</p>
+<h3 id="query-dashboard-layout">Query dashboard layout<a class="headerlink" href="#query-dashboard-layout" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>Row 1: Overview
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>  [ Exported queries/min ] [ p50/p95/p99 latency ]
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>Row 2: Application identity
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>  [ Top apps by exported volume ] [ Top apps by p95 latency ] [ Slow queries by app ]
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a>
+<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a>Row 3: Query identity
+<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a>  [ Named query latency ] [ Named queries by exported volume ] [ Exact query families ]
+<a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a>
+<a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a>Row 4: Live query_log enrichment
+<a id="__codelineno-17-11" name="__codelineno-17-11" href="#__codelineno-17-11"></a>  [ Users ] [ Client libraries ] [ Rows read ] [ Peak memory ] [ Tables ] [ Databases ]
+<a id="__codelineno-17-12" name="__codelineno-17-12" href="#__codelineno-17-12"></a>
+<a id="__codelineno-17-13" name="__codelineno-17-13" href="#__codelineno-17-13"></a>Row 5: Distribution
+<a id="__codelineno-17-14" name="__codelineno-17-14" href="#__codelineno-17-14"></a>  [ Exported queries by host ]
+</code></pre></div>
+<p>Volume/count widgets show the <strong>exported/qualified query stream</strong>, not total
+ClickHouse query volume. Scheduled mode exports only traces selected by
+<code>monitor.min_trace_duration_ms</code> and any other query/operation/IP filters, so
+with the quickstart default <code>min_trace_duration_ms: 1000</code> these counts reflect
+qualifying slow-query traces. For total ClickHouse query volume, use the
+official Datadog ClickHouse integration.</p>
+<hr />
+<h2 id="click-dog-self-monitoring">Click-Dog Self-Monitoring<a class="headerlink" href="#click-dog-self-monitoring" title="Permanent link">&para;</a></h2>
+<p>Click-dog can push its own low-cardinality exporter health metrics over OTLP:
+cycle counts and outcomes, export totals, errors, circuit-breaker state,
+backoff interval, last-success timestamp, and last-cycle duration / spans.
+Enable <code>metrics.otlp.enabled: true</code>; by default click-dog reuses
+<code>exporters.otel[0]</code> and sends self-metrics to the same collector as spans. The
+<code>production</code> init profile (the default for <code>click-dog init</code>) now writes this
+block for you, so a guided install already feeds the Health dashboard — if you
+generated your config that way it's on already; delete the block to opt out.
+Set <code>metrics.otlp.host</code> in containers if you want a stable <code>host.name</code> dashboard
+variable instead of the pod/container hostname.</p>
+<p>Standalone <code>metrics.otlp</code> connections currently expose plaintext/TLS settings
+only; use <code>inherit_otel_connection: true</code> when the collector requires the
+span exporter's CA or mTLS client certificate settings.</p>
+<p>The Prometheus/OpenMetrics-compatible <code>/metrics</code> endpoint is still available
+(default <code>:9090/metrics</code>, opt-in via <code>metrics.enabled: true</code> — see
+<a href="../../observability/">Observability</a>) for Prometheus, Grafana Alloy, the OTel
+Collector's prometheus receiver, or Datadog users who cannot enable OTLP
+self-metrics.</p>
+<p>The positioning is intentional: traces (Option 1 / Option 2 above) carry the
+rich query analytics — <code>db.statement</code>, latency, user, app, normalized query
+family — and that's what the <strong>Click-Dog: Application Query Analysis</strong>
+dashboard reads. Self-metrics carry the orthogonal exporter-health surface —
+"is click-dog itself running, scraping, and exporting?" — and that's what the
+<strong>Click-Dog: Health</strong> dashboard reads (with current action state first: last
+success age, breaker state, current error rate, export throughput, and backoff
+interval; trends and lifetime counters follow).</p>
+<h3 id="legacy-datadog-agent-openmetrics-scrape-config">Legacy Datadog Agent OpenMetrics scrape config<a class="headerlink" href="#legacy-datadog-agent-openmetrics-scrape-config" title="Permanent link">&para;</a></h3>
+<p>Prometheus-only users can still scrape <code>/metrics</code> with Datadog. Drop this in
+<code>/etc/datadog-agent/conf.d/openmetrics.d/conf.yaml</code> and restart the Agent. The
+explicit <code>metrics:</code> rename list is required for the scrape path; a generic
+wildcard such as <code>- click_dog_*</code> will not produce usable Datadog names.
+<code>dashboards/README.md</code> and <code>dashboards/datadog-clickdog-health.json</code> document
+the same legacy mapping.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="nt">init_config</span><span class="p">:</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="nt">instances</span><span class="p">:</span>
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">openmetrics_endpoint</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">http://localhost:9090/metrics</span>
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="w">    </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">click_dog</span>
+<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a><span class="w">    </span><span class="nt">metrics</span><span class="p">:</span>
+<a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a><span class="w">      </span><span class="c1"># Counters — Datadog appends `.count` and submits as a monotonic rate.</span>
+<a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_spans_exported_total</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">spans_exported</span>
+<a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_spans_filtered_total</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">spans_filtered</span>
+<a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_spans_duplicates_total</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">spans_duplicates</span>
+<a id="__codelineno-18-11" name="__codelineno-18-11" href="#__codelineno-18-11"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_export_attempts_total</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">export.attempts</span>
+<a id="__codelineno-18-12" name="__codelineno-18-12" href="#__codelineno-18-12"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_export_accepted_total</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">export.accepted</span>
+<a id="__codelineno-18-13" name="__codelineno-18-13" href="#__codelineno-18-13"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_export_errors_total</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">export.errors</span>
+<a id="__codelineno-18-14" name="__codelineno-18-14" href="#__codelineno-18-14"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_cycle_results_total</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">cycle_results</span>
+<a id="__codelineno-18-15" name="__codelineno-18-15" href="#__codelineno-18-15"></a><span class="w">      </span><span class="c1"># Gauges — submitted as-is under the namespace.</span>
+<a id="__codelineno-18-16" name="__codelineno-18-16" href="#__codelineno-18-16"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_circuit_breaker_state</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">circuit_breaker.state</span>
+<a id="__codelineno-18-17" name="__codelineno-18-17" href="#__codelineno-18-17"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_leader</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">leader</span>
+<a id="__codelineno-18-18" name="__codelineno-18-18" href="#__codelineno-18-18"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_backoff_interval_seconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">backoff_interval.seconds</span>
+<a id="__codelineno-18-19" name="__codelineno-18-19" href="#__codelineno-18-19"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_last_success_timestamp_seconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">last_success_timestamp.seconds</span>
+<a id="__codelineno-18-20" name="__codelineno-18-20" href="#__codelineno-18-20"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_uptime_seconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">uptime.seconds</span>
+<a id="__codelineno-18-21" name="__codelineno-18-21" href="#__codelineno-18-21"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_last_cycle_duration_seconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">last_cycle.duration_seconds</span>
+<a id="__codelineno-18-22" name="__codelineno-18-22" href="#__codelineno-18-22"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_last_cycle_exported_spans</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">last_cycle.exported_spans</span>
+<a id="__codelineno-18-23" name="__codelineno-18-23" href="#__codelineno-18-23"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_last_cycle_filtered_spans</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">last_cycle.filtered_spans</span>
+<a id="__codelineno-18-24" name="__codelineno-18-24" href="#__codelineno-18-24"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_last_cycle_duplicate_spans</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">last_cycle.duplicate_spans</span>
+<a id="__codelineno-18-25" name="__codelineno-18-25" href="#__codelineno-18-25"></a><span class="w">      </span><span class="c1"># ClickHouse data-plane health (#183) — span_log freshness, enrichment</span>
+<a id="__codelineno-18-26" name="__codelineno-18-26" href="#__codelineno-18-26"></a><span class="w">      </span><span class="c1"># health, and query_id coverage. Lets an operator distinguish</span>
+<a id="__codelineno-18-27" name="__codelineno-18-27" href="#__codelineno-18-27"></a><span class="w">      </span><span class="c1"># &quot;click-dog is down&quot; from &quot;ClickHouse is not emitting useful data&quot;.</span>
+<a id="__codelineno-18-28" name="__codelineno-18-28" href="#__codelineno-18-28"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_span_log_last_poll_timestamp_seconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">span_log.last_poll_timestamp.seconds</span>
+<a id="__codelineno-18-29" name="__codelineno-18-29" href="#__codelineno-18-29"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_span_log_newest_row_age_seconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">span_log.newest_row_age.seconds</span>
+<a id="__codelineno-18-30" name="__codelineno-18-30" href="#__codelineno-18-30"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_span_log_rows_last_cycle</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">span_log.rows_last_cycle</span>
+<a id="__codelineno-18-31" name="__codelineno-18-31" href="#__codelineno-18-31"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_query_log_enrichment_attempts_total</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">query_log.enrichment.attempts</span>
+<a id="__codelineno-18-32" name="__codelineno-18-32" href="#__codelineno-18-32"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_query_log_enrichment_successes_total</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">query_log.enrichment.successes</span>
+<a id="__codelineno-18-33" name="__codelineno-18-33" href="#__codelineno-18-33"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_query_log_enrichment_failures_total</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">query_log.enrichment.failures</span>
+<a id="__codelineno-18-34" name="__codelineno-18-34" href="#__codelineno-18-34"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_query_log_enrichment_match_ratio</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">query_log.enrichment.match_ratio</span>
+<a id="__codelineno-18-35" name="__codelineno-18-35" href="#__codelineno-18-35"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_spans_with_query_id_ratio</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">spans_with_query_id_ratio</span>
+<a id="__codelineno-18-36" name="__codelineno-18-36" href="#__codelineno-18-36"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_normalized_query_supported</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">normalized_query_supported</span>
+<a id="__codelineno-18-37" name="__codelineno-18-37" href="#__codelineno-18-37"></a><span class="w">      </span><span class="c1"># Topology self-audit — detects the sidecar + use_cluster_queries anti-pattern.</span>
+<a id="__codelineno-18-38" name="__codelineno-18-38" href="#__codelineno-18-38"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">click_dog_topology_warning</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">topology_warning</span>
+</code></pre></div>
+<h3 id="mapped-metric-names">Mapped metric names<a class="headerlink" href="#mapped-metric-names" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Prometheus metric (<code>/metrics</code>)</th>
+<th>Type</th>
+<th>Datadog metric</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>click_dog_spans_exported_total</code></td>
+<td>counter</td>
+<td><code>click_dog.spans_exported.count</code></td>
+</tr>
+<tr>
+<td><code>click_dog_spans_filtered_total</code></td>
+<td>counter</td>
+<td><code>click_dog.spans_filtered.count</code></td>
+</tr>
+<tr>
+<td><code>click_dog_spans_duplicates_total</code></td>
+<td>counter</td>
+<td><code>click_dog.spans_duplicates.count</code></td>
+</tr>
+<tr>
+<td><code>click_dog_export_attempts_total</code></td>
+<td>counter</td>
+<td><code>click_dog.export.attempts.count</code> (tag: <code>sink</code>)</td>
+</tr>
+<tr>
+<td><code>click_dog_export_accepted_total</code></td>
+<td>counter</td>
+<td><code>click_dog.export.accepted.count</code> (tag: <code>sink</code>)</td>
+</tr>
+<tr>
+<td><code>click_dog_export_errors_total</code></td>
+<td>counter</td>
+<td><code>click_dog.export.errors.count</code> (tag: <code>sink</code>)</td>
+</tr>
+<tr>
+<td><code>click_dog_cycle_results_total</code></td>
+<td>counter</td>
+<td><code>click_dog.cycle_results.count</code> (tag: <code>result</code>)</td>
+</tr>
+<tr>
+<td><code>click_dog_circuit_breaker_state</code></td>
+<td>gauge</td>
+<td><code>click_dog.circuit_breaker.state</code></td>
+</tr>
+<tr>
+<td><code>click_dog_leader</code></td>
+<td>gauge</td>
+<td><code>click_dog.leader</code></td>
+</tr>
+<tr>
+<td><code>click_dog_backoff_interval_seconds</code></td>
+<td>gauge</td>
+<td><code>click_dog.backoff_interval.seconds</code></td>
+</tr>
+<tr>
+<td><code>click_dog_last_success_timestamp_seconds</code></td>
+<td>gauge</td>
+<td><code>click_dog.last_success_timestamp.seconds</code> (tag: <code>role</code>)</td>
+</tr>
+<tr>
+<td><code>click_dog_uptime_seconds</code></td>
+<td>gauge</td>
+<td><code>click_dog.uptime.seconds</code></td>
+</tr>
+<tr>
+<td><code>click_dog_last_cycle_duration_seconds</code></td>
+<td>gauge</td>
+<td><code>click_dog.last_cycle.duration_seconds</code></td>
+</tr>
+<tr>
+<td><code>click_dog_last_cycle_exported_spans</code></td>
+<td>gauge</td>
+<td><code>click_dog.last_cycle.exported_spans</code></td>
+</tr>
+<tr>
+<td><code>click_dog_last_cycle_filtered_spans</code></td>
+<td>gauge</td>
+<td><code>click_dog.last_cycle.filtered_spans</code></td>
+</tr>
+<tr>
+<td><code>click_dog_last_cycle_duplicate_spans</code></td>
+<td>gauge</td>
+<td><code>click_dog.last_cycle.duplicate_spans</code></td>
+</tr>
+<tr>
+<td><code>click_dog_span_log_last_poll_timestamp_seconds</code></td>
+<td>gauge</td>
+<td><code>click_dog.span_log.last_poll_timestamp.seconds</code></td>
+</tr>
+<tr>
+<td><code>click_dog_span_log_newest_row_age_seconds</code></td>
+<td>gauge</td>
+<td><code>click_dog.span_log.newest_row_age.seconds</code></td>
+</tr>
+<tr>
+<td><code>click_dog_span_log_rows_last_cycle</code></td>
+<td>gauge</td>
+<td><code>click_dog.span_log.rows_last_cycle</code></td>
+</tr>
+<tr>
+<td><code>click_dog_query_log_enrichment_attempts_total</code></td>
+<td>counter</td>
+<td><code>click_dog.query_log.enrichment.attempts.count</code></td>
+</tr>
+<tr>
+<td><code>click_dog_query_log_enrichment_successes_total</code></td>
+<td>counter</td>
+<td><code>click_dog.query_log.enrichment.successes.count</code></td>
+</tr>
+<tr>
+<td><code>click_dog_query_log_enrichment_failures_total</code></td>
+<td>counter</td>
+<td><code>click_dog.query_log.enrichment.failures.count</code></td>
+</tr>
+<tr>
+<td><code>click_dog_query_log_enrichment_match_ratio</code></td>
+<td>gauge</td>
+<td><code>click_dog.query_log.enrichment.match_ratio</code></td>
+</tr>
+<tr>
+<td><code>click_dog_spans_with_query_id_ratio</code></td>
+<td>gauge</td>
+<td><code>click_dog.spans_with_query_id_ratio</code></td>
+</tr>
+<tr>
+<td><code>click_dog_normalized_query_supported</code></td>
+<td>gauge</td>
+<td><code>click_dog.normalized_query_supported</code></td>
+</tr>
+<tr>
+<td><code>click_dog_topology_warning</code></td>
+<td>gauge</td>
+<td><code>click_dog.topology_warning</code> (tag: <code>reason</code>)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="clickhouse-data-plane-health-signals-183">ClickHouse data-plane health signals (#183)<a class="headerlink" href="#clickhouse-data-plane-health-signals-183" title="Permanent link">&para;</a></h3>
+<p>The metrics in the bottom block of the table above carry <strong>ClickHouse
+data-plane health</strong> — orthogonal to "is click-dog exporting" and answering
+"is ClickHouse producing the data click-dog needs?" Useful for the
+"dashboards are empty but click-dog looks healthy" failure mode:</p>
+<ul>
+<li><code>click_dog_span_log_last_poll_timestamp_seconds</code> — Unix timestamp of the
+  most recent span-log fetch that completed without error. An empty fetch
+  (zero rows returned) still advances this gauge; absence of the metric
+  family from <code>/metrics</code> means click-dog is down.</li>
+<li><code>click_dog_span_log_newest_row_age_seconds</code> — age in seconds of the
+  newest span observed in the most recent non-empty fetch. Empty cycles do
+  NOT reset this; the gauge keeps growing while no new spans arrive, so
+  monotonic growth is the staleness signal. <code>0</code> means no observation yet.</li>
+<li><code>click_dog_span_log_rows_last_cycle</code> — raw row count returned by the
+  most recent span-log fetch, before click-dog's in-process filter/dedup.</li>
+<li><code>click_dog_query_log_enrichment_{attempts,successes,failures}_total</code> —
+  cycle-level counters tracking query_log join health. An attempt is
+  recorded only when at least one span carried a <code>clickhouse.query_id</code> to
+  look up, so non-enrichment configurations cost nothing.</li>
+<li><code>click_dog_query_log_enrichment_match_ratio</code> — last cycle's matched /
+  requested ratio. Persists across failed attempts (a failed lookup tells
+  us nothing about how well a future join would match). <code>0</code> before the
+  first successful enrichment.</li>
+<li><code>click_dog_spans_with_query_id_ratio</code> — last cycle's fraction of fetched
+  spans carrying <code>clickhouse.query_id</code>. Counted on the raw (pre-filter)
+  span set so the gauge reflects ClickHouse's output, not click-dog's
+  choices. A value below 1.0 means downstream query-analysis dashboards
+  lose join context for some spans.</li>
+<li><code>click_dog_normalized_query_supported</code> — <code>1</code> if
+  <code>system.query_log.normalized_query_hash</code> is available on the connected
+  ClickHouse and click-dog is using it; <code>0</code> otherwise. In cluster query
+  mode, <code>1</code> means every replica passed the <code>clusterAllReplicas(...,
+  system.columns)</code> compatibility probe. Set once at startup from the
+  capability probe in <code>internal/clickhouse/reader.go</code>.</li>
+<li><code>click_dog_topology_warning</code> — <code>1</code> when the topology self-audit detects more
+  than one instance running whole-cluster span reads (<code>use_cluster_queries</code>),
+  which duplicates exports; <code>0</code> when clean. Emitted per <code>reason</code>
+  (<code>sidecar_cluster_queries</code> | <code>multi_instance_cluster_queries</code>) and always
+  present for both reasons, so a green <code>0</code> is distinguishable from no-data.
+  Observability-only — it never affects <code>/readyz</code>. A red <code>1</code> can also reflect
+  legitimate, bounded duplication — a sustained Keeper outage (instances fail
+  open and export by design) or a long-running backfill from another host —
+  and clears on its own once resolved. The gauge is always emitted
+  (stable <code>0</code> for both reasons from startup, even when the auditor is skipped);
+  the auditor only runs its <code>system.query_log</code> probe — and can raise the gauge to
+  <code>1</code> — when this instance has <code>use_cluster_queries: true</code>. See
+  <a href="../../operating/#cluster-topology-and-sidecar-placement">Operating · Cluster topology</a>.</li>
+</ul>
+<p>The recommended pairing on the Health dashboard:</p>
+<table>
+<thead>
+<tr>
+<th>Operator question</th>
+<th>Read these together</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>"Is click-dog alive?"</td>
+<td><code>uptime_seconds</code> (cockpit) + <code>span_log_last_poll_timestamp_seconds</code></td>
+</tr>
+<tr>
+<td>"Is ClickHouse emitting spans?"</td>
+<td><code>span_log_rows_last_cycle</code> + <code>span_log_newest_row_age_seconds</code></td>
+</tr>
+<tr>
+<td>"Are query_log joins still working?"</td>
+<td><code>query_log_enrichment_failures.count</code> rate + <code>query_log_enrichment_match_ratio</code></td>
+</tr>
+<tr>
+<td>"Are downstream query dashboards complete?"</td>
+<td><code>spans_with_query_id_ratio</code> + <code>normalized_query_supported</code></td>
+</tr>
+<tr>
+<td>"Is exactly one reader doing cluster reads?"</td>
+<td><code>topology_warning</code> (per <code>reason</code>) + the Per-host health table</td>
+</tr>
+</tbody>
+</table>
+<h3 id="troubleshooting-no-data-on-the-health-dashboard">Troubleshooting "No data" on the health dashboard<a class="headerlink" href="#troubleshooting-no-data-on-the-health-dashboard" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Confirm <code>metrics.otlp.enabled: true</code>.</li>
+<li>Confirm the Datadog Agent or collector OTLP gRPC receiver is reachable from
+   click-dog.</li>
+<li>In containers, set <code>metrics.otlp.host</code> to the stable node/instance identity
+   you want to use for the <code>host.name</code> template variable.</li>
+<li>On the legacy scrape path, search Metrics Explorer for
+   <code>click_dog.click_dog_spans_exported_total</code>; that means the explicit
+   OpenMetrics <code>metrics:</code> rename list above is not being applied.</li>
+</ol>
+<h3 id="health-endpoints-http-synthetic-check-alternative">Health endpoints (HTTP / Synthetic check alternative)<a class="headerlink" href="#health-endpoints-http-synthetic-check-alternative" title="Permanent link">&para;</a></h3>
+<p>Alongside <code>/metrics</code>, click-dog exposes dedicated HTTP endpoints suitable for
+Datadog HTTP checks, Synthetic checks, or Kubernetes probes. Full reference:
+<a href="../../observability/#health-endpoints">Observability — Health Endpoints</a>.</p>
+<table>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Default port</th>
+<th>Use from Datadog</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /healthz</code></td>
+<td><code>:8686</code></td>
+<td>HTTP check — liveness; always <code>200</code> while the process is up</td>
+</tr>
+<tr>
+<td><code>GET /readyz</code></td>
+<td><code>:8686</code></td>
+<td>HTTP check — readiness; <code>200</code> only when ClickHouse is reachable AND the breaker is closed</td>
+</tr>
+<tr>
+<td><code>GET /status</code></td>
+<td><code>:8686</code></td>
+<td>Synthetic / scripted check — JSON body with <code>version</code>, <code>clickhouse_healthy</code>, <code>circuit_breaker</code>, <code>backoff_interval_s</code>, <code>last_cycle.{exported,filtered,duplicates,duration_ms,at,error}</code>. Always returns <code>200</code> — assert on the JSON body, not the HTTP status</td>
+</tr>
+<tr>
+<td><code>GET /clusterz</code></td>
+<td><code>:8686</code> (leader only, HA)</td>
+<td>Aggregate <code>/readyz</code> across configured peers. Only the leader serves this path; followers return <code>404 {"status":"not_leader"}</code>. Returns <code>200</code> only when every node is healthy; <code>503</code> when any node is degraded or unreachable</td>
+</tr>
+</tbody>
+</table>
+<p>These overlap with Tier 1 metrics on purpose. Pick endpoints when you want a
+probe Datadog already speaks (HTTP / Synthetic) without standing up an
+OpenMetrics scrape; pick metrics when you want trends, ratios, and dashboard
+widgets. Health endpoints are opt-in via the <code>health:</code> block — see the
+Observability doc for the binding rules and the <code>/clusterz</code> HA configuration.</p>
+<hr />
+<h2 id="recommended-monitors">Recommended Monitors<a class="headerlink" href="#recommended-monitors" title="Permanent link">&para;</a></h2>
+<p>The canonical setup is the <strong>Click-Dog: Health</strong> dashboard (above) wired to
+OTLP self-metrics. Build alerts on top of it in this order:</p>
+<h3 id="tier-1-exporter-health-canonical">Tier 1: Exporter health (canonical)<a class="headerlink" href="#tier-1-exporter-health-canonical" title="Permanent link">&para;</a></h3>
+<p>These monitors fire on click-dog itself and use the default OTLP self-metric
+names (Datadog adds <code>.count</code> to monotonic sums). They are the primary
+signal that click-dog is doing its job.</p>
+<ol>
+<li>
+<p><strong>Stale exports</strong> — last successful cycle is too old. The single most
+   important alert: if click-dog stops, you lose visibility into ClickHouse.
+   Configure this as a <em>formula</em> metric monitor (Datadog → Monitors →
+   New Monitor → Metric → "Use a formula"), not a single-metric monitor:</p>
+</li>
+<li>
+<p>Query <code>a</code>: <code>min:click_dog.last_success_timestamp_seconds{role:active}</code></p>
+</li>
+<li>Formula: <code>now() - a</code></li>
+<li>Alert threshold: <code>&gt; 600</code></li>
+</ol>
+<p><code>last_success_timestamp_seconds</code> is absent until the first successful
+   cycle, so a fresh or failed-start instance reads as no-data rather than
+   epoch zero. In HA mode, the <code>role:active</code> filter excludes leader-gated
+   standbys from stale-export paging while keeping the active exporter covered.
+   The <code>min:</code> aggregation is intentional: it pages when any active exporter is
+   stale, matching the Health dashboard's worst-case cockpit tile.
+   <code>now()</code> is only available in the formula editor; the basic
+   single-metric monitor will reject it. The <code>≥ 600</code> threshold is the
+   conservative floor — <code>2–3× monitor.backoff.max_interval_s</code>, where
+   the default is <code>300</code> s. Adaptive backoff widens the gap between
+   successful cycles during sustained errors, so anything tighter than
+   the maximum backoff will alert on a healthy exporter that is simply
+   pacing itself. If you also wire Tier 1 #2 (breaker not closed) to
+   catch the sustained-error case, a tighter threshold like
+   <code>5–10× check_interval_s</code> (default <code>30</code> s, so <code>150–300</code> s) detects
+   total click-dog death much faster — the breaker monitor backstops
+   the false-positive risk that the wider floor exists to avoid.</p>
+<ol>
+<li>
+<p><strong>Circuit breaker not closed</strong> — exporter is shedding load against
+   ClickHouse.
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>max:click_dog.circuit_breaker_state{*} &gt;= 1
+</code></pre></div>
+   <code>0=closed</code>, <code>1=half_open</code>, <code>2=open</code>. Half-open is a normal-but-noisy
+   recovery state; tighten to <code>&gt;= 2</code> if you only want hard-open pages.</p>
+</li>
+<li>
+<p><strong>Cycle error ratio</strong> — sustained errors even before the breaker trips.
+   <code>cycle_results</code> tags every cycle as exactly one of <code>success</code>, <code>error</code>,
+   <code>skipped</code>, so this is a clean ratio against the summed total.
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>sum:click_dog.cycle_results.count{result:error}.as_rate() /
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>  sum:click_dog.cycle_results.count{*}.as_rate() &gt; 0.1
+</code></pre></div>
+   <code>as_rate()</code> resolves per evaluation bucket, so a single noisy bucket
+   can page. Evaluate over a multi-bucket window (e.g. ≥ 10 min) with
+   an at-least-N-of-M condition (e.g. 3 of 5 buckets over threshold) to
+   avoid single-bucket flap.</p>
+</li>
+<li>
+<p><strong>OTLP self-metrics are missing</strong> — backstop in case the self-metrics
+   exporter or collector path stops running (and therefore Tier 1 #1–#3 stop firing). Create a
+   metric monitor on <code>avg:click_dog.cycle_results.count{*}</code> and enable
+   <em>"Notify if data is missing for the last 5 minutes"</em> in the monitor
+   options panel — <code>no data</code> is a monitor condition, not a query
+   function, so it lives in the options checkbox rather than the query
+   field.</p>
+</li>
+<li>
+<p><strong>Stale span_log source</strong> — click-dog is exporting, but ClickHouse
+   has stopped producing spans for click-dog to read. This is the
+   "click-dog looks healthy, dashboards are empty" failure mode that
+   Tier 1 #1 misses: <code>last_success_timestamp</code> keeps advancing on every
+   poll (including zero-row polls), so the staleness signal lives on
+   the data-plane gauge introduced for #183:
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>max:click_dog.span_log_newest_row_age_seconds{*} &gt; 600
+</code></pre></div>
+   Pair with #1 (stale exports) to triangulate: #1 alone means click-dog
+   stopped; #5 alone means ClickHouse stopped emitting spans; both
+   firing means click-dog crashed while ClickHouse kept producing.
+   Threshold is <code>&gt; 600 s</code> to match the dashboard tile's red band; tune
+   for your span retention window. Note <code>0</code> is ambiguous on this gauge
+   ("no observation yet" OR "the newest span arrived just now"), so
+   always alert on <code>&gt;</code> rather than <code>==</code> (see
+   <a href="../../observability/#available-metrics">Observability — Available Metrics</a>).</p>
+</li>
+<li>
+<p><strong>(Optional) push-side webhook events</strong> — if the <code>webhook</code> block is
+   configured (see <a href="../../observability/#webhook-notifications">Observability — Webhook Notifications</a>),
+   click-dog itself fires <code>circuit_breaker_opened</code>,
+   <code>circuit_breaker_closed</code>, <code>backfill_failed</code>, <code>error_spike</code>, <code>startup</code>,
+   and <code>shutdown</code> straight to Slack / PagerDuty / a Datadog webhook
+   integration without waiting on a scrape window.</p>
+</li>
+</ol>
+<h3 id="tier-2-query-analytics-from-traces">Tier 2: Query analytics (from traces)<a class="headerlink" href="#tier-2-query-analytics-from-traces" title="Permanent link">&para;</a></h3>
+<p>These monitors fire on the traces click-dog exports. They catch
+ClickHouse-side regressions, not click-dog-side problems.</p>
+<p>The shape of each monitor below is illustrative — the metric and tag
+names are the load-bearing part. Tune your team's exact monitor query
+(window, threshold, group-by, anomaly bounds) against them; what's worth
+paging on differs by workload, and Tier 1 already covers exporter
+health, so Tier 2 deliberately stays at the "here is the right signal"
+level rather than prescribing thresholds.</p>
+<ol>
+<li>
+<p><strong>Slow query spike</strong> — P95 query duration regression.
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>avg:trace.duration{service:click-dog-monitor} &gt; 5000000000  # 5e9 ns = 5 s
+</code></pre></div></p>
+</li>
+<li>
+<p><strong>Trace error rate</strong> (backfill mode only) — alert when &gt;5% of spans have
+   <code>error:true</code>. The <code>error</code> attribute only exists on backfill spans from
+   <code>query_log</code>; scheduled-mode spans from <code>opentelemetry_span_log</code> always
+   have status OK.</p>
+</li>
+<li>
+<p><strong>Memory hog queries</strong> (backfill mode only) — <code>db.memory_usage</code> exceeds
+   threshold.</p>
+</li>
+<li>
+<p><strong>Read amplification</strong> (backfill mode only) — P95 of <code>db.read_bytes</code>
+   spikes.</p>
+</li>
+<li>
+<p><strong>Unusual query volume</strong> — anomaly detection on span count; catches both
+   traffic spikes and unexpected drops.</p>
+</li>
+<li>
+<p><strong>Top-N queries by duration</strong> — weekly digest of the slowest query
+   families, grouped by <code>@query_log.normalized_query_hash</code>. Useful for
+   regression hunting without an alerting threshold.</p>
+</li>
+<li>
+<p><strong>Per-user query patterns</strong> — track which users generate load, grouped
+   by <code>@query_log.user</code>. Useful for capacity planning and noisy-neighbour
+   detection.</p>
+</li>
+<li>
+<p><strong>Cross-host skew</strong> — alert if one ClickHouse node's P95 latency drifts
+   well above its peers, grouped by <code>@hostname</code>. Catches single-node
+   degradation that aggregate latency monitors mask.</p>
+</li>
+</ol>
+<h3 id="tier-3-fallback-signals">Tier 3: Fallback signals<a class="headerlink" href="#tier-3-fallback-signals" title="Permanent link">&para;</a></h3>
+<p>Complementary backstops for setups where Tier 1 and Tier 2 aren't fully
+wired yet, or for catching failures the higher tiers can't observe:</p>
+<ul>
+<li><strong>Log-based monitors</strong> — ship click-dog logs to Datadog Logs and alert on
+  <code>[ERROR]</code> lines or circuit-breaker warnings. Useful when <code>/metrics</code> is
+  not (yet) scraped.</li>
+<li><strong>Process check</strong> — Datadog Agent <code>process</code> check on the <code>click-dog</code>
+  binary. The one failure mode <code>/metrics</code> cannot report on is the binary
+  crashing — because the process serving <code>/metrics</code> is the one that died.</li>
+<li><strong>No data on traces</strong> — fires if no spans land in the trace pipeline.
+  Less precise than Tier 1 #1 because it conflates "click-dog is down"
+  with "ClickHouse has no traffic", but it works without any extra wiring.</li>
+</ul>
+<hr />
+<h2 id="example-full-production-setup">Example: Full Production Setup<a class="headerlink" href="#example-full-production-setup" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="nt">clickhouse</span><span class="p">:</span>
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a><span class="w">  </span><span class="nt">host</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${CLICKHOUSE_HOST}</span>
+<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a><span class="w">  </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">9440</span>
+<a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a><span class="w">  </span><span class="nt">database</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default</span>
+<a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a><span class="w">  </span><span class="nt">username</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${CLICKHOUSE_USERNAME}</span>
+<a id="__codelineno-23-6" name="__codelineno-23-6" href="#__codelineno-23-6"></a><span class="w">  </span><span class="nt">password</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${CLICKHOUSE_PASSWORD}</span>
+<a id="__codelineno-23-7" name="__codelineno-23-7" href="#__codelineno-23-7"></a><span class="w">  </span><span class="nt">secure</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-23-8" name="__codelineno-23-8" href="#__codelineno-23-8"></a><span class="w">  </span><span class="nt">ca_cert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/ssl/clickhouse-ca.pem</span>
+<a id="__codelineno-23-9" name="__codelineno-23-9" href="#__codelineno-23-9"></a>
+<a id="__codelineno-23-10" name="__codelineno-23-10" href="#__codelineno-23-10"></a><span class="nt">exporters</span><span class="p">:</span>
+<a id="__codelineno-23-11" name="__codelineno-23-11" href="#__codelineno-23-11"></a><span class="w">  </span><span class="nt">otel</span><span class="p">:</span>
+<a id="__codelineno-23-12" name="__codelineno-23-12" href="#__codelineno-23-12"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">collector_address</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${DD_AGENT_HOST}:4317</span>
+<a id="__codelineno-23-13" name="__codelineno-23-13" href="#__codelineno-23-13"></a><span class="w">      </span><span class="nt">service_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">click-dog-monitor</span>
+<a id="__codelineno-23-14" name="__codelineno-23-14" href="#__codelineno-23-14"></a><span class="w">      </span><span class="nt">secure</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-23-15" name="__codelineno-23-15" href="#__codelineno-23-15"></a><span class="w">      </span><span class="nt">ca_cert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/ssl/dd-ca.pem</span>
+<a id="__codelineno-23-16" name="__codelineno-23-16" href="#__codelineno-23-16"></a>
+<a id="__codelineno-23-17" name="__codelineno-23-17" href="#__codelineno-23-17"></a><span class="nt">monitor</span><span class="p">:</span>
+<a id="__codelineno-23-18" name="__codelineno-23-18" href="#__codelineno-23-18"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-23-19" name="__codelineno-23-19" href="#__codelineno-23-19"></a><span class="w">  </span><span class="nt">min_trace_duration_ms</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1000</span>
+<a id="__codelineno-23-20" name="__codelineno-23-20" href="#__codelineno-23-20"></a><span class="w">  </span><span class="nt">check_interval_s</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30</span>
+<a id="__codelineno-23-21" name="__codelineno-23-21" href="#__codelineno-23-21"></a><span class="w">  </span><span class="nt">max_spans_per_cycle</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">500</span>
+<a id="__codelineno-23-22" name="__codelineno-23-22" href="#__codelineno-23-22"></a><span class="w">  </span><span class="nt">batch_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">50</span>
+<a id="__codelineno-23-23" name="__codelineno-23-23" href="#__codelineno-23-23"></a><span class="w">  </span><span class="nt">batch_delay_ms</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100</span>
+<a id="__codelineno-23-24" name="__codelineno-23-24" href="#__codelineno-23-24"></a><span class="w">  </span><span class="nt">circuit_breaker</span><span class="p">:</span>
+<a id="__codelineno-23-25" name="__codelineno-23-25" href="#__codelineno-23-25"></a><span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-23-26" name="__codelineno-23-26" href="#__codelineno-23-26"></a><span class="w">    </span><span class="nt">failure_threshold</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span>
+<a id="__codelineno-23-27" name="__codelineno-23-27" href="#__codelineno-23-27"></a><span class="w">  </span><span class="nt">backoff</span><span class="p">:</span>
+<a id="__codelineno-23-28" name="__codelineno-23-28" href="#__codelineno-23-28"></a><span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-23-29" name="__codelineno-23-29" href="#__codelineno-23-29"></a>
+<a id="__codelineno-23-30" name="__codelineno-23-30" href="#__codelineno-23-30"></a><span class="nt">filters</span><span class="p">:</span>
+<a id="__codelineno-23-31" name="__codelineno-23-31" href="#__codelineno-23-31"></a><span class="w">  </span><span class="nt">blacklist_queries</span><span class="p">:</span>
+<a id="__codelineno-23-32" name="__codelineno-23-32" href="#__codelineno-23-32"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;^SELECT</span><span class="nv"> </span><span class="s">\\*</span><span class="nv"> </span><span class="s">FROM</span><span class="nv"> </span><span class="s">system\\.&quot;</span>
+<a id="__codelineno-23-33" name="__codelineno-23-33" href="#__codelineno-23-33"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;(?i)healthcheck&quot;</span>
+<a id="__codelineno-23-34" name="__codelineno-23-34" href="#__codelineno-23-34"></a>
+<a id="__codelineno-23-35" name="__codelineno-23-35" href="#__codelineno-23-35"></a><span class="nt">log_level</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">info</span>
+</code></pre></div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/coltconsulting/click-dog" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tracking", "navigation.sections", "navigation.expand", "navigation.top", "search.suggest", "search.highlight", "content.code.copy", "content.code.annotate"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+  
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../javascripts/table-wbr.js"></script>
+      
+    
+  <!-- Make the "Click-Dog" wordmark in the docs header link to the homepage,
+       like the logo icon already does. We reuse the logo's href so the link is
+       correct from any depth; if JS is off the wordmark just stays plain text. -->
+  <script>
+    (function () {
+      var logo = document.querySelector('.md-header [data-md-component="logo"]');
+      var name = document.querySelector('.md-header__title .md-header__topic:not([data-md-component="header-topic"]) .md-ellipsis');
+      if (!logo || !name || name.querySelector('a')) return;
+      var a = document.createElement('a');
+      a.href = logo.getAttribute('href');
+      a.textContent = name.textContent.trim();
+      a.setAttribute('aria-label', 'Click-Dog home');
+      a.style.color = 'inherit';
+      a.style.textDecoration = 'none';
+      name.textContent = '';
+      name.appendChild(a);
+    })();
+  </script>
+
+  </body>
+</html>

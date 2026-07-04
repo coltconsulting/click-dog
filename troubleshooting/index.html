@@ -1,0 +1,2185 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Source-safe query observability for ClickHouse today, with more telemetry sources planned">
+      
+      
+      
+        <link rel="canonical" href="https://click-dog.com/troubleshooting/">
+      
+      
+        <link rel="prev" href="../resilience/">
+      
+      
+        <link rel="next" href="../operating/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Troubleshooting - Click-Dog</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=IBM+Plex+Sans:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"IBM Plex Sans";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  
+
+  <!-- Brand fonts (match the landing) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <!-- Favicon -->
+  <link rel="icon" href="../assets/favicon.png">
+  <link rel="icon" sizes="32x32" href="../assets/favicon-32.png">
+  <link rel="apple-touch-icon" href="../assets/favicon.png">
+
+  <!-- Open Graph / Twitter social card.
+       Guard `page` — it is None on the generated 404 page, which also
+       extends this template. -->
+  
+  
+  
+  
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Troubleshooting">
+  <meta property="og:description" content="Source-safe query observability for ClickHouse today, with more telemetry sources planned">
+  <meta property="og:image" content="https://click-dog.com/assets/social-card.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Troubleshooting">
+  <meta name="twitter:description" content="Source-safe query observability for ClickHouse today, with more telemetry sources planned">
+  <meta name="twitter:image" content="https://click-dog.com/assets/social-card.png">
+
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="amber">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#troubleshooting" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+        <aside class="md-banner">
+          <div class="md-banner__inner md-grid md-typeset">
+            
+            
+  <strong>Public beta.</strong> Newly open source — the public API and config may still change. Click-Dog has been extensively tested and running in production for months.
+
+          </div>
+          
+        </aside>
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Click-Dog" class="md-header__button md-logo" aria-label="Click-Dog" data-md-component="logo">
+      
+  <img src="../assets/click-dog-logo-light.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Click-Dog
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Troubleshooting
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="amber"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="amber"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/coltconsulting/click-dog" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    coltconsulting/click-dog
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Click-Dog" class="md-nav__button md-logo" aria-label="Click-Dog" data-md-component="logo">
+      
+  <img src="../assets/click-dog-logo-light.svg" alt="logo">
+
+    </a>
+    Click-Dog
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/coltconsulting/click-dog" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    coltconsulting/click-dog
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Main Site
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Setup
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integrations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integrations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/datadog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Datadog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/honeycomb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Honeycomb
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/generic-otlp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Generic OTLP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/splunk-hec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Splunk HEC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analysis
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Analysis
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../query-analysis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Query Analysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../span-attributes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Span Attributes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Observability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../resilience/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resilience
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#enable-debug-logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Enable Debug Logging
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#common-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common Issues
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Common Issues">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#no-spans-being-exported" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        No Spans Being Exported
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#connection-refused-to-clickhouse" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Connection Refused to ClickHouse
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#connection-refused-to-otel-collector" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Connection Refused to OTEL Collector
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#spans-exported-but-not-appearing-in-backend" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Spans Exported But Not Appearing in Backend
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#high-memory-usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High Memory Usage
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#circuit-breaker-keeps-opening" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Circuit Breaker Keeps Opening
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backfill-producing-no-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backfill Producing No Results
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tls-certificate-errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TLS Certificate Errors
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backoff-increasing-unexpectedly" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backoff Increasing Unexpectedly
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sql-redaction-not-working" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SQL Redaction Not Working
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#canary-queries-in-degraded-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Canary Queries in Degraded Mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#high-availability-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High Availability Issues
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#log-levels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Log Levels
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#investigating-queries-with-analyze" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Investigating queries with analyze
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Investigating queries with analyze">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#analyze-queries-what-looks-suspicious-in-this-window" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        analyze queries — what looks suspicious in this window
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#analyze-trace-drill-from-a-query-to-its-trace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        analyze trace — drill from a query to its trace
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#getting-help" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Getting Help
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../operating/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operating Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../kubernetes-clickhouse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kubernetes — ClickHouse Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../modes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operation Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../filtering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Filtering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../support/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Support
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#enable-debug-logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Enable Debug Logging
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#common-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common Issues
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Common Issues">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#no-spans-being-exported" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        No Spans Being Exported
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#connection-refused-to-clickhouse" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Connection Refused to ClickHouse
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#connection-refused-to-otel-collector" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Connection Refused to OTEL Collector
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#spans-exported-but-not-appearing-in-backend" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Spans Exported But Not Appearing in Backend
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#high-memory-usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High Memory Usage
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#circuit-breaker-keeps-opening" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Circuit Breaker Keeps Opening
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backfill-producing-no-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backfill Producing No Results
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tls-certificate-errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TLS Certificate Errors
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#backoff-increasing-unexpectedly" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backoff Increasing Unexpectedly
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sql-redaction-not-working" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SQL Redaction Not Working
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#canary-queries-in-degraded-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Canary Queries in Degraded Mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#high-availability-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High Availability Issues
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#log-levels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Log Levels
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#investigating-queries-with-analyze" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Investigating queries with analyze
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Investigating queries with analyze">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#analyze-queries-what-looks-suspicious-in-this-window" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        analyze queries — what looks suspicious in this window
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#analyze-trace-drill-from-a-query-to-its-trace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        analyze trace — drill from a query to its trace
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#getting-help" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Getting Help
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h1>
+<h2 id="enable-debug-logging">Enable Debug Logging<a class="headerlink" href="#enable-debug-logging" title="Permanent link">&para;</a></h2>
+<p>The first step for any issue is to enable debug-level logging:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">log_level</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">debug</span>
+</code></pre></div>
+<p>This reveals detailed information about each polling cycle:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>[DEBUG] Found 23 spans
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>[DEBUG] Processing batch 1-23 of 23 spans
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>[DEBUG] Filtering span from IP not in whitelist: 172.16.0.5
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>[DEBUG] Filtering operation not in whitelist: TCPHandler::runImpl()
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>[INFO] Exported: 15, Filtered: 3, Duplicates: 5
+</code></pre></div>
+<hr />
+<h2 id="common-issues">Common Issues<a class="headerlink" href="#common-issues" title="Permanent link">&para;</a></h2>
+<h3 id="no-spans-being-exported">No Spans Being Exported<a class="headerlink" href="#no-spans-being-exported" title="Permanent link">&para;</a></h3>
+<p><strong>Symptom:</strong> <code>Exported: 0</code> every cycle.</p>
+<p><strong>Fastest path: run the readiness check.</strong> <code>click-dog check</code> automates
+the manual SQL below — it reports whether <code>system.opentelemetry_span_log</code> and
+<code>system.query_log</code> are readable and granted, whether recent spans exist, whether
+your <code>min_trace_duration_ms</code> threshold excludes everything, whether spans carry
+<code>clickhouse.query_id</code> (required for enrichment and user filters), whether the
+query-log enrichment join returns rows, and whether <code>normalized_query_hash</code> is
+available. Each warn/fail line prints the exact SQL or config prerequisite to
+fix. Use <code>--lookback</code> to widen the window (default <code>24h</code>). The manual
+checks below remain useful for ad-hoc spelunking.</p>
+<p><strong>Check 1: ClickHouse has OpenTelemetry data</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="k">SELECT</span><span class="w"> </span><span class="k">count</span><span class="p">()</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">system</span><span class="p">.</span><span class="n">opentelemetry_span_log</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="k">WHERE</span><span class="w"> </span><span class="n">finish_date</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="n">today</span><span class="p">();</span>
+</code></pre></div>
+<p>If this returns 0, OpenTelemetry logging isn't enabled in ClickHouse. See <a href="../install/#clickhouse-opentelemetry">Install — Prerequisites</a>.</p>
+<p><strong>Check 2: Duration threshold is too high</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">SELECT</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span><span class="k">count</span><span class="p">(),</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="k">min</span><span class="p">((</span><span class="n">finish_time_us</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">start_time_us</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mi">1000</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">min_duration_ms</span><span class="p">,</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="k">max</span><span class="p">((</span><span class="n">finish_time_us</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">start_time_us</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mi">1000</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">max_duration_ms</span><span class="p">,</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="k">avg</span><span class="p">((</span><span class="n">finish_time_us</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">start_time_us</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mi">1000</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">avg_duration_ms</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="k">FROM</span><span class="w"> </span><span class="k">system</span><span class="p">.</span><span class="n">opentelemetry_span_log</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="k">WHERE</span><span class="w"> </span><span class="n">finish_date</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="n">today</span><span class="p">();</span>
+</code></pre></div>
+<p>If your <code>min_trace_duration_ms</code> is higher than <code>max_duration_ms</code>, no spans will match. Lower the threshold.</p>
+<p><strong>Check 3: Filters are too restrictive</strong></p>
+<p>Set <code>log_level: debug</code> and look for filtering messages. Try temporarily removing all filters:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nt">filters</span><span class="p">:</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">whitelist_operations</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[]</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">whitelist_ips</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[]</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nt">blacklist_queries</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[]</span>
+</code></pre></div>
+<p><strong>Check 4: All spans are deduplicated</strong></p>
+<p>If you see <code>Duplicates: N</code> with a high count, the same spans are being found each cycle. This is normal if there are no new slow queries. The dedup cache is working correctly.</p>
+<hr />
+<h3 id="connection-refused-to-clickhouse">Connection Refused to ClickHouse<a class="headerlink" href="#connection-refused-to-clickhouse" title="Permanent link">&para;</a></h3>
+<p><strong>Symptom:</strong> <code>Failed to connect to ClickHouse</code> or <code>connection refused</code>.</p>
+<ul>
+<li>Verify ClickHouse is running and accepting connections on the configured port</li>
+<li>Check that the port is the <strong>native protocol port</strong> (default 9000), not the HTTP port (8123)</li>
+<li>If using TLS (<code>secure: true</code>), make sure ClickHouse is configured for TLS on that port (typically 9440)</li>
+<li>Check firewall rules between click-dog and ClickHouse</li>
+</ul>
+<hr />
+<h3 id="connection-refused-to-otel-collector">Connection Refused to OTEL Collector<a class="headerlink" href="#connection-refused-to-otel-collector" title="Permanent link">&para;</a></h3>
+<p><strong>Symptom:</strong> <code>Failed to create gRPC connection</code> or <code>connection refused</code> on the OTEL side.</p>
+<ul>
+<li>Verify the OTEL collector is running and listening on the configured port (default 4317)</li>
+<li>For Datadog Agent: ensure <code>otlp_config.receiver.protocols.grpc.endpoint</code> is configured</li>
+<li>Check that you're using the gRPC port (4317), not the HTTP port (4318)</li>
+<li>If using TLS, verify certificates are correct</li>
+</ul>
+<hr />
+<h3 id="spans-exported-but-not-appearing-in-backend">Spans Exported But Not Appearing in Backend<a class="headerlink" href="#spans-exported-but-not-appearing-in-backend" title="Permanent link">&para;</a></h3>
+<p><strong>Symptom:</strong> Click-dog reports <code>Exported: N</code> but traces don't appear in Datadog/Honeycomb/etc.</p>
+<ul>
+<li>Check the OTEL collector logs for errors</li>
+<li>Verify the <code>service_name</code> matches what you're searching for in your backend</li>
+<li>Some backends have ingestion delays — wait a few minutes</li>
+<li>For Datadog: check the Agent logs for OTLP ingestion errors</li>
+<li>For Honeycomb: verify the API key and dataset name</li>
+</ul>
+<hr />
+<h3 id="high-memory-usage">High Memory Usage<a class="headerlink" href="#high-memory-usage" title="Permanent link">&para;</a></h3>
+<p><strong>Symptom:</strong> Click-dog memory grows over time.</p>
+<ul>
+<li>Reduce <code>dedup_cache_size</code> (default 10,000). The LRU cache stores <code>(trace_id, span_id)</code> keys in memory</li>
+<li>Reduce <code>max_spans_per_cycle</code> to process fewer spans per cycle</li>
+<li>Ensure <code>query_timeout_s</code> is set to prevent long-running queries from accumulating</li>
+</ul>
+<hr />
+<h3 id="circuit-breaker-keeps-opening">Circuit Breaker Keeps Opening<a class="headerlink" href="#circuit-breaker-keeps-opening" title="Permanent link">&para;</a></h3>
+<p><strong>Symptom:</strong> <code>Circuit breaker opened after N consecutive failures</code> repeating.</p>
+<ul>
+<li>Check ClickHouse health directly: <code>clickhouse-client -q "SELECT 1"</code></li>
+<li>Look at the error messages before the circuit breaker opens</li>
+<li>Increase <code>failure_threshold</code> if transient errors are expected</li>
+<li>Increase <code>reset_timeout_s</code> to give ClickHouse more recovery time</li>
+</ul>
+<hr />
+<h3 id="backfill-producing-no-results">Backfill Producing No Results<a class="headerlink" href="#backfill-producing-no-results" title="Permanent link">&para;</a></h3>
+<p><strong>Symptom:</strong> <code>Found 0 slow queries in range</code>.</p>
+<p><strong>Check 1: Data exists in the time range</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="k">SELECT</span><span class="w"> </span><span class="k">count</span><span class="p">(),</span><span class="w"> </span><span class="k">min</span><span class="p">(</span><span class="n">event_time</span><span class="p">),</span><span class="w"> </span><span class="k">max</span><span class="p">(</span><span class="n">event_time</span><span class="p">)</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="k">FROM</span><span class="w"> </span><span class="k">system</span><span class="p">.</span><span class="n">query_log</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="k">WHERE</span><span class="w"> </span><span class="n">event_time</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="s1">&#39;2024-01-15 00:00:00&#39;</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="k">AND</span><span class="w"> </span><span class="n">event_time</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="s1">&#39;2024-01-15 23:59:59&#39;</span><span class="p">;</span>
+</code></pre></div>
+<p><strong>Check 2: Queries meet the duration threshold</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="k">SELECT</span><span class="w"> </span><span class="k">count</span><span class="p">(),</span><span class="w"> </span><span class="k">max</span><span class="p">(</span><span class="n">query_duration_ms</span><span class="p">)</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="k">FROM</span><span class="w"> </span><span class="k">system</span><span class="p">.</span><span class="n">query_log</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="k">WHERE</span><span class="w"> </span><span class="n">event_time</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="s1">&#39;2024-01-15 00:00:00&#39;</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="k">AND</span><span class="w"> </span><span class="n">event_time</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="s1">&#39;2024-01-15 23:59:59&#39;</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="k">AND</span><span class="w"> </span><span class="k">type</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;QueryFinish&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;ExceptionWhileProcessing&#39;</span><span class="p">);</span>
+</code></pre></div>
+<p><strong>Check 3: Time format is correct</strong></p>
+<p>Times must be RFC3339 format with timezone:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Correct</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>-backfill-start<span class="w"> </span><span class="s2">&quot;2024-01-15T00:00:00Z&quot;</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># Wrong</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>-backfill-start<span class="w"> </span><span class="s2">&quot;2024-01-15 00:00:00&quot;</span>
+</code></pre></div></p>
+<hr />
+<h3 id="tls-certificate-errors">TLS Certificate Errors<a class="headerlink" href="#tls-certificate-errors" title="Permanent link">&para;</a></h3>
+<p><strong>Symptom:</strong> <code>x509: certificate signed by unknown authority</code> or similar TLS errors.</p>
+<ul>
+<li>Provide the CA certificate: <code>ca_cert: /path/to/ca.pem</code></li>
+<li>For testing only: <code>insecure_skip_verify: true</code> (never in production)</li>
+<li>For mTLS: ensure both <code>client_cert</code> and <code>client_key</code> are provided</li>
+</ul>
+<hr />
+<h3 id="backoff-increasing-unexpectedly">Backoff Increasing Unexpectedly<a class="headerlink" href="#backoff-increasing-unexpectedly" title="Permanent link">&para;</a></h3>
+<p><strong>Symptom:</strong> <code>Backoff increased to Xs after N consecutive failures</code> in logs.</p>
+<ul>
+<li>This means ClickHouse health checks or queries are failing repeatedly</li>
+<li>Check ClickHouse connectivity: <code>clickhouse-client -q "SELECT 1"</code></li>
+<li>Review the error messages <em>before</em> the backoff warning — they show the root cause</li>
+<li>If ClickHouse is healthy, check network stability between click-dog and ClickHouse</li>
+<li>Backoff resets to the base interval automatically on the first successful poll after recovery</li>
+</ul>
+<hr />
+<h3 id="sql-redaction-not-working">SQL Redaction Not Working<a class="headerlink" href="#sql-redaction-not-working" title="Permanent link">&para;</a></h3>
+<p><strong>Symptom:</strong> Sensitive data still appearing in exported <code>db.statement</code> attributes.</p>
+<ul>
+<li>Verify your regex pattern matches the target text. Test with a regex tool first</li>
+<li>YAML escaping is tricky with regex. Prefer block scalar syntax to avoid double-escaping:
+  <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nt">filters</span><span class="p">:</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">redact_queries</span><span class="p">:</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">pattern</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">|</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">        </span><span class="no">(?i)identified\s+by\s+&#39;[^&#39;]*&#39;</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">      </span><span class="nt">replacement</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;IDENTIFIED</span><span class="nv"> </span><span class="s">BY</span><span class="nv"> </span><span class="s">&#39;[REDACTED]&#39;&quot;</span>
+</code></pre></div></li>
+<li>Leading/trailing whitespace in patterns is trimmed automatically</li>
+<li>Redaction runs <em>after</em> blacklist filtering — if the query is blacklisted, it's dropped entirely (not redacted)</li>
+<li>Set <code>log_level: debug</code> and look for the query text in filter decisions</li>
+</ul>
+<hr />
+<h3 id="canary-queries-in-degraded-mode">Canary Queries in Degraded Mode<a class="headerlink" href="#canary-queries-in-degraded-mode" title="Permanent link">&para;</a></h3>
+<p><strong>Symptom:</strong> Seeing <code>click-dog.canary</code> spans in your backend, or wanting to enable canary.</p>
+<p>Canary queries are <strong>opt-in</strong>. When enabled, they run a lightweight <code>COUNT</code> query during circuit breaker open or high backoff states:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nt">monitor</span><span class="p">:</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">canary</span><span class="p">:</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">    </span><span class="nt">threshold_duration_ms</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">60000</span><span class="w">  </span><span class="c1"># count spans &gt; 60s</span>
+</code></pre></div>
+<ul>
+<li>Canary spans have attributes <code>click_dog.canary=true</code> and <code>click_dog.degraded=true</code></li>
+<li>If canary queries also fail, the circuit breaker records additional failures</li>
+<li>Canary only counts spans finishing today — spans from previous calendar days are excluded</li>
+<li>To filter canary spans in your backend, query for <code>click_dog.canary != "true"</code> (the value is the string <code>"true"</code>, not a boolean)</li>
+</ul>
+<hr />
+<h3 id="high-availability-issues">High Availability Issues<a class="headerlink" href="#high-availability-issues" title="Permanent link">&para;</a></h3>
+<p><strong>Symptom:</strong> Leader election not working or multiple instances exporting duplicates.</p>
+<p><strong>Leader election not starting:</strong></p>
+<ul>
+<li>Verify Keeper is accessible on port 9181: <code>echo ruok | nc keeper-host 9181</code></li>
+<li>Check that <code>ha.keeper.hosts</code> lists the correct Keeper nodes</li>
+<li>Verify <code>ha.keeper.base_path</code> starts with <code>/click-dog/</code> or is exactly <code>/click-dog</code> (required by path confinement)</li>
+<li>Session timeout must be between 5s and 30s</li>
+</ul>
+<p><strong>Multiple instances exporting the same spans:</strong></p>
+<ul>
+<li>With no <code>ha.keeper.hosts</code> configured, each instance operates independently — duplicates are expected</li>
+<li>With Keeper hosts configured (leader election active), ensure all instances can reach the same Keeper cluster</li>
+<li>If Keeper is unreachable at startup, the instance runs in standalone mode. If connectivity is lost while running, the election goroutine attempts to reconnect and rejoin automatically</li>
+<li>OTEL collectors and backends handle duplicate <code>(trace_id, span_id)</code> pairs — this is by design</li>
+</ul>
+<hr />
+<h2 id="log-levels">Log Levels<a class="headerlink" href="#log-levels" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Level</th>
+<th>What's Logged</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>error</code></td>
+<td>Errors only. Minimal output</td>
+</tr>
+<tr>
+<td><code>warn</code></td>
+<td>Warnings (insecure configs, circuit breaker state changes, backoff increases)</td>
+</tr>
+<tr>
+<td><code>info</code></td>
+<td>Startup config, connection status, export summaries per cycle (default)</td>
+</tr>
+<tr>
+<td><code>debug</code></td>
+<td>Individual span processing, batch details, filter decisions</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="investigating-queries-with-analyze">Investigating queries with <code>analyze</code><a class="headerlink" href="#investigating-queries-with-analyze" title="Permanent link">&para;</a></h2>
+<p><code>click-dog analyze</code> is a <strong>local, read-only</strong> triage surface for ClickHouse
+query behavior. It opens only the ClickHouse reader — it never constructs
+exporters, opens exporter connections, starts the metrics/health servers,
+runs leader election, or writes anything back to ClickHouse — so it is safe to
+run against production. Reports are operational artifacts: they emit bounded
+normalized query previews, never raw query text, so treat JSON output like
+logs/traces.</p>
+<p>Both verbs share <code>-config</code>, <code>-lookback</code> (default <code>1h</code>), <code>-timeout</code>
+(default <code>2m</code>), <code>-format</code> (<code>table</code> or <code>json</code>), and <code>-output</code> (write to a file
+instead of stdout; the file is created <code>0600</code>).</p>
+<h3 id="analyze-queries-what-looks-suspicious-in-this-window"><code>analyze queries</code> — what looks suspicious in this window<a class="headerlink" href="#analyze-queries-what-looks-suspicious-in-this-window" title="Permanent link">&para;</a></h3>
+<p>Runs a deterministic registry of analyzers (<code>coverage</code>, <code>resource_hog</code>,
+<code>attribution_gap</code>, <code>skew</code>) over the lookback window and reports findings:
+query-family resource outliers, missing <code>log_comment</code> ownership attribution,
+user/client/host skew, and coverage prerequisites.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Last hour as a table</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>click-dog<span class="w"> </span>analyze<span class="w"> </span>queries
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="c1"># Last 6h as stable JSON, redacting user/client/host values</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>click-dog<span class="w"> </span>analyze<span class="w"> </span>queries<span class="w"> </span>-lookback<span class="w"> </span>6h<span class="w"> </span>-format<span class="w"> </span>json<span class="w"> </span>-redact-dimensions<span class="w"> </span>-output<span class="w"> </span>report.json
+</code></pre></div>
+<p>The command exits <code>0</code> even when findings are critical; it exits <code>2</code> on bad CLI
+usage and <code>1</code> on a config, connection, or required-query failure. Partial data
+(unsupported rollups, no span sample, query-log enrichment failures) degrades
+to a coverage warning rather than failing the run.</p>
+<h3 id="analyze-trace-drill-from-a-query-to-its-trace"><code>analyze trace</code> — drill from a query to its trace<a class="headerlink" href="#analyze-trace-drill-from-a-query-to-its-trace" title="Permanent link">&para;</a></h3>
+<p>The inverse path for incident response: <em>"I have this running/recent query;
+show me the trace and nearby context."</em> It finds a query, fetches the native
+trace spans that carry it via the <code>clickhouse.query_id</code> span attribute, then
+fans out to query-log stats, the matching query-family rollup, and the analyzer
+findings for that family.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1"># Guided flow (requires an interactive terminal)</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>click-dog<span class="w"> </span>analyze<span class="w"> </span>trace<span class="w"> </span>-wizard
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="c1"># Search recent finished/failed queries in the window</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>click-dog<span class="w"> </span>analyze<span class="w"> </span>trace<span class="w"> </span>-source<span class="w"> </span>recent<span class="w"> </span>-match<span class="w"> </span><span class="s2">&quot;events&quot;</span><span class="w"> </span>-lookback<span class="w"> </span>1h
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="c1"># Search running queries; wait up to 30s for the trace to materialize</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>click-dog<span class="w"> </span>analyze<span class="w"> </span>trace<span class="w"> </span>-source<span class="w"> </span>current<span class="w"> </span>-match<span class="w"> </span><span class="s2">&quot;events&quot;</span><span class="w"> </span>-wait<span class="w"> </span>30s
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="c1"># Drill an explicit identity directly (query/trace IDs skip candidate search)</span>
+<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a>click-dog<span class="w"> </span>analyze<span class="w"> </span>trace<span class="w"> </span>-query-id<span class="w"> </span>&lt;id&gt;
+<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a>click-dog<span class="w"> </span>analyze<span class="w"> </span>trace<span class="w"> </span>-trace-id<span class="w"> </span>&lt;id&gt;
+<a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a>
+<a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a><span class="c1"># Look up by normalized query hash (exact recent query-log lookup; auto-drills only when exactly one matches)</span>
+<a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a>click-dog<span class="w"> </span>analyze<span class="w"> </span>trace<span class="w"> </span>-normalized-query-hash<span class="w"> </span>&lt;hash&gt;<span class="w"> </span>-fanout<span class="w"> </span>trace,stats,similar,findings
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-source</code></td>
+<td><code>recent</code></td>
+<td><code>recent</code> (<code>system.query_log</code>), <code>current</code> (<code>system.processes</code>), or <code>other</code> (explicit identity).</td>
+</tr>
+<tr>
+<td><code>-match</code></td>
+<td>empty</td>
+<td>Case-insensitive substring over normalized previews and candidate metadata.</td>
+</tr>
+<tr>
+<td><code>-query-id</code> / <code>-trace-id</code></td>
+<td>empty</td>
+<td>Explicit identity; a direct drill that skips candidate search.</td>
+</tr>
+<tr>
+<td><code>-normalized-query-hash</code></td>
+<td>empty</td>
+<td>Exact (<code>=</code>) recent query-log lookup over candidate search — may match zero, one, or several candidates, and auto-drills only when exactly one matches.</td>
+</tr>
+<tr>
+<td><code>-candidate-limit</code></td>
+<td><code>20</code></td>
+<td>Max candidates listed or returned.</td>
+</tr>
+<tr>
+<td><code>-span-limit</code></td>
+<td><code>1000</code></td>
+<td>Max spans fetched for the selected trace IDs.</td>
+</tr>
+<tr>
+<td><code>-wait</code></td>
+<td><code>0s</code></td>
+<td>Bounded poll for a running query's trace to materialize (capped by <code>-timeout</code>).</td>
+</tr>
+<tr>
+<td><code>-fanout</code></td>
+<td><code>trace,stats</code></td>
+<td>Comma-separated <code>trace</code>, <code>stats</code>, <code>similar</code>, <code>findings</code>.</td>
+</tr>
+<tr>
+<td><code>-redact-dimensions</code></td>
+<td><code>false</code></td>
+<td>Redact user/client/host values in the report.</td>
+</tr>
+</tbody>
+</table>
+<p>Notes:</p>
+<ul>
+<li>The configured operation blacklist still applies to the fetched trace spans,
+  even on a direct <code>-trace-id</code> drill.</li>
+<li>A <code>-source current</code> candidate may not have finished: its query-log row,
+  normalized hash, and trace spans may not exist yet. These become warnings, not
+  failures.</li>
+<li><code>-wizard</code> is TTY-only; a non-interactive <code>-wizard</code> exits <code>2</code> rather than
+  blocking. In non-interactive mode the command never waits for input — a
+  single matching candidate is drilled, otherwise the bounded candidate list is
+  printed.</li>
+<li>A produced report exits <code>0</code> even with warnings (missing trace, unsupported
+  rollups, no matching findings). It exits <code>1</code> on config/connection/required-query
+  failures and <code>2</code> on bad CLI usage.</li>
+</ul>
+<hr />
+<h2 id="getting-help">Getting Help<a class="headerlink" href="#getting-help" title="Permanent link">&para;</a></h2>
+<p>If you're still stuck:</p>
+<ol>
+<li>Set <code>log_level: debug</code> and capture output</li>
+<li>Check the <a href="https://github.com/coltconsulting/click-dog/issues">GitHub issues</a> for similar problems</li>
+<li>Open a new issue with your configuration (redact secrets) and debug log output</li>
+</ol>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/coltconsulting/click-dog" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tracking", "navigation.sections", "navigation.expand", "navigation.top", "search.suggest", "search.highlight", "content.code.copy", "content.code.annotate"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+  
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../javascripts/table-wbr.js"></script>
+      
+    
+  <!-- Make the "Click-Dog" wordmark in the docs header link to the homepage,
+       like the logo icon already does. We reuse the logo's href so the link is
+       correct from any depth; if JS is off the wordmark just stays plain text. -->
+  <script>
+    (function () {
+      var logo = document.querySelector('.md-header [data-md-component="logo"]');
+      var name = document.querySelector('.md-header__title .md-header__topic:not([data-md-component="header-topic"]) .md-ellipsis');
+      if (!logo || !name || name.querySelector('a')) return;
+      var a = document.createElement('a');
+      a.href = logo.getAttribute('href');
+      a.textContent = name.textContent.trim();
+      a.setAttribute('aria-label', 'Click-Dog home');
+      a.style.color = 'inherit';
+      a.style.textDecoration = 'none';
+      name.textContent = '';
+      name.appendChild(a);
+    })();
+  </script>
+
+  </body>
+</html>

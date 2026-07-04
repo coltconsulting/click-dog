@@ -1,0 +1,2605 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Source-safe query observability for ClickHouse today, with more telemetry sources planned">
+      
+      
+      
+        <link rel="canonical" href="https://click-dog.com/observability/">
+      
+      
+        <link rel="prev" href="../span-attributes/">
+      
+      
+        <link rel="next" href="../resilience/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Observability - Click-Dog</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=IBM+Plex+Sans:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"IBM Plex Sans";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  
+
+  <!-- Brand fonts (match the landing) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <!-- Favicon -->
+  <link rel="icon" href="../assets/favicon.png">
+  <link rel="icon" sizes="32x32" href="../assets/favicon-32.png">
+  <link rel="apple-touch-icon" href="../assets/favicon.png">
+
+  <!-- Open Graph / Twitter social card.
+       Guard `page` — it is None on the generated 404 page, which also
+       extends this template. -->
+  
+  
+  
+  
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Observability">
+  <meta property="og:description" content="Source-safe query observability for ClickHouse today, with more telemetry sources planned">
+  <meta property="og:image" content="https://click-dog.com/assets/social-card.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Observability">
+  <meta name="twitter:description" content="Source-safe query observability for ClickHouse today, with more telemetry sources planned">
+  <meta name="twitter:image" content="https://click-dog.com/assets/social-card.png">
+
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="amber">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#observability" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+        <aside class="md-banner">
+          <div class="md-banner__inner md-grid md-typeset">
+            
+            
+  <strong>Public beta.</strong> Newly open source — the public API and config may still change. Click-Dog has been extensively tested and running in production for months.
+
+          </div>
+          
+        </aside>
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Click-Dog" class="md-header__button md-logo" aria-label="Click-Dog" data-md-component="logo">
+      
+  <img src="../assets/click-dog-logo-light.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Click-Dog
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Observability
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="amber"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="amber"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/coltconsulting/click-dog" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    coltconsulting/click-dog
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Click-Dog" class="md-nav__button md-logo" aria-label="Click-Dog" data-md-component="logo">
+      
+  <img src="../assets/click-dog-logo-light.svg" alt="logo">
+
+    </a>
+    Click-Dog
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/coltconsulting/click-dog" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    coltconsulting/click-dog
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Main Site
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Setup
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integrations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integrations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/datadog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Datadog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/honeycomb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Honeycomb
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/generic-otlp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Generic OTLP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/splunk-hec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Splunk HEC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analysis
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Analysis
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../query-analysis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Query Analysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../span-attributes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Span Attributes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Observability
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Observability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#structured-json-logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structured JSON Logging
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Structured JSON Logging">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#metrics-endpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metrics Endpoint
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Metrics Endpoint">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#configuration_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#triggering-flush-from-another-host" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Triggering /flush from another host
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#available-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Available Metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example Output
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kubernetes-probes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kubernetes Probes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#health-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Health Endpoints
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Health Endpoints">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#configuration_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#endpoints_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kubernetes-probes_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kubernetes Probes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#readiness-vs-status-on-startup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Readiness vs. status on startup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#readiness-during-circuit-breaker-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Readiness during circuit breaker recovery
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cluster-health" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cluster health
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-prometheus-format-not-opentelemetry-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why Prometheus Format, Not OpenTelemetry Metrics?
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#webhook-notifications" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Webhook Notifications
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Webhook Notifications">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#configuration_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Events
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#payload-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Payload Format
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Behavior
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#combining-all-three" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Combining All Three
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../resilience/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resilience
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../operating/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operating Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../kubernetes-clickhouse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kubernetes — ClickHouse Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../modes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operation Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../filtering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Filtering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../support/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Support
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#structured-json-logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Structured JSON Logging
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Structured JSON Logging">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#metrics-endpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metrics Endpoint
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Metrics Endpoint">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#configuration_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#triggering-flush-from-another-host" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Triggering /flush from another host
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#available-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Available Metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example-output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example Output
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kubernetes-probes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kubernetes Probes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#health-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Health Endpoints
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Health Endpoints">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#configuration_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#endpoints_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kubernetes-probes_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kubernetes Probes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#readiness-vs-status-on-startup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Readiness vs. status on startup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#readiness-during-circuit-breaker-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Readiness during circuit breaker recovery
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cluster-health" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cluster health
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-prometheus-format-not-opentelemetry-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why Prometheus Format, Not OpenTelemetry Metrics?
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#webhook-notifications" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Webhook Notifications
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Webhook Notifications">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#configuration_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Events
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#payload-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Payload Format
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Behavior
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#combining-all-three" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Combining All Three
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="observability">Observability<a class="headerlink" href="#observability" title="Permanent link">&para;</a></h1>
+<p>Click-Dog includes three opt-in features for monitoring its own health: structured logging, a Prometheus metrics endpoint, and webhook notifications. All three are disabled by default and add zero external dependencies.</p>
+<hr />
+<h2 id="structured-json-logging">Structured JSON Logging<a class="headerlink" href="#structured-json-logging" title="Permanent link">&para;</a></h2>
+<p>By default, click-dog logs in human-readable text format:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>2024-01-15 10:30:45 [INFO] Exported 42 spans from 3 traces
+</code></pre></div>
+<p>Set <code>log_format: json</code> to emit machine-parseable JSON instead:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">{</span><span class="nt">&quot;ts&quot;</span><span class="p">:</span><span class="s2">&quot;2024-01-15T10:30:45Z&quot;</span><span class="p">,</span><span class="nt">&quot;level&quot;</span><span class="p">:</span><span class="s2">&quot;info&quot;</span><span class="p">,</span><span class="nt">&quot;msg&quot;</span><span class="p">:</span><span class="s2">&quot;Exported 42 spans from 3 traces&quot;</span><span class="p">}</span>
+</code></pre></div>
+<h3 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">log_level</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">info</span><span class="w">       </span><span class="c1"># debug, info, warn, error</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nt">log_file</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w">          </span><span class="c1"># File path, or empty for stderr</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nt">log_format</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">json</span><span class="w">      </span><span class="c1"># text (default) or json</span>
+</code></pre></div>
+<p>JSON format is useful when shipping logs to aggregators like Loki, Datadog Logs, or Elasticsearch. The <code>ts</code> field uses RFC 3339 / UTC.</p>
+<hr />
+<h2 id="metrics-endpoint">Metrics Endpoint<a class="headerlink" href="#metrics-endpoint" title="Permanent link">&para;</a></h2>
+<p>When <code>metrics.enabled: true</code>, click-dog opens <strong>two</strong> HTTP listeners:</p>
+<ul>
+<li>a <strong>scrape listener</strong> for <code>/metrics</code> and <code>/health</code> — open to anywhere a
+  Prometheus / Grafana Agent / Datadog Agent / OTel Collector scraper can
+  reach, by default <code>:9090</code> (all interfaces);</li>
+<li>an <strong>admin listener</strong> for <code>POST /flush</code> — bound to <code>127.0.0.1:9091</code> by
+  default, so the export-trigger endpoint is unreachable off-host.</li>
+</ul>
+<p>This split follows the Vector / Grafana Alloy / Datadog Agent pattern: keep
+scrape-shaped endpoints separable from admin-shaped actions so an operator
+exposing <code>/metrics</code> doesn't simultaneously expose <code>/flush</code>. <code>/flush</code>'s
+effect is bounded (channel cap 1, no data flow) and is equivalent in reach
+to <code>SIGUSR1</code>, which is the existing first-class flush trigger; a localhost
+bind is the proportional control.</p>
+<h3 id="configuration_1">Configuration<a class="headerlink" href="#configuration_1" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">metrics</span><span class="p">:</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="nt">listen_address</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;:9090&quot;</span><span class="w">               </span><span class="c1"># scrape listener — /metrics + /health</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">admin_listen_address</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;127.0.0.1:9091&quot;</span><span class="w"> </span><span class="c1"># admin listener — POST /flush</span>
+</code></pre></div>
+<p><code>enabled</code> gates <strong>both</strong> listeners. Setting it to <code>false</code> disables the
+HTTP <code>POST /flush</code> endpoint as well; <code>SIGUSR1</code> remains the always-on
+cross-host equivalent and does not depend on this flag.</p>
+<p>If <code>admin_listen_address</code> resolves to a non-loopback bind (e.g. <code>:9091</code> or
+<code>0.0.0.0:9091</code>), click-dog logs a startup <code>WARN</code> in the same style as the
+TLS-skip-verify warning. That's intentional — exposing the admin listener
+off-host is supported but not the default; operators who do it deliberately
+should see the choice acknowledged in their logs.</p>
+<h3 id="endpoints">Endpoints<a class="headerlink" href="#endpoints" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Listener</th>
+<th>Endpoint</th>
+<th>Content-Type</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>scrape</td>
+<td><code>GET /metrics</code></td>
+<td><code>text/plain</code></td>
+<td>Prometheus text exposition format</td>
+</tr>
+<tr>
+<td>scrape</td>
+<td><code>GET /health</code></td>
+<td><code>application/json</code></td>
+<td>Legacy liveness — returns <code>{"status":"ok"}</code>. Predates the dedicated <a href="#health-endpoints">Health Endpoints</a> block. For Kubernetes probes use <code>/healthz</code> on the health listener, <strong>not</strong> <code>/health</code> on the scrape listener.</td>
+</tr>
+<tr>
+<td>admin</td>
+<td><code>POST /flush</code></td>
+<td><code>application/json</code></td>
+<td>Triggers an immediate export cycle (<code>200 {"status":"flushing"}</code>, or <code>409 {"status":"already_flushing"}</code> if a flush is already queued). <code>GET</code> returns <code>405</code>.</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>Note: <code>/healthz</code>, <code>/readyz</code>, and <code>/status</code> are <strong>not</strong> served by the scrape
+listener. Hitting <code>:9090/healthz</code> returns <code>404</code>. They live on the separate
+<a href="#health-endpoints">health listener</a> (default <code>:8686</code>), which has its own
+<code>health.enabled: true</code> toggle.</p>
+</blockquote>
+<p><code>POST /flush</code> deliberately has no authentication. The localhost bind is the
+boundary — anyone who can hit <code>127.0.0.1:9091</code> already has shell on the
+host and can <code>kill -USR1 $(pidof click-dog)</code> for the same effect. If you
+move the admin listener off-host, treat it like SSH access to that host.</p>
+<h3 id="triggering-flush-from-another-host">Triggering /flush from another host<a class="headerlink" href="#triggering-flush-from-another-host" title="Permanent link">&para;</a></h3>
+<p>The default loopback bind is the recommended posture; common ways to reach
+it from elsewhere without changing the bind:</p>
+<ul>
+<li><strong>Same host, ad-hoc:</strong> <code>curl -XPOST http://127.0.0.1:9091/flush</code></li>
+<li><strong>systemd:</strong> <code>kill -USR1 $MAINPID</code> from a one-off unit, or
+  <code>systemctl kill --signal=SIGUSR1 click-dog.service</code>. SIGUSR1 is the
+  signal-equivalent of POST /flush — same channel, same backpressure,
+  no listener exposure required.</li>
+<li><strong>Docker:</strong> publish the admin port to the loopback only —
+  <code>-p 127.0.0.1:9091:9091</code> — and <code>curl</code> from the host. Do <strong>not</strong>
+  <code>-p 9091:9091</code> (binds 0.0.0.0) unless you understand the trade-off.</li>
+<li><strong>Kubernetes (sidecar):</strong> in a sidecar pod, the admin listener is on
+  <code>localhost</code> because containers in a Pod share a network namespace. A
+  sidecar that needs to flush can simply <code>curl 127.0.0.1:9091/flush</code>.
+  Don't add a <code>Service</code> or <code>containerPort</code> for <code>9091</code>.</li>
+<li><strong>Kubernetes (DaemonSet):</strong> if you genuinely need to flush remotely
+  (rare — prefer SIGUSR1 via <code>kubectl exec</code>), set
+  <code>metrics.admin_listen_address: ":9091"</code> and add a <code>NetworkPolicy</code>
+  restricting <code>9091/tcp</code> to a specific operator pod or namespace. The
+  startup WARN is your reminder that this is a non-default posture.</li>
+</ul>
+<h3 id="available-metrics">Available Metrics<a class="headerlink" href="#available-metrics" title="Permanent link">&para;</a></h3>
+<p><strong>Counters</strong> (monotonically increasing):</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>click_dog_spans_exported_total</code></td>
+<td>Total spans exported to backends</td>
+</tr>
+<tr>
+<td><code>click_dog_spans_filtered_total</code></td>
+<td>Total spans filtered out by rules</td>
+</tr>
+<tr>
+<td><code>click_dog_spans_duplicates_total</code></td>
+<td>Total duplicate spans skipped by dedup cache</td>
+</tr>
+<tr>
+<td><code>click_dog_export_attempts_total{sink}</code></td>
+<td>Export items submitted by sink, including retries</td>
+</tr>
+<tr>
+<td><code>click_dog_export_accepted_total{sink}</code></td>
+<td>Export items accepted by sink</td>
+</tr>
+<tr>
+<td><code>click_dog_export_errors_total{sink}</code></td>
+<td>Export attempts that returned an error by sink</td>
+</tr>
+<tr>
+<td><code>click_dog_cycle_results_total{result}</code></td>
+<td>Cycle outcomes by result label (<code>success</code>, <code>error</code>, <code>skipped</code>)</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Cycle counting note:</strong> <code>click_dog_cycle_results_total</code> tags every tick of the main loop — including circuit-blocked and canary-only ticks — with exactly one of <code>success</code>, <code>error</code>, or <code>skipped</code> (canary sentinel errors resolve to non-error). So <code>sum(rate(click_dog_cycle_results_total))</code> is the overall cycle rate and <code>rate(click_dog_cycle_results_total{result="error"}) / sum(rate(click_dog_cycle_results_total))</code> is a reliable error ratio in all states. <code>skipped</code> covers cycles that did no ClickHouse work (e.g. circuit breaker open without canary). The <code>result</code> label is a fixed three-value enum to keep cardinality bounded.</p>
+<p><strong>Per-sink export counters:</strong> <code>click_dog_export_*_total</code> metrics use the exporter sink label (<code>otel</code>, <code>splunk_hec</code>, <code>dry_run</code>, or the configured <code>MultiExporter</code> sink name). In live mode dedup still follows the top-level accepted keys, so a partial multi-sink failure is retried even when one sink's accepted counter increased.</p>
+</blockquote>
+<p><strong>Gauges</strong> (current state):</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>click_dog_circuit_breaker_state</code></td>
+<td>Circuit breaker: 0=closed, 1=half_open, 2=open</td>
+</tr>
+<tr>
+<td><code>click_dog_backoff_interval_seconds</code></td>
+<td>Current polling interval in seconds</td>
+</tr>
+<tr>
+<td><code>click_dog_last_success_timestamp_seconds</code></td>
+<td>Unix timestamp of last successful cycle. The bare series is retained for compatibility with existing scrapes and custom alerts; the same metric is also emitted with <code>role="active"</code> or <code>role="standby"</code> so HA dashboards can exclude leader-gated standbys from fleet stale-export calculations</td>
+</tr>
+<tr>
+<td><code>click_dog_leader</code></td>
+<td><code>1</code> when this instance is the active exporter/leader, <code>0</code> when it is a leader-gated standby</td>
+</tr>
+<tr>
+<td><code>click_dog_uptime_seconds</code></td>
+<td>Seconds since process start</td>
+</tr>
+<tr>
+<td><code>click_dog_last_cycle_duration_seconds</code></td>
+<td>Duration of the most recent processing cycle in seconds</td>
+</tr>
+<tr>
+<td><code>click_dog_last_cycle_exported_spans</code></td>
+<td>Spans exported in the most recent cycle</td>
+</tr>
+<tr>
+<td><code>click_dog_last_cycle_filtered_spans</code></td>
+<td>Spans filtered in the most recent cycle</td>
+</tr>
+<tr>
+<td><code>click_dog_last_cycle_duplicate_spans</code></td>
+<td>Duplicate spans skipped in the most recent cycle</td>
+</tr>
+<tr>
+<td><code>click_dog_span_log_last_poll_timestamp_seconds</code></td>
+<td>Unix timestamp of the last span-log fetch that completed without error (zero rows still counts)</td>
+</tr>
+<tr>
+<td><code>click_dog_span_log_newest_row_age_seconds</code></td>
+<td>Age in seconds of the newest span-log row observed in the most recent non-empty fetch; computed at scrape time so it keeps growing across empty cycles (the staleness signal). <code>0</code> is ambiguous — it can mean "no observation yet" OR "the newest row arrived this scrape interval"; alert on <code>&gt; threshold</code> (a value Prometheus' <code>time() - ...</code> can never make negative) rather than <code>== 0</code> to avoid the ambiguity</td>
+</tr>
+<tr>
+<td><code>click_dog_span_log_rows_last_cycle</code></td>
+<td>Raw row count returned by the last span-log fetch, before filter/dedup</td>
+</tr>
+<tr>
+<td><code>click_dog_query_log_enrichment_match_ratio</code></td>
+<td>Last cycle's matched / requested query_id ratio; persists across failed attempts (<code>0</code> before first success)</td>
+</tr>
+<tr>
+<td><code>click_dog_spans_with_query_id_ratio</code></td>
+<td>Last cycle's ratio of fetched spans carrying <code>clickhouse.query_id</code>; empty cycles preserve the previous value</td>
+</tr>
+<tr>
+<td><code>click_dog_normalized_query_supported</code></td>
+<td><code>1</code> if <code>system.query_log.normalized_query_hash</code> is available and in use, <code>0</code> otherwise. In cluster query mode, <code>1</code> means every replica passed the startup compatibility probe. Set once at startup</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>ClickHouse data-plane health (#183):</strong> the six gauges and three counters
+(<code>click_dog_query_log_enrichment_{attempts,successes,failures}_total</code>) named
+above are independent of "is click-dog exporting" — they answer "is
+ClickHouse producing the data click-dog needs?" Absence of the entire
+metric family means click-dog is down; presence with a high
+<code>newest_row_age_seconds</code>, a non-zero failures rate, or
+<code>spans_with_query_id_ratio &lt; 1.0</code> means click-dog is fine but the data
+source is degraded. All values are derived from data each cycle already
+fetches — no extra ClickHouse queries are issued.</p>
+</blockquote>
+<p><strong>Counters (data-plane health, #183):</strong></p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>click_dog_query_log_enrichment_attempts_total</code></td>
+<td>Cycles that attempted query_log enrichment (had at least one <code>clickhouse.query_id</code>). Non-enrichment configs never tick.</td>
+</tr>
+<tr>
+<td><code>click_dog_query_log_enrichment_successes_total</code></td>
+<td>Enrichment attempts that returned without error</td>
+</tr>
+<tr>
+<td><code>click_dog_query_log_enrichment_failures_total</code></td>
+<td>Enrichment attempts that returned an error; pair with the failures rate panel on the Health dashboard</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Last-cycle gauges</strong> are emitted unconditionally — they are zero before the first cycle so the metric set stays stable across scrapes. They reflect the most recent cycle only, not a cumulative total; pair them with <code>click_dog_cycle_results_total</code> for rate-style questions.</p>
+</blockquote>
+<h3 id="example-output">Example Output<a class="headerlink" href="#example-output" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a># HELP click_dog_spans_exported_total Total spans exported to backends.
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a># TYPE click_dog_spans_exported_total counter
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>click_dog_spans_exported_total 14523
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a># HELP click_dog_cycle_results_total Total processing cycles by outcome (success, error, skipped).
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a># TYPE click_dog_cycle_results_total counter
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>click_dog_cycle_results_total{result=&quot;success&quot;} 1287
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>click_dog_cycle_results_total{result=&quot;error&quot;} 2
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>click_dog_cycle_results_total{result=&quot;skipped&quot;} 14
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a># HELP click_dog_export_errors_total Total export attempts that returned an error by sink.
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a># TYPE click_dog_export_errors_total counter
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>click_dog_export_errors_total{sink=&quot;otel&quot;} 0
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a># HELP click_dog_circuit_breaker_state Circuit breaker state (0=closed, 1=half_open, 2=open).
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a># TYPE click_dog_circuit_breaker_state gauge
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>click_dog_circuit_breaker_state 0
+<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a># HELP click_dog_uptime_seconds Seconds since click-dog started.
+<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a># TYPE click_dog_uptime_seconds gauge
+<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a>click_dog_uptime_seconds 3600
+</code></pre></div>
+<h3 id="kubernetes-probes">Kubernetes Probes<a class="headerlink" href="#kubernetes-probes" title="Permanent link">&para;</a></h3>
+<p>For Kubernetes probes prefer the dedicated health endpoints (<code>/healthz</code>,
+<code>/readyz</code>, <code>/status</code>) described in the <a href="#health-endpoints">Health Endpoints</a>
+section below. <code>/health</code> on the metrics server is kept as a simple always-OK
+liveness signal for setups that can't opt into the separate health server.</p>
+<hr />
+<h2 id="health-endpoints">Health Endpoints<a class="headerlink" href="#health-endpoints" title="Permanent link">&para;</a></h2>
+<p>Click-Dog exposes three dedicated HTTP endpoints for orchestrators: <code>/healthz</code>
+(liveness), <code>/readyz</code> (readiness), and <code>/status</code> (detailed JSON). Disabled by
+default; opt in with the <code>health:</code> block.</p>
+<h3 id="configuration_2">Configuration<a class="headerlink" href="#configuration_2" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nt">health</span><span class="p">:</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">listen_address</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;:8686&quot;</span><span class="w">   </span><span class="c1"># default</span>
+</code></pre></div>
+<p>When <code>health.listen_address</code> resolves to the same socket as
+<code>metrics.listen_address</code>, the health handlers mount on the metrics listener
+so only one port is opened. The comparison is normalized — <code>":8686"</code>,
+<code>"0.0.0.0:8686"</code>, and <code>"[::]:8686"</code> are all treated as equivalent wildcard
+binds. If you write the two addresses differently but they normalize to
+the same form, click-dog will log a warning on startup so you notice the
+inconsistency. Explicit host binds (e.g. <code>127.0.0.1:8686</code>) must match
+literally — they won't be normalized against wildcards. If the normalized
+forms differ, a dedicated health listener is started on the configured
+address.</p>
+<h3 id="endpoints_1">Endpoints<a class="headerlink" href="#endpoints_1" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Status codes</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /healthz</code></td>
+<td><code>200</code> always</td>
+<td>Liveness — the process is running</td>
+</tr>
+<tr>
+<td><code>GET /readyz</code></td>
+<td><code>200</code> / <code>503</code></td>
+<td>Readiness — <code>200</code> when ClickHouse is reachable AND the circuit breaker is closed; <code>503</code> otherwise</td>
+</tr>
+<tr>
+<td><code>GET /status</code></td>
+<td><code>200</code> always</td>
+<td>JSON: version, uptime, CB state, backoff interval, last cycle counts/duration</td>
+</tr>
+</tbody>
+</table>
+<p><code>/status</code> always returns <code>200</code> — it's a reporting endpoint, not a probe.
+Assess health from the JSON body fields (<code>clickhouse_healthy</code>,
+<code>circuit_breaker</code>, <code>last_cycle.error</code>), not the HTTP status code. Alerts
+that fire on "/status non-200" will never trigger; alert on the body
+fields instead.</p>
+<p><strong>Exposure note:</strong> <code>last_cycle.error</code> is the raw error string returned
+by the ClickHouse driver, which may contain query fragments, table
+names, or column names depending on what ClickHouse included in its
+error response. This is consistent with <code>/metrics</code> (which exposes
+similar operational internals), but on multi-tenant infrastructure you
+may want to restrict network access to the health port rather than
+exposing it outside the cluster.</p>
+<p><code>/status</code> response shape:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;version&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;v26.04.6&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;uptime_s&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3600</span><span class="p">,</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">&quot;clickhouse_healthy&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nt">&quot;circuit_breaker&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;closed&quot;</span><span class="p">,</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span><span class="nt">&quot;backoff_interval_s&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span><span class="p">,</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span><span class="nt">&quot;last_cycle&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">    </span><span class="nt">&quot;exported&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">15</span><span class="p">,</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">    </span><span class="nt">&quot;filtered&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">    </span><span class="nt">&quot;duplicates&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">    </span><span class="nt">&quot;duration_ms&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">450</span><span class="p">,</span>
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="w">    </span><span class="nt">&quot;at&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-04-19T12:34:56Z&quot;</span>
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="p">}</span>
+</code></pre></div>
+<h3 id="kubernetes-probes_1">Kubernetes Probes<a class="headerlink" href="#kubernetes-probes_1" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nt">livenessProbe</span><span class="p">:</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="w">  </span><span class="nt">httpGet</span><span class="p">:</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">    </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/healthz</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">    </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8686</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span><span class="nt">initialDelaySeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">  </span><span class="nt">periodSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="nt">readinessProbe</span><span class="p">:</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">  </span><span class="nt">httpGet</span><span class="p">:</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a><span class="w">    </span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/readyz</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="w">    </span><span class="nt">port</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8686</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="w">  </span><span class="nt">initialDelaySeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="w">  </span><span class="nt">periodSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
+</code></pre></div>
+<p>Note on scaling: <code>/readyz</code> issues a live ClickHouse ping (2s deadline)
+on every probe call. With a 10-second <code>periodSeconds</code> that's 6
+pings/minute per pod — negligible for a single instance, but on a 50-node
+DaemonSet that's 300 pings/minute against ClickHouse. When ClickHouse is
+unhealthy all those probes block for the full 2s deadline simultaneously.
+For clusters larger than ~20 nodes consider raising <code>periodSeconds</code> to
+<code>30</code> (matches the livenessProbe) to cap per-minute ping volume.</p>
+<h3 id="readiness-vs-status-on-startup">Readiness vs. status on startup<a class="headerlink" href="#readiness-vs-status-on-startup" title="Permanent link">&para;</a></h3>
+<p><code>/readyz</code> and <code>/status.clickhouse_healthy</code> use different signals and will
+briefly disagree while click-dog is warming up. <code>/readyz</code> returns <code>200</code>
+as soon as ClickHouse is reachable and the circuit breaker is closed —
+which is true from process start. <code>/status.clickhouse_healthy</code>, on the
+other hand, stays <code>false</code> until at least one processing cycle has run
+successfully (the cycle-completed gate guards against a false-green
+before any actual ClickHouse query has executed). Expect a short window
+where Kubernetes considers the pod <code>Ready</code> but the status dashboard
+shows <code>clickhouse_healthy: false</code>. Both behaviors are intentional.</p>
+<p>The concrete consequence: on pod startup Kubernetes will add the pod to
+Service endpoints (readiness satisfied) <strong>before</strong> click-dog has
+confirmed an actual span-fetch cycle works. click-dog exports spans
+outbound and serves no user traffic, so this is low risk — but if you
+are watching a dashboard during a rollout, expect <code>clickhouse_healthy</code>
+to flip to <code>true</code> a few seconds after the pod goes <code>Ready</code>.</p>
+<p>In HA cluster mode, a follower that is intentionally idle behind the leader gate
+reports <code>standby: true</code>; its last cycle is marked <code>skipped</code> with
+<code>skip_reason: "leader_standby"</code>. That state is considered healthy for
+<code>/status.clickhouse_healthy</code> when the circuit breaker is closed, because the
+instance is doing exactly what it should. Breaker-open skips use
+<code>skip_reason: "circuit_open"</code> and remain unhealthy.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">&quot;clickhouse_healthy&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span><span class="nt">&quot;standby&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">  </span><span class="nt">&quot;circuit_breaker&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;closed&quot;</span><span class="p">,</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">  </span><span class="nt">&quot;last_cycle&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">    </span><span class="nt">&quot;skipped&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">    </span><span class="nt">&quot;skip_reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;leader_standby&quot;</span>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="p">}</span>
+</code></pre></div>
+<h3 id="readiness-during-circuit-breaker-recovery">Readiness during circuit breaker recovery<a class="headerlink" href="#readiness-during-circuit-breaker-recovery" title="Permanent link">&para;</a></h3>
+<p><code>/readyz</code> returns <code>503</code> for <strong>any</strong> circuit breaker state other than
+<code>closed</code> — this includes the <code>half_open</code> state that the breaker
+transitions through while probing whether ClickHouse has recovered. If
+your click-dog pods are behind a Kubernetes Service (e.g. for Prometheus
+to scrape <code>/metrics</code>), a half-open breaker that takes more than
+<code>failureThreshold × periodSeconds</code> to close will cause K8s to remove the
+pod from the Service endpoints mid-recovery — which can hide the very
+metrics you need to diagnose the outage.</p>
+<p>Two mitigations:</p>
+<ol>
+<li><strong>Raise <code>failureThreshold</code></strong> on the readinessProbe so short
+   half-open windows don't evict the pod. The default (3 with a 10s
+   period) gives ~30s; setting it to 6 gives ~60s. See the comment in
+   <code>deploy/kubernetes/deployment.yaml</code>.</li>
+<li><strong>Scrape metrics directly, not via a Service</strong> — Prometheus pod discovery
+   bypasses readiness entirely, so half-open transitions don't affect scrape
+   continuity.</li>
+</ol>
+<p>click-dog is primarily a sidecar that pushes spans to a collector; it
+serves no user traffic, so a 503 during recovery is purely a metadata
+signal for the orchestrator. The strict behavior was chosen so that
+readiness stays a reliable "CB is closed and a cycle succeeded" signal;
+if you prefer a more lenient contract, track <a href="https://github.com/coltconsulting/click-dog/issues/18">#18</a> for a
+follow-up <code>health.readyz_half_open_ready</code> config knob.</p>
+<h3 id="cluster-health">Cluster health<a class="headerlink" href="#cluster-health" title="Permanent link">&para;</a></h3>
+<p>The HA leader can serve a single aggregate <code>/clusterz</code> endpoint that fans
+out <code>/readyz</code> to every configured peer. Operators get one URL for
+monitoring dashboards, on-call paging, or load-balancer health targets
+instead of scraping every node individually.</p>
+<p>This is phase 1 of <a href="https://github.com/coltconsulting/click-dog/issues/19">#19</a> — peers are configured statically.
+Keeper-based peer discovery is a deferred follow-up.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nt">health</span><span class="p">:</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span><span class="nt">listen_address</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;:8686&quot;</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">  </span><span class="nt">cluster</span><span class="p">:</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">    </span><span class="nt">self</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;node-0:8686&quot;</span><span class="w">     </span><span class="c1"># routable host:port for THIS instance — required</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">    </span><span class="nt">peer_timeout_ms</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3000</span><span class="w">   </span><span class="c1"># per-peer fanout deadline (default 3000)</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">    </span><span class="nt">peers</span><span class="p">:</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;node-0:8686&quot;</span>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;node-1:8686&quot;</span>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;node-2:8686&quot;</span>
+</code></pre></div>
+<p>Each peer entry is the routable <code>host:port</code> for that node's <code>/readyz</code>.
+Write the same <code>peers:</code> list on every instance, but set <code>self</code> to the
+node's own routable address — different on each instance. The leader
+matches <code>self</code> against <code>peers</code> to skip its own HTTP self-loop and to
+label its in-process readiness in the response. Only the current leader
+serves <code>/clusterz</code>; followers return 404.</p>
+<p><code>listen_address</code> is intentionally separate: it's a bind expression
+(typically <code>:8686</code>, meaning "all interfaces") and isn't routable, so it
+can't double as <code>self</code>.</p>
+<p><strong><code>self</code> not in <code>peers</code> is allowed but warns.</strong> A single-node deployment
+that runs <code>peers: []</code> is fine — <code>/clusterz</code> aggregates just the self
+entry. In a multi-node deployment, if <code>self</code> is non-empty but absent
+from a non-empty <code>peers</code> list, click-dog logs a startup warning and
+adds self as an <em>extra</em> node in the response (<code>total = len(peers) + 1</code>).
+That's almost always an operator slip — write the same <code>peers</code> list on
+every instance and have each instance set <code>self</code> to its own routable
+entry from that list.</p>
+<p><strong>Inter-node fanout is plaintext (phase 1).</strong> The leader fetches each
+peer over <code>http://</code>, with no authentication. That mirrors the existing
+<code>/readyz</code> posture (no auth today). Combined with the dial-error
+exposure note below, the recommendation is the same: keep the health
+port restricted to the cluster's internal network. A configurable
+scheme (and optional auth) is on the phase-2 list alongside Keeper-
+based discovery.</p>
+<p>Behavior:</p>
+<ul>
+<li><code>/clusterz</code> is mounted only when <code>health.cluster.enabled: true</code> AND
+  <code>health.enabled: true</code>. The combination is enforced at config load.</li>
+<li>When HA is disabled, the single instance treats itself as leader and
+  <code>/clusterz</code> aggregates whatever peers are listed (typically just self).</li>
+<li>Followers respond <code>404 {"status":"not_leader"}</code>. A <code>Location:</code> header
+  pointing at the leader is reserved for phase 2 once the Keeper payload
+  carries health-endpoint addresses.</li>
+<li>Each peer is fetched in parallel with an independent <code>peer_timeout_ms</code>
+  deadline. Slow or dead peers are reported <code>unreachable</code> without
+  blocking the rest of the fanout.</li>
+<li>The leader's own readiness is computed in-process; no HTTP self-loop.
+  When the leader's <code>health.listen_address</code> matches one of the <code>peers:</code>
+  entries, that slot is filled by the in-process result.</li>
+<li>Responses are cached for 5 seconds. Bursty pollers (active-checks at
+  short intervals) collapse onto one fanout per window.</li>
+</ul>
+<p><code>/clusterz</code> returns <code>200 OK</code> when every node is healthy; <code>503</code> when any
+node is degraded or unreachable.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;degraded&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span><span class="nt">&quot;leader&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;node-0:8686&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span><span class="nt">&quot;nodes&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">    </span><span class="nt">&quot;node-0:8686&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">      </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ok&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">      </span><span class="nt">&quot;checks&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;clickhouse&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ok&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;circuit_breaker&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;closed&quot;</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">    </span><span class="p">},</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">    </span><span class="nt">&quot;node-1:8686&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">      </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ok&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="w">      </span><span class="nt">&quot;checks&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nt">&quot;clickhouse&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ok&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;circuit_breaker&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;closed&quot;</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="w">    </span><span class="p">},</span>
+<a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="w">    </span><span class="nt">&quot;node-2:8686&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a><span class="w">      </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;unreachable&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a><span class="w">      </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;dial tcp 10.0.3.12:8686: connect: connection refused&quot;</span>
+<a id="__codelineno-10-16" name="__codelineno-10-16" href="#__codelineno-10-16"></a><span class="w">    </span><span class="p">}</span>
+<a id="__codelineno-10-17" name="__codelineno-10-17" href="#__codelineno-10-17"></a><span class="w">  </span><span class="p">},</span>
+<a id="__codelineno-10-18" name="__codelineno-10-18" href="#__codelineno-10-18"></a><span class="w">  </span><span class="nt">&quot;summary&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-10-19" name="__codelineno-10-19" href="#__codelineno-10-19"></a><span class="w">    </span><span class="nt">&quot;total&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+<a id="__codelineno-10-20" name="__codelineno-10-20" href="#__codelineno-10-20"></a><span class="w">    </span><span class="nt">&quot;healthy&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<a id="__codelineno-10-21" name="__codelineno-10-21" href="#__codelineno-10-21"></a><span class="w">    </span><span class="nt">&quot;degraded&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<a id="__codelineno-10-22" name="__codelineno-10-22" href="#__codelineno-10-22"></a><span class="w">    </span><span class="nt">&quot;unreachable&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span>
+<a id="__codelineno-10-23" name="__codelineno-10-23" href="#__codelineno-10-23"></a><span class="w">  </span><span class="p">}</span>
+<a id="__codelineno-10-24" name="__codelineno-10-24" href="#__codelineno-10-24"></a><span class="p">}</span>
+</code></pre></div>
+<p><code>status</code> per node is one of:</p>
+<ul>
+<li><code>ok</code> — peer responded <code>200</code> to <code>/readyz</code>.</li>
+<li><code>degraded</code> — peer responded but not <code>200</code>, or with a body that didn't
+  parse as a <code>/readyz</code> response. <code>checks</code> is echoed when present.</li>
+<li><code>unreachable</code> — peer never responded (timeout, connection refused,
+  read error). <code>error</code> carries the network error string; <code>checks</code> is
+  omitted because there's nothing to echo.</li>
+</ul>
+<p><strong>Exposure note:</strong> <code>nodes.&lt;peer&gt;.error</code> is the raw Go dial error, which
+typically includes the peer's resolved IP and port (e.g.
+<code>dial tcp 10.0.3.12:8686: connect: connection refused</code>). For an
+internal-only health endpoint this is fine — operators want to see the
+exact address that failed — but if you expose <code>/clusterz</code> outside the
+cluster (e.g. through an ingress) you're publishing the internal
+topology of any unreachable peer. Restrict network access to the health
+port the same way you would for <code>/status</code>.</p>
+<h3 id="why-prometheus-format-not-opentelemetry-metrics">Why Prometheus Format, Not OpenTelemetry Metrics?<a class="headerlink" href="#why-prometheus-format-not-opentelemetry-metrics" title="Permanent link">&para;</a></h3>
+<p>Click-Dog is an OpenTelemetry <em>trace exporter</em> — so why does it expose its own health metrics in Prometheus format rather than pushing them as OTEL metrics?</p>
+<p><strong>Failure domain separation.</strong> If the OTEL collector goes down, click-dog can't report "I can't reach the OTEL collector" via the OTEL collector. A pull-based <code>/metrics</code> endpoint stays available independently, so your monitoring of click-dog doesn't depend on the same pipeline click-dog feeds into.</p>
+<p><strong>It's already OTEL-compatible.</strong> The OTEL Collector has a built-in <a href="https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/receiver/prometheusreceiver">Prometheus receiver</a> that scrapes <code>/metrics</code> endpoints and converts them into OTEL metrics. If you want click-dog's health data in your OTEL pipeline, point the collector's Prometheus receiver at click-dog's metrics port. Zero code changes needed.</p>
+<p><strong>Zero dependencies.</strong> The metrics endpoint emits Prometheus text exposition format with <code>fmt.Fprintf</code> — no <code>prometheus/client_golang</code>, no OTEL metrics SDK. This keeps the binary small and the attack surface minimal.</p>
+<p><strong>Universal compatibility.</strong> Every monitoring stack scrapes Prometheus natively: Datadog Agent, Grafana Agent, OTEL Collector, Victoria Metrics, Thanos, and plain Prometheus. By speaking this format, click-dog is compatible with everything out of the box.</p>
+<p>In short: Prometheus text format is the <em>lingua franca</em> of operational metrics. The OTEL Collector translates it into OTEL metrics for you. Separate failure domains, zero dependencies, universal compatibility.</p>
+<hr />
+<h2 id="webhook-notifications">Webhook Notifications<a class="headerlink" href="#webhook-notifications" title="Permanent link">&para;</a></h2>
+<p>Click-Dog can send HTTP POST notifications to a webhook URL on critical events. The payload is compatible with Slack incoming webhooks and works with any endpoint that accepts <code>{"text": "..."}</code> JSON.</p>
+<h3 id="configuration_3">Configuration<a class="headerlink" href="#configuration_3" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nt">webhook</span><span class="p">:</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="w">  </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${SLACK_WEBHOOK_URL}</span><span class="w">    </span><span class="c1"># env var recommended for secrets</span>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="w">  </span><span class="nt">timeout_s</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span><span class="w">                </span><span class="c1"># HTTP timeout (default: 10s)</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">  </span><span class="nt">events</span><span class="p">:</span><span class="w">                      </span><span class="c1"># which events to fire (default: all)</span>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">circuit_breaker_opened</span>
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">circuit_breaker_closed</span>
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">startup</span>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shutdown</span>
+</code></pre></div>
+<h3 id="events">Events<a class="headerlink" href="#events" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Event</th>
+<th>Fires when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>circuit_breaker_opened</code></td>
+<td>Circuit breaker tripped — ClickHouse queries paused</td>
+</tr>
+<tr>
+<td><code>circuit_breaker_closed</code></td>
+<td>Circuit breaker recovered — normal operation resumed</td>
+</tr>
+<tr>
+<td><code>backfill_complete</code></td>
+<td>A backfill run finished with no export failures</td>
+</tr>
+<tr>
+<td><code>backfill_failed</code></td>
+<td>A backfill run had partial or total export failures (counts in message)</td>
+</tr>
+<tr>
+<td><code>error_spike</code></td>
+<td>Error threshold exceeded</td>
+</tr>
+<tr>
+<td><code>startup</code></td>
+<td>Click-Dog process started</td>
+</tr>
+<tr>
+<td><code>shutdown</code></td>
+<td>Click-Dog process shutting down</td>
+</tr>
+</tbody>
+</table>
+<p>If the <code>events</code> list is empty or omitted, all events fire.</p>
+<h3 id="payload-format">Payload Format<a class="headerlink" href="#payload-format" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="p">{</span><span class="nt">&quot;text&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;[click-dog] Circuit breaker opened after 3 consecutive failures&quot;</span><span class="p">}</span>
+</code></pre></div>
+<p>This format works directly with:</p>
+<ul>
+<li><strong>Slack</strong> incoming webhooks</li>
+<li><strong>Discord</strong> webhooks (via Slack-compatible endpoint)</li>
+<li><strong>PagerDuty</strong> (via Events API v2 integration)</li>
+<li>Any custom endpoint that accepts JSON POST</li>
+</ul>
+<h3 id="behavior">Behavior<a class="headerlink" href="#behavior" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Non-blocking</strong>: notifications fire in a background goroutine and never delay the main processing loop</li>
+<li><strong>Nil-safe</strong>: if webhook is not configured, <code>Notify()</code> calls are no-ops with zero overhead</li>
+<li><strong>Fire-and-forget</strong>: HTTP errors are logged but do not affect click-dog operation</li>
+<li><strong>Filterable</strong>: use the <code>events</code> list to receive only the notifications you care about</li>
+<li><strong>No redirect following</strong>: click-dog treats HTTP 3xx responses as delivery failures instead of following them. Configure the final trusted <code>http://</code> or <code>https://</code> webhook URL directly.</li>
+</ul>
+<hr />
+<h2 id="combining-all-three">Combining All Three<a class="headerlink" href="#combining-all-three" title="Permanent link">&para;</a></h2>
+<p>A typical production setup enables all three features:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nt">log_level</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">info</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="nt">log_format</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">json</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="nt">metrics</span><span class="p">:</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">  </span><span class="nt">listen_address</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;:9090&quot;</span>
+<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>
+<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="nt">webhook</span><span class="p">:</span>
+<a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a><span class="w">  </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">${SLACK_WEBHOOK_URL}</span>
+<a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a><span class="w">  </span><span class="nt">events</span><span class="p">:</span>
+<a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">circuit_breaker_opened</span>
+<a id="__codelineno-13-13" name="__codelineno-13-13" href="#__codelineno-13-13"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">circuit_breaker_closed</span>
+<a id="__codelineno-13-14" name="__codelineno-13-14" href="#__codelineno-13-14"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">startup</span>
+<a id="__codelineno-13-15" name="__codelineno-13-15" href="#__codelineno-13-15"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">shutdown</span>
+</code></pre></div>
+<p>This gives you:</p>
+<ol>
+<li><strong>JSON logs</strong> for your log aggregator (Loki, Datadog, Splunk)</li>
+<li><strong>Prometheus metrics</strong> for dashboards and alerts (scraped by your OTEL Collector, Prometheus, or Datadog Agent)</li>
+<li><strong>Slack notifications</strong> for human-actionable events (circuit breaker state changes, startups)</li>
+</ol>
+<p>All three are independent — enable any combination, or none.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/coltconsulting/click-dog" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tracking", "navigation.sections", "navigation.expand", "navigation.top", "search.suggest", "search.highlight", "content.code.copy", "content.code.annotate"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+  
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../javascripts/table-wbr.js"></script>
+      
+    
+  <!-- Make the "Click-Dog" wordmark in the docs header link to the homepage,
+       like the logo icon already does. We reuse the logo's href so the link is
+       correct from any depth; if JS is off the wordmark just stays plain text. -->
+  <script>
+    (function () {
+      var logo = document.querySelector('.md-header [data-md-component="logo"]');
+      var name = document.querySelector('.md-header__title .md-header__topic:not([data-md-component="header-topic"]) .md-ellipsis');
+      if (!logo || !name || name.querySelector('a')) return;
+      var a = document.createElement('a');
+      a.href = logo.getAttribute('href');
+      a.textContent = name.textContent.trim();
+      a.setAttribute('aria-label', 'Click-Dog home');
+      a.style.color = 'inherit';
+      a.style.textDecoration = 'none';
+      name.textContent = '';
+      name.appendChild(a);
+    })();
+  </script>
+
+  </body>
+</html>

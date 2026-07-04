@@ -1,0 +1,3318 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Source-safe query observability for ClickHouse today, with more telemetry sources planned">
+      
+      
+      
+        <link rel="canonical" href="https://click-dog.com/install/">
+      
+      
+        <link rel="prev" href="../getting-started/">
+      
+      
+        <link rel="next" href="../configuration/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Install - Click-Dog</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=IBM+Plex+Sans:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"IBM Plex Sans";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  
+
+  <!-- Brand fonts (match the landing) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <!-- Favicon -->
+  <link rel="icon" href="../assets/favicon.png">
+  <link rel="icon" sizes="32x32" href="../assets/favicon-32.png">
+  <link rel="apple-touch-icon" href="../assets/favicon.png">
+
+  <!-- Open Graph / Twitter social card.
+       Guard `page` — it is None on the generated 404 page, which also
+       extends this template. -->
+  
+  
+  
+  
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Install">
+  <meta property="og:description" content="Source-safe query observability for ClickHouse today, with more telemetry sources planned">
+  <meta property="og:image" content="https://click-dog.com/assets/social-card.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Install">
+  <meta name="twitter:description" content="Source-safe query observability for ClickHouse today, with more telemetry sources planned">
+  <meta name="twitter:image" content="https://click-dog.com/assets/social-card.png">
+
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="amber">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#installing-click-dog" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+        <aside class="md-banner">
+          <div class="md-banner__inner md-grid md-typeset">
+            
+            
+  <strong>Public beta.</strong> Newly open source — the public API and config may still change. Click-Dog has been extensively tested and running in production for months.
+
+          </div>
+          
+        </aside>
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Click-Dog" class="md-header__button md-logo" aria-label="Click-Dog" data-md-component="logo">
+      
+  <img src="../assets/click-dog-logo-light.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Click-Dog
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Install
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="amber"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="amber"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/coltconsulting/click-dog" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    coltconsulting/click-dog
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Click-Dog" class="md-nav__button md-logo" aria-label="Click-Dog" data-md-component="logo">
+      
+  <img src="../assets/click-dog-logo-light.svg" alt="logo">
+
+    </a>
+    Click-Dog
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/coltconsulting/click-dog" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    coltconsulting/click-dog
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Main Site
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Setup
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#quick-start-single-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick Start (Single Node)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Quick Start (Single Node)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-this-turns-on" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What this turns on
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#after-install" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        After install
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Prerequisites">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#clickhouse-opentelemetry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ClickHouse OpenTelemetry
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#otel-collector" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OTEL Collector
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#release-signature-verification-auto-download-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Release-signature verification (auto-download path)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#choosing-an-install-method" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choosing an install method
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Choosing an install method">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#passwords-per-method" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Passwords per method
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#multi-node-deploy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-Node Deploy
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Multi-Node Deploy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#installsh-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        install.sh commands
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="install.sh commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#bring-your-own-yaml-install-f" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bring your own YAML (install -f)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ansible-playbook-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ansible playbook variables
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#air-gapped-environments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Air-gapped environments
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verifying-releases-manually" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verifying releases manually
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Verifying releases manually">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#proxy-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Proxy support
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#kubernetes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kubernetes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Kubernetes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#updating" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Updating
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#statefulset-sidecar" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StatefulSet sidecar
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tls-via-cert-manager" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TLS via cert-manager
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#docker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Docker
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Docker">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#updating_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Updating
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#installed-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Installed Files
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#updating_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Updating
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Updating">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#in-place-self-update" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        In-place self-update
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#smart-defaults" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Smart Defaults
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#enabling-tls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Enabling TLS
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scaling-considerations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scaling Considerations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scaling Considerations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#otel-collector-capacity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OTEL Collector Capacity
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#resource-footprint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resource Footprint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#clickhouse-impact" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ClickHouse Impact
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verifying-the-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verifying the Deployment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Troubleshooting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#instance-not-exporting-spans" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Instance Not Exporting Spans
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#circuit-breaker-open-on-multiple-nodes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Circuit Breaker Open on Multiple Nodes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#leader-election-failing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Leader Election Failing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#high-memory-on-a-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High Memory on a Node
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#license-and-contributing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        License and contributing
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integrations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integrations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/datadog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Datadog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/honeycomb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Honeycomb
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/generic-otlp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Generic OTLP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/splunk-hec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Splunk HEC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analysis
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Analysis
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../query-analysis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Query Analysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../span-attributes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Span Attributes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Observability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../resilience/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resilience
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../operating/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operating Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../kubernetes-clickhouse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kubernetes — ClickHouse Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../modes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operation Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../filtering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Filtering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../support/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Support
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#quick-start-single-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick Start (Single Node)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Quick Start (Single Node)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-this-turns-on" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What this turns on
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#after-install" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        After install
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Prerequisites">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#clickhouse-opentelemetry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ClickHouse OpenTelemetry
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#otel-collector" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OTEL Collector
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#release-signature-verification-auto-download-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Release-signature verification (auto-download path)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#choosing-an-install-method" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choosing an install method
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Choosing an install method">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#passwords-per-method" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Passwords per method
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#multi-node-deploy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Multi-Node Deploy
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Multi-Node Deploy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#installsh-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        install.sh commands
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="install.sh commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#bring-your-own-yaml-install-f" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bring your own YAML (install -f)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ansible-playbook-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ansible playbook variables
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#air-gapped-environments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Air-gapped environments
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verifying-releases-manually" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verifying releases manually
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Verifying releases manually">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#proxy-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Proxy support
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#kubernetes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kubernetes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Kubernetes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#updating" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Updating
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#statefulset-sidecar" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StatefulSet sidecar
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tls-via-cert-manager" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TLS via cert-manager
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#docker" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Docker
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Docker">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#updating_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Updating
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#installed-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Installed Files
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#updating_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Updating
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Updating">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#in-place-self-update" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        In-place self-update
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#smart-defaults" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Smart Defaults
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#enabling-tls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Enabling TLS
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scaling-considerations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scaling Considerations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scaling Considerations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#otel-collector-capacity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OTEL Collector Capacity
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#resource-footprint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resource Footprint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#clickhouse-impact" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ClickHouse Impact
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verifying-the-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verifying the Deployment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Troubleshooting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#instance-not-exporting-spans" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Instance Not Exporting Spans
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#circuit-breaker-open-on-multiple-nodes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Circuit Breaker Open on Multiple Nodes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#leader-election-failing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Leader Election Failing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#high-memory-on-a-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        High Memory on a Node
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#license-and-contributing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        License and contributing
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="installing-click-dog">Installing Click-Dog<a class="headerlink" href="#installing-click-dog" title="Permanent link">&para;</a></h1>
+<p>Install means getting Click-Dog running in your environment: one systemd service
+on a host, one sidecar per ClickHouse node, a centralized Kubernetes Deployment,
+Docker Compose, or a fleet rollout through Ansible.</p>
+<p>The default host topology is <strong>sidecar per ClickHouse node</strong>. Each instance
+queries its local <code>system.opentelemetry_span_log</code> and exports spans via gRPC to
+your OTEL collector. Kubernetes can also run a centralized Deployment that reads
+the whole cluster via <code>cluster()</code> queries; that path is covered below.</p>
+<div class="admonition tip">
+<p class="admonition-title">Before a fleet rollout, read the <a href="../operating/">Operating Contract</a></p>
+<p>It covers the beta delivery guarantees and loss windows (restart,
+backend-outage, multi-sink-failure behavior), the tested-vs-expected
+<a href="../operating/#compatibility-matrix">compatibility matrix</a>, performance
+tuning, span-volume/cost estimation, and cluster topology / <code>use_cluster_queries</code>
+placement.</p>
+</div>
+<hr />
+<h2 id="quick-start-single-node">Quick Start (Single Node)<a class="headerlink" href="#quick-start-single-node" title="Permanent link">&para;</a></h2>
+<p>Run the installer with no arguments for a guided setup:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>curl<span class="w"> </span>-fsSL<span class="w"> </span>https://github.com/coltconsulting/click-dog/releases/latest/download/install.sh<span class="w"> </span>-o<span class="w"> </span>install.sh
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>less<span class="w"> </span>install.sh
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>sudo<span class="w"> </span>bash<span class="w"> </span>install.sh
+</code></pre></div>
+<p>If you are working from a repository checkout, the equivalent local command is
+<code>./deploy/install.sh</code>.</p>
+<p>The installer walks you through 3 steps, with confirmation at each:</p>
+<ol>
+<li><strong>ClickHouse</strong> — enables span logging, detects TLS, and sets up a dedicated read-only <code>click_dog_monitor</code> user from idempotent SQL (<code>CREATE USER IF NOT EXISTS</code> + two <code>GRANT SELECT</code>s; never replaces an existing user, and only resets a password on explicit confirmation), then verifies spans are readable <strong>as that user</strong></li>
+<li><strong>OTEL collector</strong> — confirm where to send traces (with connectivity check)</li>
+<li><strong>Install</strong> — shows what will be created, then downloads, configures, and starts the service</li>
+</ol>
+<p>Nothing is installed until step 3. You can exit at any point.</p>
+<h3 id="what-this-turns-on">What this turns on<a class="headerlink" href="#what-this-turns-on" title="Permanent link">&para;</a></h3>
+<p>The guided install gives you a working, observable baseline before you touch any
+advanced deployment options:</p>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>What you get</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Read-only source access</td>
+<td>Dedicated <code>click_dog_monitor</code> user with only the required <code>SELECT</code> grants</td>
+</tr>
+<tr>
+<td>Generated config</td>
+<td><code>/etc/click-dog/click-dog.yaml</code> with production profile defaults</td>
+</tr>
+<tr>
+<td>Secret handling</td>
+<td><code>/etc/click-dog/.secret</code> referenced by <code>clickhouse.password_file</code></td>
+</tr>
+<tr>
+<td>Service lifecycle</td>
+<td>Optional systemd unit plus <code>click-dog deploy status</code></td>
+</tr>
+<tr>
+<td>Safety defaults</td>
+<td>Circuit breaker, adaptive backoff, connection caps, dedup cache, and operation-noise filtering</td>
+</tr>
+<tr>
+<td>Health and metrics</td>
+<td><code>/healthz</code>, <code>/readyz</code>, <code>/status</code>, and Prometheus <code>/metrics</code> enabled</td>
+</tr>
+<tr>
+<td>First-value commands</td>
+<td><code>click-dog check</code>, <code>click-dog analyze queries</code>, and Datadog dashboard provisioning</td>
+</tr>
+</tbody>
+</table>
+<h3 id="after-install">After install<a class="headerlink" href="#after-install" title="Permanent link">&para;</a></h3>
+<p>Everything is editable. Nothing is locked in.</p>
+<table>
+<thead>
+<tr>
+<th>What</th>
+<th>How to change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Config</td>
+<td><code>vi /etc/click-dog/click-dog.yaml &amp;&amp; systemctl restart click-dog</code></td>
+</tr>
+<tr>
+<td>Password</td>
+<td>Edit <code>/etc/click-dog/.secret</code> + <code>ALTER USER click_dog_monitor ...</code> in ClickHouse</td>
+</tr>
+<tr>
+<td>Service</td>
+<td><code>systemctl stop/start/restart click-dog</code></td>
+</tr>
+<tr>
+<td>Logs</td>
+<td><code>journalctl -u click-dog -f</code></td>
+</tr>
+<tr>
+<td>Liveness</td>
+<td><code>curl -s localhost:8686/healthz</code></td>
+</tr>
+<tr>
+<td>Readiness</td>
+<td><code>curl -s localhost:8686/readyz</code></td>
+</tr>
+<tr>
+<td>Status JSON</td>
+<td><code>curl -s localhost:8686/status \| jq</code></td>
+</tr>
+<tr>
+<td>Metrics</td>
+<td><code>curl -s localhost:9090/metrics</code></td>
+</tr>
+<tr>
+<td>Uninstall</td>
+<td><code>sudo bash install.sh uninstall</code></td>
+</tr>
+</tbody>
+</table>
+<p>Uninstall uses the same signed installer script. If you no longer have
+<code>install.sh</code> in the current directory, download it again with the Quick Start
+<code>curl</code> command first.</p>
+<hr />
+<h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h2>
+<h3 id="clickhouse-opentelemetry">ClickHouse OpenTelemetry<a class="headerlink" href="#clickhouse-opentelemetry" title="Permanent link">&para;</a></h3>
+<p>ClickHouse must be configured to emit spans. The guided installer prints the SQL to check this, but if you need to enable it from scratch:</p>
+<p>Add to <code>/etc/clickhouse-server/config.d/opentelemetry.xml</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">&lt;clickhouse&gt;</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span><span class="nt">&lt;opentelemetry_span_log&gt;</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">        </span><span class="nt">&lt;engine&gt;</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">            </span>ENGINE<span class="w"> </span>=<span class="w"> </span>MergeTree
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">            </span>PARTITION<span class="w"> </span>BY<span class="w"> </span>toYYYYMM(finish_date)
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">            </span>ORDER<span class="w"> </span>BY<span class="w"> </span>(finish_date,<span class="w"> </span>finish_time_us,<span class="w"> </span>trace_id)
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">        </span><span class="nt">&lt;/engine&gt;</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">        </span><span class="nt">&lt;database&gt;</span>system<span class="nt">&lt;/database&gt;</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">        </span><span class="nt">&lt;table&gt;</span>opentelemetry_span_log<span class="nt">&lt;/table&gt;</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">        </span><span class="nt">&lt;flush_interval_milliseconds&gt;</span>7500<span class="nt">&lt;/flush_interval_milliseconds&gt;</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="nt">&lt;/opentelemetry_span_log&gt;</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="nt">&lt;/clickhouse&gt;</span>
+</code></pre></div>
+<p>Then restart ClickHouse:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>sudo<span class="w"> </span>systemctl<span class="w"> </span>restart<span class="w"> </span>clickhouse-server
+</code></pre></div>
+<p>Verify:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">SELECT</span><span class="w"> </span><span class="k">count</span><span class="p">()</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">system</span><span class="p">.</span><span class="n">opentelemetry_span_log</span><span class="p">;</span>
+</code></pre></div>
+<p>Once click-dog is configured, <code>click-dog check</code> runs this and the rest of
+the data-plane readiness checks (span/query log grants, recent spans, duration
+thresholds, <code>clickhouse.query_id</code> propagation, enrichment join, and
+<code>normalized_query_hash</code> support) in one pass — see
+<a href="../troubleshooting/#no-spans-being-exported">Troubleshooting</a>.</p>
+<h3 id="otel-collector">OTEL Collector<a class="headerlink" href="#otel-collector" title="Permanent link">&para;</a></h3>
+<p>Click-Dog sends spans via gRPC to any OTEL-compatible endpoint on port 4317. See <a href="../integrations/datadog/">Integrations</a> for platform-specific setup (Datadog Agent, OTEL Collector, Grafana Alloy).</p>
+<h3 id="release-signature-verification-auto-download-path">Release-signature verification (auto-download path)<a class="headerlink" href="#release-signature-verification-auto-download-path" title="Permanent link">&para;</a></h3>
+<p>When the installer downloads a release archive (no <code>-b /path/to/binary</code>),
+it verifies the cosign keyless signature on <code>checksums.txt</code> against the
+pinned click-dog release-workflow identity, then verifies the archive's
+SHA256 against that signed <code>checksums.txt</code>. The install aborts before
+extraction on any verification failure.</p>
+<p>This requires the <a href="https://docs.sigstore.dev/cosign/installation/">cosign CLI</a>
+on the host running <code>install.sh</code>, plus <code>sha256sum</code> (Linux) or <code>shasum</code>
+(macOS). Keyless verification also reaches Rekor (<code>rekor.sigstore.dev</code>)
+and Fulcio (<code>fulcio.sigstore.dev</code>) — open egress for these or pre-verify
+on a host that can, then deploy with <code>-b /path/to/click-dog</code> (see
+<a href="#air-gapped-environments">Air-gapped environments</a>).</p>
+<p><strong>Private repository:</strong> while <code>coltconsulting/click-dog</code> is private, the
+auto-download path needs a GitHub token with read access — export
+<code>GITHUB_TOKEN</code> (or <code>GH_TOKEN</code>) before running <code>install.sh</code>, or skip the
+download entirely with <code>-b /path/to/click-dog</code>. Without a token the GitHub
+API version probe and the release assets both return <code>404</code>. <code>install.sh</code>
+downloads each asset through the authenticated release-asset API, so the
+token works the same way <code>self-update</code> documents.</p>
+<hr />
+<h2 id="choosing-an-install-method">Choosing an install method<a class="headerlink" href="#choosing-an-install-method" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Runs from</th>
+<th>Targets</th>
+<th>Scale</th>
+<th>Off-node?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>curl … \| bash</code> quickstart</td>
+<td>the node</td>
+<td>localhost (binary + systemd)</td>
+<td>1</td>
+<td>no</td>
+</tr>
+<tr>
+<td><code>install.sh install</code></td>
+<td>the node</td>
+<td>localhost</td>
+<td>1</td>
+<td>no</td>
+</tr>
+<tr>
+<td><code>init --wizard</code> → <code>install.sh install -f</code></td>
+<td>laptop renders, node installs</td>
+<td>localhost</td>
+<td>1</td>
+<td>config only</td>
+</tr>
+<tr>
+<td>Ansible <code>playbook.yaml</code></td>
+<td>control node → SSH</td>
+<td>N ClickHouse nodes (one sidecar each)</td>
+<td>n</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>Ansible <code>playbook-canary.yaml</code></td>
+<td>control node → SSH</td>
+<td>staged subset → roll forward</td>
+<td>n</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>deploy kubernetes</code></td>
+<td>anywhere (renders manifests)</td>
+<td>k8s — one centralized Deployment reads the whole cluster via <code>cluster()</code></td>
+<td>1→n</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>deploy docker</code></td>
+<td>anywhere (renders compose)</td>
+<td>container host</td>
+<td>1</td>
+<td>yes</td>
+</tr>
+</tbody>
+</table>
+<p>Notes:</p>
+<ul>
+<li><strong>Installing is on-node</strong> for the <code>install</code>/<code>quickstart</code> paths — they write
+  to local <code>/usr/local/bin</code> and systemd and have no SSH. For more than one
+  host, use Ansible. There is currently no single "install to one remote host"
+  path; that's a known gap (use Ansible with a one-host inventory, or run the
+  script on the box).</li>
+<li><strong><code>deploy kubernetes</code>/<code>deploy docker</code> are off-node</strong> — they only render
+  manifests/compose, so run them from anywhere and apply elsewhere.</li>
+<li><code>curl … | bash</code> cannot generate k8s/docker output (no on-disk templates when
+  piped); use a checkout for those.</li>
+</ul>
+<h3 id="passwords-per-method">Passwords per method<a class="headerlink" href="#passwords-per-method" title="Permanent link">&para;</a></h3>
+<p>click-dog reads the ClickHouse password from <code>clickhouse.password_file</code> (a file
+holding the raw secret; one trailing newline is trimmed). The inline
+<code>password:</code> / <code>${CLICKHOUSE_PASSWORD}</code> form still works but is mutually
+exclusive with <code>password_file</code> — setting both is a config error. A
+<code>password_file</code> must hold a non-empty secret (an empty file, or one containing
+only a newline, is rejected); for an intentionally-empty password use the
+inline <code>password: ""</code> form instead. The same applies to
+<code>splunk_hec[].token_file</code> and <code>ha.keeper.auth_password_file</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Where the secret lives</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>install.sh</code> (systemd)</td>
+<td><code>/etc/click-dog/.secret</code> (0600), referenced by <code>password_file</code>; not in the service environment</td>
+</tr>
+<tr>
+<td>Ansible</td>
+<td><code>{{ click_dog_config_dir }}/.secret</code> (0600, <code>no_log</code>), via <code>--extra-vars</code>/Vault → <code>password_file</code></td>
+</tr>
+<tr>
+<td><code>deploy kubernetes</code></td>
+<td>a k8s Secret injected as <code>CLICKHOUSE_PASSWORD</code> (env). Mounting the Secret as a file + <code>password_file</code> is planned, not yet wired in the manifests.</td>
+</tr>
+<tr>
+<td>Manual run</td>
+<td>write the password to a file and set <code>password_file</code>, or <code>export CLICKHOUSE_PASSWORD</code> for the inline form</td>
+</tr>
+</tbody>
+</table>
+<p>The Splunk HEC token (<code>token_file</code>) and Keeper auth password
+(<code>auth_password_file</code>) follow the same file-based pattern. <code>click-dog check</code>
+warns when an inline <code>${VAR}</code> (e.g. <code>CLICKHOUSE_PASSWORD</code>) is referenced but
+unset, so a forgotten export shows up front instead of as an opaque auth error.</p>
+<h2 id="multi-node-deploy">Multi-Node Deploy<a class="headerlink" href="#multi-node-deploy" title="Permanent link">&para;</a></h2>
+<p><code>install.sh</code> is the single-node entry point — it installs Click-Dog on the host it is invoked from. For fleet rollouts use the Ansible playbook shipped in <code>deploy/ansible/</code>, which uses the same sidecar lifecycle shape (config, systemd unit, restart/validation hooks) and handles inventory, parallelism, rolling restarts, and updates.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># 1. Copy the example inventory and edit it for your fleet.</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>cp<span class="w"> </span>deploy/ansible/inventory.ini.example<span class="w"> </span>deploy/ansible/inventory.ini
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>vi<span class="w"> </span>deploy/ansible/inventory.ini
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="c1"># 2. Apply across the fleet.</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>ansible-playbook<span class="w"> </span>-i<span class="w"> </span>deploy/ansible/inventory.ini<span class="w"> </span>deploy/ansible/playbook.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span>--extra-vars<span class="w"> </span><span class="s2">&quot;clickhouse_password=YOUR_PASSWORD&quot;</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="c1"># 3. Run with bounded SSH concurrency (10 hosts in flight at once).</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="c1">#    `-f` is a real ansible-playbook flag; for batched rollouts that</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="c1">#    finish a wave before starting the next, add `serial: 10` to the</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="c1">#    play in playbook.yaml (it&#39;s a play-level YAML keyword, not a</span>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="c1">#    CLI flag).</span>
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>ansible-playbook<span class="w"> </span>-i<span class="w"> </span>deploy/ansible/inventory.ini<span class="w"> </span>deploy/ansible/playbook.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="w">  </span>--extra-vars<span class="w"> </span><span class="s2">&quot;clickhouse_password=YOUR_PASSWORD&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="w">  </span>-f<span class="w"> </span><span class="m">10</span>
+</code></pre></div>
+<p>A <code>playbook-canary.yaml</code> is also included for staged rollouts that pause after a small subset of nodes are upgraded.</p>
+<blockquote>
+<p>If you already have the <code>click-dog</code> binary on PATH, the same manifest
+generators (and an installed-state reporter) are also reachable directly
+as <code>click-dog deploy kubernetes</code> / <code>click-dog deploy docker</code> /
+<code>click-dog deploy status</code>. See
+<a href="../modes/#click-dog-deploy-manifest-generators">Operation Modes — <code>click-dog deploy</code></a>
+for the flag reference. The <code>install.sh</code> recipes below remain the
+recommended entry point because the script wraps cosign verification,
+systemd unit creation, and the guided quickstart.</p>
+</blockquote>
+<h3 id="installsh-commands"><code>install.sh</code> commands<a class="headerlink" href="#installsh-commands" title="Permanent link">&para;</a></h3>
+<p>The shell entry point covers single-node systemd, Kubernetes manifest generation, and Docker Compose scaffolding:</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>install</code></td>
+<td>Install Click-Dog on the current host: binary + config + optional systemd unit</td>
+</tr>
+<tr>
+<td><code>update</code></td>
+<td>Swap the binary on the current host (config untouched)</td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td>Print the current host's service / health status</td>
+</tr>
+<tr>
+<td><code>uninstall</code></td>
+<td>Stop the service and remove all click-dog files on the current host</td>
+</tr>
+<tr>
+<td><code>kubernetes</code></td>
+<td>Render Kubernetes manifests under <code>click-dog-k8s/</code></td>
+</tr>
+<tr>
+<td><code>docker</code></td>
+<td>Render a Docker Compose stack under <code>click-dog-docker/</code></td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Where</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-c ADDRESS</code></td>
+<td>install/kubernetes/docker</td>
+<td>OTEL collector address (required unless <code>-f</code>)</td>
+</tr>
+<tr>
+<td><code>-f PATH</code></td>
+<td>install</td>
+<td>Use this pre-rendered <code>click-dog.yaml</code> instead of letting install.sh render one; pair with <code>click-dog init --wizard</code> from a laptop</td>
+</tr>
+<tr>
+<td><code>-u USER</code></td>
+<td>install</td>
+<td>ClickHouse username (default: <code>click_dog_monitor</code>) — dedicated, namespaced name so re-running install never collides with or replaces an existing <code>monitoring</code> account</td>
+</tr>
+<tr>
+<td><code>-v VERSION</code></td>
+<td>install/update</td>
+<td>Version to install/generate (default: latest release)</td>
+</tr>
+<tr>
+<td><code>--prerelease</code></td>
+<td>install/update</td>
+<td>When <code>-v</code> is unset, resolve the newest pre-release (alpha/beta) instead of the latest GA release</td>
+</tr>
+<tr>
+<td><code>-b BINARY</code></td>
+<td>install/update</td>
+<td>Path to a pre-verified click-dog binary (skips download + cosign verification)</td>
+</tr>
+<tr>
+<td><code>-k HOSTS</code></td>
+<td>install</td>
+<td>Keeper hosts for HA, comma-separated</td>
+</tr>
+<tr>
+<td><code>-C CMD</code></td>
+<td>install</td>
+<td><code>clickhouse-client</code> command/path (e.g. <code>-C "clickhouse-client -u admin --password X"</code>)</td>
+</tr>
+<tr>
+<td><code>-x PROXY</code></td>
+<td>install/update</td>
+<td>HTTPS proxy for binary download</td>
+</tr>
+<tr>
+<td><code>-o DIR</code></td>
+<td>kubernetes/docker</td>
+<td>Output directory for rendered manifests</td>
+</tr>
+<tr>
+<td><code>--systemd</code></td>
+<td>install</td>
+<td>Create and enable a systemd unit</td>
+</tr>
+</tbody>
+</table>
+<p>The ClickHouse password is supplied via the <code>CLICKHOUSE_PASSWORD</code> environment
+variable (for non-interactive runs) or the interactive prompt when it is unset
+and a TTY is available — never a command-line flag, which would leak the secret
+into process listings and shell history.</p>
+<h4 id="bring-your-own-yaml-install-f">Bring your own YAML (<code>install -f</code>)<a class="headerlink" href="#bring-your-own-yaml-install-f" title="Permanent link">&para;</a></h4>
+<p>For audit / version-control workflows where you want to render the
+config locally, eyeball it, then deploy:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># laptop — render and review (commit to your config repo).</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="c1"># -ch-password-file emits `password_file: /etc/click-dog/.secret` so the</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="c1"># config reads the secret from a file, matching the systemd unit below.</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>click-dog<span class="w"> </span>init<span class="w"> </span>--wizard<span class="w"> </span>-ch-password-file<span class="w"> </span>/etc/click-dog/.secret<span class="w"> </span>-o<span class="w"> </span>click-dog.yaml
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="c1"># target box — install.sh fetches + verifies the release binary itself.</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="c1"># Pass the password at install time; install.sh writes it to</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="c1"># /etc/click-dog/.secret (0600), where password_file points.</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>scp<span class="w"> </span>click-dog.yaml<span class="w"> </span>HOST:/tmp/
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>ssh<span class="w"> </span>HOST<span class="w"> </span><span class="s1">&#39;curl -fsSL https://github.com/coltconsulting/click-dog/releases/latest/download/install.sh -o /tmp/install.sh&#39;</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>ssh<span class="w"> </span>HOST<span class="w"> </span><span class="s1">&#39;sudo CLICKHOUSE_PASSWORD=... bash /tmp/install.sh install -f /tmp/click-dog.yaml --systemd&#39;</span>
+</code></pre></div>
+<blockquote>
+<p><strong>Don't pair the inline <code>${CLICKHOUSE_PASSWORD}</code> form with <code>install -f --systemd</code>.</strong>
+The generated systemd unit has no <code>EnvironmentFile=</code>, so <code>CLICKHOUSE_PASSWORD</code>
+is never set at runtime and an inline <code>password: ${CLICKHOUSE_PASSWORD}</code> expands
+to empty — ClickHouse auth then fails. Render with
+<code>-ch-password-file /etc/click-dog/.secret</code> so the config uses <code>password_file</code>;
+install.sh writes the password it receives (<code>CLICKHOUSE_PASSWORD</code>) to that
+file as raw 0600 bytes.</p>
+</blockquote>
+<p><code>install -f</code> only swaps out the inline <code>click-dog init</code> render step;
+writing <code>/etc/click-dog/.secret</code> from <code>CLICKHOUSE_PASSWORD</code>, the systemd
+unit, and the validate-then-swap run exactly as in a normal <code>install</code>. It
+does <strong>not</strong> provision a ClickHouse user — that is the guided quickstart's
+job — so the YAML you supply owns <code>clickhouse.username</code>, and that user must
+already exist with a password matching <code>/etc/click-dog/.secret</code>.
+<code>click-dog init --wizard</code> writes <code>username: default</code>; pass
+<code>-ch-user click_dog_monitor</code> if you want the dedicated monitoring
+account the quickstart provisions. Air-gapped hosts can add
+<code>-b /tmp/click-dog</code> with a pre-verified binary instead of letting
+install.sh download one.</p>
+<h3 id="ansible-playbook-variables">Ansible playbook variables<a class="headerlink" href="#ansible-playbook-variables" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>clickhouse_password</code></td>
+<td>Required password for the ClickHouse monitoring user; pass with <code>--extra-vars</code> or Ansible Vault</td>
+</tr>
+<tr>
+<td><code>clickhouse_username</code></td>
+<td>ClickHouse username, default <code>click_dog_monitor</code></td>
+</tr>
+<tr>
+<td><code>otel_collector_address</code></td>
+<td>OTEL collector address, for example <code>otel-collector:4317</code></td>
+</tr>
+<tr>
+<td><code>keeper_hosts</code></td>
+<td>Optional Keeper hosts for HA leader election</td>
+</tr>
+<tr>
+<td><code>click_dog_version</code></td>
+<td>Release tag to install, or <code>latest</code></td>
+</tr>
+<tr>
+<td><code>click_dog_download_url</code></td>
+<td>Internal archive URL for mirrored or air-gapped environments; the playbook downloads this directly, so verify it before publishing to the mirror</td>
+</tr>
+<tr>
+<td><code>click_dog_local_binary</code></td>
+<td>Local verified binary to copy instead of downloading an archive; use this for strict cosign-verified fleet rollouts</td>
+</tr>
+</tbody>
+</table>
+<h3 id="air-gapped-environments">Air-gapped environments<a class="headerlink" href="#air-gapped-environments" title="Permanent link">&para;</a></h3>
+<p>Verify the release on an internet-connected host, then transfer the <strong>verified</strong> binary into the air-gapped network. Skipping verification on the internet-side host defeats the point of an air-gap — the binary that lands on the bastion is only as trustworthy as the host that produced it.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># 1. On a machine with internet AND sigstore egress (rekor.sigstore.dev,</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="c1">#    fulcio.sigstore.dev): run the full cosign + sha256 verification flow</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="c1">#    documented in &quot;Verifying releases manually&quot; below. Don&#39;t extract or</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1">#    use the binary until both commands exit zero.</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="c1"># 2. Once verified, extract the binary from the verified archive:</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="nv">VERSION</span><span class="o">=</span><span class="m">26</span>.04.9
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>tar<span class="w"> </span>-xzf<span class="w"> </span><span class="s2">&quot;click-dog_</span><span class="si">${</span><span class="nv">VERSION</span><span class="si">}</span><span class="s2">_linux_amd64.tar.gz&quot;</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="c1"># 3. Transfer the verified binary into the air-gapped network and deploy:</span>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="c1">#    - Single node: run `install.sh -b /tmp/click-dog` on each host.</span>
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="c1">#    - Fleet: drop the binary onto the Ansible control host and pass</span>
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="c1">#      `click_dog_local_binary=/tmp/click-dog` when running the playbook in</span>
+<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="c1">#      `deploy/ansible/`. The playbook then bypasses the auto-download.</span>
+<a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a>scp<span class="w"> </span>click-dog<span class="w"> </span>bastion:/tmp/click-dog
+<a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a>ssh<span class="w"> </span>bastion<span class="w"> </span><span class="s1">&#39;sudo ./deploy/install.sh install -c collector:4317 -b /tmp/click-dog --systemd&#39;</span>
+</code></pre></div>
+<p>See <a href="#verifying-releases-manually">Verifying releases manually</a> for the exact
+verification commands. <code>click_dog_local_binary</code> tells Ansible to copy the
+already-verified binary instead of downloading a release archive.</p>
+<hr />
+<h2 id="verifying-releases-manually">Verifying releases manually<a class="headerlink" href="#verifying-releases-manually" title="Permanent link">&para;</a></h2>
+<p>Each release ships a <code>checksums.txt</code> plus a cosign keyless signature pair —
+<code>checksums.txt.sig</code> (signature) and <code>checksums.txt.pem</code> (Fulcio-issued
+certificate tied to the GitHub Actions release workflow). <code>install.sh</code>
+(auto-download path) and <code>self-update</code> verify these automatically; this
+section is for operators who download binaries directly.</p>
+<p>You'll need the <a href="https://docs.sigstore.dev/cosign/installation/">cosign CLI</a>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="nv">VERSION</span><span class="o">=</span><span class="m">26</span>.04.9
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="nv">BASE</span><span class="o">=</span><span class="s2">&quot;https://github.com/coltconsulting/click-dog/releases/download/v</span><span class="si">${</span><span class="nv">VERSION</span><span class="si">}</span><span class="s2">&quot;</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># Fetch the archive, checksums, signature, and certificate.</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>curl<span class="w"> </span>-fsSL<span class="w"> </span>-O<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">BASE</span><span class="si">}</span><span class="s2">/click-dog_</span><span class="si">${</span><span class="nv">VERSION</span><span class="si">}</span><span class="s2">_linux_amd64.tar.gz&quot;</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>curl<span class="w"> </span>-fsSL<span class="w"> </span>-O<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">BASE</span><span class="si">}</span><span class="s2">/checksums.txt&quot;</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>curl<span class="w"> </span>-fsSL<span class="w"> </span>-O<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">BASE</span><span class="si">}</span><span class="s2">/checksums.txt.sig&quot;</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>curl<span class="w"> </span>-fsSL<span class="w"> </span>-O<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">BASE</span><span class="si">}</span><span class="s2">/checksums.txt.pem&quot;</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="c1"># 1. Verify the cosign keyless signature on checksums.txt.</span>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a><span class="c1">#    The pinned identity ties the signature to the release.yml workflow</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="c1">#    on a release tag — a stolen GITHUB_TOKEN alone cannot forge it.</span>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>cosign<span class="w"> </span>verify-blob<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="w">  </span>--certificate<span class="w"> </span>checksums.txt.pem<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a><span class="w">  </span>--signature<span class="w"> </span>checksums.txt.sig<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a><span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">&#39;^https://github\.com/coltconsulting/click-dog/\.github/workflows/release\.yml@refs/tags/v.+$&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a><span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span><span class="s1">&#39;https://token.actions.githubusercontent.com&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a><span class="w">  </span>checksums.txt
+<a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a>
+<a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a><span class="c1"># 2. Verify the archive against the now-trusted checksums.txt.</span>
+<a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a>sha256sum<span class="w"> </span>-c<span class="w"> </span>checksums.txt<span class="w"> </span>--ignore-missing
+</code></pre></div>
+<p>Both commands must exit zero before extracting and running the binary.
+A signature failure means the release is not the one published by the
+click-dog release workflow — do not install it.</p>
+<blockquote>
+<p><strong>Egress requirement for <code>self-update</code>:</strong> keyless verification calls
+Rekor (<code>rekor.sigstore.dev</code>) and Fulcio (<code>fulcio.sigstore.dev</code>). If
+your egress firewall allows GitHub but blocks sigstore, <code>self-update</code>
+will fail closed after a 60s timeout with "Rekor/Fulcio unreachable?"
+— by design, since the alternative is silently trusting an
+unverified binary. Either allow egress to the sigstore hosts above,
+or skip <code>self-update</code> and use the manual flow above on a host that
+can reach sigstore, then ship the verified binary in via
+<code>deploy/install.sh -b</code>.</p>
+</blockquote>
+<p>Container images on <code>ghcr.io/coltconsulting/click-dog</code> are signed with
+the same identity:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>cosign<span class="w"> </span>verify<span class="w"> </span>ghcr.io/coltconsulting/click-dog:<span class="si">${</span><span class="nv">VERSION</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">&#39;^https://github\.com/coltconsulting/click-dog/\.github/workflows/release\.yml@refs/tags/v.+$&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span><span class="s1">&#39;https://token.actions.githubusercontent.com&#39;</span>
+</code></pre></div>
+<h3 id="proxy-support">Proxy support<a class="headerlink" href="#proxy-support" title="Permanent link">&para;</a></h3>
+<p>The script only makes outbound HTTPS requests when auto-downloading the binary. Use <code>-x</code> or standard environment variables:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>sudo<span class="w"> </span>./deploy/install.sh<span class="w"> </span>install<span class="w"> </span>-c<span class="w"> </span>collector:4317<span class="w"> </span>-x<span class="w"> </span>http://proxy.corp:3128
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="c1"># or</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">HTTPS_PROXY</span><span class="o">=</span>http://proxy.corp:3128
+</code></pre></div>
+<hr />
+<h2 id="kubernetes">Kubernetes<a class="headerlink" href="#kubernetes" title="Permanent link">&para;</a></h2>
+<p>Generate templated manifests with kustomize:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">CLICKHOUSE_PASSWORD</span><span class="o">=</span><span class="s2">&quot;your-monitoring-password&quot;</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>./deploy/install.sh<span class="w"> </span>kubernetes<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span>-c<span class="w"> </span>otel-collector:4317<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span>--ch-host<span class="w"> </span>clickhouse.clickhouse.svc.cluster.local<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">  </span>--cluster<span class="w"> </span>main
+</code></pre></div>
+<p><code>install.sh kubernetes</code> runs <code>click-dog deploy kubernetes</code> from the published
+image (so it works from a laptop — it needs <strong>Docker</strong>, or run the generator
+directly on a Linux host). <code>--ch-host</code> is <strong>required</strong>: it's the ClickHouse
+Service DNS click-dog connects to — a standalone click-dog pod can't reach
+ClickHouse via <code>localhost</code>. <code>--cluster</code> enables <code>cluster()</code> reads across all
+shards.</p>
+<p>This creates a <code>click-dog-k8s/</code> directory with: Namespace, ServiceAccount, ConfigMap, Secret, and a single-replica <strong>Deployment</strong>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-k<span class="w"> </span>click-dog-k8s/
+</code></pre></div>
+<p>The generated ConfigMap enables the dedicated health listener on <code>:8686</code>, and the generated Deployment probes <code>/healthz</code> for liveness and <code>/readyz</code> for readiness on the <code>health</code> port. See <a href="../kubernetes-clickhouse/">Kubernetes — ClickHouse setup</a> for topology (centralized vs sidecar) and the ClickHouse-side prerequisites.</p>
+<h3 id="updating">Updating<a class="headerlink" href="#updating" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>./deploy/install.sh<span class="w"> </span>kubernetes<span class="w"> </span>update<span class="w"> </span>-v<span class="w"> </span><span class="m">26</span>.03.2
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-k<span class="w"> </span>click-dog-k8s/
+</code></pre></div>
+<div class="admonition warning">
+<p class="admonition-title">Migrating a pre-Deployment install</p>
+<p>Output directories generated before the DaemonSet→Deployment change hold a
+<code>daemonset.yaml</code> (not <code>deployment.yaml</code>); <code>update</code> refuses them because an
+image-tag bump can't migrate the topology. <strong>Regenerate</strong> the directory
+(<code>./deploy/install.sh kubernetes -c … --ch-host …</code>), then <strong>delete the old
+DaemonSet</strong> — <code>kubectl apply -k</code> won't prune it, so it would keep running
+and double-export alongside the new Deployment:
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>daemonset<span class="w"> </span>click-dog<span class="w"> </span>-n<span class="w"> </span>click-dog
+</code></pre></div></p>
+</div>
+<h3 id="statefulset-sidecar">StatefulSet sidecar<a class="headerlink" href="#statefulset-sidecar" title="Permanent link">&para;</a></h3>
+<p>If ClickHouse runs as a StatefulSet, add click-dog as a container in the pod spec:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">click-dog</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">  </span><span class="c1"># Pin an exact release tag in production; replace this example with the</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">  </span><span class="c1"># current release tag and avoid :latest so rollouts and rollbacks stay</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="w">  </span><span class="c1"># reproducible.</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="w">  </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ghcr.io/coltconsulting/click-dog:26.04.6</span>
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a><span class="w">  </span><span class="nt">args</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;-config&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;/etc/click-dog/click-dog.yaml&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a><span class="w">  </span><span class="nt">env</span><span class="p">:</span>
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">CLICKHOUSE_USERNAME</span>
+<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a><span class="w">      </span><span class="nt">valueFrom</span><span class="p">:</span>
+<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a><span class="w">        </span><span class="nt">secretKeyRef</span><span class="p">:</span>
+<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a><span class="w">          </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">click-dog-secret</span>
+<a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a><span class="w">          </span><span class="nt">key</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">CLICKHOUSE_USERNAME</span>
+<a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">CLICKHOUSE_PASSWORD</span>
+<a id="__codelineno-14-14" name="__codelineno-14-14" href="#__codelineno-14-14"></a><span class="w">      </span><span class="nt">valueFrom</span><span class="p">:</span>
+<a id="__codelineno-14-15" name="__codelineno-14-15" href="#__codelineno-14-15"></a><span class="w">        </span><span class="nt">secretKeyRef</span><span class="p">:</span>
+<a id="__codelineno-14-16" name="__codelineno-14-16" href="#__codelineno-14-16"></a><span class="w">          </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">click-dog-secret</span>
+<a id="__codelineno-14-17" name="__codelineno-14-17" href="#__codelineno-14-17"></a><span class="w">          </span><span class="nt">key</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">CLICKHOUSE_PASSWORD</span>
+<a id="__codelineno-14-18" name="__codelineno-14-18" href="#__codelineno-14-18"></a><span class="w">  </span><span class="nt">resources</span><span class="p">:</span>
+<a id="__codelineno-14-19" name="__codelineno-14-19" href="#__codelineno-14-19"></a><span class="w">    </span><span class="nt">requests</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> cpu</span><span class="p">:</span><span class="w"> </span><span class="nv">50m</span><span class="p p-Indicator">,</span><span class="nt"> memory</span><span class="p">:</span><span class="w"> </span><span class="nv">64Mi</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<a id="__codelineno-14-20" name="__codelineno-14-20" href="#__codelineno-14-20"></a><span class="w">    </span><span class="nt">limits</span><span class="p">:</span><span class="w">   </span><span class="p p-Indicator">{</span><span class="nt"> cpu</span><span class="p">:</span><span class="w"> </span><span class="nv">200m</span><span class="p p-Indicator">,</span><span class="nt"> memory</span><span class="p">:</span><span class="w"> </span><span class="nv">128Mi</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<a id="__codelineno-14-21" name="__codelineno-14-21" href="#__codelineno-14-21"></a><span class="w">  </span><span class="nt">volumeMounts</span><span class="p">:</span>
+<a id="__codelineno-14-22" name="__codelineno-14-22" href="#__codelineno-14-22"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">click-dog-config</span>
+<a id="__codelineno-14-23" name="__codelineno-14-23" href="#__codelineno-14-23"></a><span class="w">      </span><span class="nt">mountPath</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/click-dog</span>
+<a id="__codelineno-14-24" name="__codelineno-14-24" href="#__codelineno-14-24"></a><span class="w">      </span><span class="nt">readOnly</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</code></pre></div>
+<h3 id="tls-via-cert-manager">TLS via cert-manager<a class="headerlink" href="#tls-via-cert-manager" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>vi<span class="w"> </span>deploy/kubernetes/certificate.yaml<span class="w">   </span><span class="c1"># set your email + collector FQDN</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy/kubernetes/certificate.yaml
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="c1"># Then uncomment the TLS block in configmap.yaml and re-apply</span>
+</code></pre></div>
+<hr />
+<h2 id="docker">Docker<a class="headerlink" href="#docker" title="Permanent link">&para;</a></h2>
+<p>Generate a docker-compose setup:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">CLICKHOUSE_PASSWORD</span><span class="o">=</span><span class="s2">&quot;your-monitoring-password&quot;</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>./deploy/install.sh<span class="w"> </span>docker<span class="w"> </span>-c<span class="w"> </span>otel-collector:4317
+</code></pre></div>
+<p>Creates a <code>click-dog-docker/</code> directory with <code>docker-compose.yml</code>, <code>click-dog.yaml</code>, and <code>.env</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="nb">cd</span><span class="w"> </span>click-dog-docker<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
+</code></pre></div>
+<h3 id="updating_1">Updating<a class="headerlink" href="#updating_1" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>./deploy/install.sh<span class="w"> </span>docker<span class="w"> </span>update<span class="w"> </span>-v<span class="w"> </span><span class="m">26</span>.03.2
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="nb">cd</span><span class="w"> </span>click-dog-docker<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
+</code></pre></div>
+<hr />
+<h2 id="installed-files">Installed Files<a class="headerlink" href="#installed-files" title="Permanent link">&para;</a></h2>
+<p>After install, each node has:</p>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Path</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Binary</td>
+<td><code>/usr/local/bin/click-dog</code></td>
+</tr>
+<tr>
+<td>Config</td>
+<td><code>/etc/click-dog/click-dog.yaml</code></td>
+</tr>
+<tr>
+<td>Secrets</td>
+<td><code>/etc/click-dog/.secret</code></td>
+</tr>
+<tr>
+<td>Logs</td>
+<td>stderr (<code>journalctl -u click-dog</code>)</td>
+</tr>
+<tr>
+<td>systemd unit</td>
+<td><code>/etc/systemd/system/click-dog.service</code></td>
+</tr>
+<tr>
+<td>User</td>
+<td><code>click-dog</code> (system, no shell)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="updating_2">Updating<a class="headerlink" href="#updating_2" title="Permanent link">&para;</a></h2>
+<p><code>install.sh update</code> operates on the current host. It downloads or accepts a binary, smoke-tests it, rejects downgrades, validates the existing config against the staged binary, writes <code>/usr/local/bin/click-dog.prev</code>, swaps the binary, and restarts systemd. It does <strong>not</strong> rewrite <code>/etc/click-dog/click-dog.yaml</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1"># Single node: verified binary swap + config validation</span>
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>sudo<span class="w"> </span>./deploy/install.sh<span class="w"> </span>update
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>
+<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="c1"># Pin a specific version</span>
+<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>sudo<span class="w"> </span>./deploy/install.sh<span class="w"> </span>update<span class="w"> </span>-v<span class="w"> </span><span class="m">26</span>.03.2
+<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>
+<a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a><span class="c1"># Backward-compatible no-op; update-time config merging was removed</span>
+<a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a>sudo<span class="w"> </span>./deploy/install.sh<span class="w"> </span>update<span class="w"> </span>--no-merge
+<a id="__codelineno-19-9" name="__codelineno-19-9" href="#__codelineno-19-9"></a>
+<a id="__codelineno-19-10" name="__codelineno-19-10" href="#__codelineno-19-10"></a><span class="c1"># Fleet: same playbook, with a pinned version and bounded SSH</span>
+<a id="__codelineno-19-11" name="__codelineno-19-11" href="#__codelineno-19-11"></a><span class="c1"># concurrency. For batched rollouts that finish a wave before</span>
+<a id="__codelineno-19-12" name="__codelineno-19-12" href="#__codelineno-19-12"></a><span class="c1"># starting the next, add `serial: 10` to the play in playbook.yaml.</span>
+<a id="__codelineno-19-13" name="__codelineno-19-13" href="#__codelineno-19-13"></a>ansible-playbook<span class="w"> </span>-i<span class="w"> </span>deploy/ansible/inventory.ini<span class="w"> </span>deploy/ansible/playbook.yaml<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-19-14" name="__codelineno-19-14" href="#__codelineno-19-14"></a><span class="w">  </span>--extra-vars<span class="w"> </span><span class="s2">&quot;clickhouse_password=YOUR_PASSWORD click_dog_version=26.03.2&quot;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-19-15" name="__codelineno-19-15" href="#__codelineno-19-15"></a><span class="w">  </span>-f<span class="w"> </span><span class="m">10</span>
+</code></pre></div>
+<p>New config keys are supplied by the binary's runtime defaults when omitted.
+If you want newly recommended settings materialized in YAML, render a fresh
+profile with <code>click-dog init</code>, compare it to your checked-in config, and apply
+the changes deliberately.</p>
+<h3 id="in-place-self-update">In-place <code>self-update</code><a class="headerlink" href="#in-place-self-update" title="Permanent link">&para;</a></h3>
+<p>The binary can also replace itself from the latest GitHub release (verifying
+the cosign signature as described in <a href="#verifying-releases-manually">Verifying releases manually</a>):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>click-dog<span class="w"> </span>self-update<span class="w"> </span>-check<span class="w">        </span><span class="c1"># report whether an update is available</span>
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>click-dog<span class="w"> </span>self-update<span class="w">               </span><span class="c1"># download, verify, and swap the binary</span>
+</code></pre></div>
+<p><code>self-update</code> tracks the <strong>stable</strong> channel only — it uses GitHub's
+<code>/releases/latest</code>, which excludes prereleases. To opt into alpha/beta builds,
+add <code>--prerelease</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>click-dog<span class="w"> </span>self-update<span class="w"> </span>-check<span class="w"> </span>-prerelease<span class="w">   </span><span class="c1"># see the newest build incl. prereleases</span>
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>click-dog<span class="w"> </span>self-update<span class="w"> </span>-prerelease<span class="w">          </span><span class="c1"># update onto it</span>
+</code></pre></div>
+<p>While the repository is private, <code>self-update</code> requires <code>GITHUB_TOKEN</code> to be set
+(a fine-grained token with read access to releases is sufficient).</p>
+<hr />
+<h2 id="smart-defaults">Smart Defaults<a class="headerlink" href="#smart-defaults" title="Permanent link">&para;</a></h2>
+<p>The table below describes the posture the <strong>installer</strong> writes into a generated
+<code>click-dog.yaml</code>. The compiled binary's own defaults are conservative — both
+the metrics scrape listener and the health listener are <strong>off</strong> unless their
+respective <code>enabled: true</code> flags are present in your config. <code>install.sh</code> sets
+them on; hand-rolled configs that omit the blocks will not open either port.</p>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Installer default</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Circuit breaker</td>
+<td>Enabled (open after 3 failures)</td>
+<td>Protects ClickHouse during collector outages</td>
+</tr>
+<tr>
+<td>Adaptive backoff</td>
+<td>Enabled (up to 5 min between polls)</td>
+<td>Graceful degradation under failures</td>
+</tr>
+<tr>
+<td>HA leader election</td>
+<td>Auto-enabled when <code>-k</code> is set</td>
+<td>Infrastructure for future coordination features</td>
+</tr>
+<tr>
+<td>Rate limiting</td>
+<td>1000 spans/cycle per node</td>
+<td>Prevents collector overload</td>
+</tr>
+<tr>
+<td>Dedup cache</td>
+<td>10k entries</td>
+<td>Prevents duplicate exports across poll cycles</td>
+</tr>
+<tr>
+<td>TLS</td>
+<td>Off (see below)</td>
+<td>Easy to add, not required for internal networks</td>
+</tr>
+<tr>
+<td>Connection pool</td>
+<td>2 max connections</td>
+<td>Low per-node footprint on ClickHouse</td>
+</tr>
+<tr>
+<td>Scrape listener (<code>metrics:</code>)</td>
+<td>Enabled on <code>:9090</code></td>
+<td><code>/metrics</code> for Prometheus / Agent / Alloy, plus legacy <code>/health</code></td>
+</tr>
+<tr>
+<td>Health listener (<code>health:</code>)</td>
+<td>Enabled on <code>:8686</code></td>
+<td><code>/healthz</code>, <code>/readyz</code>, <code>/status</code> for Kubernetes / orchestrators — separate from the scrape listener</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="enabling-tls">Enabling TLS<a class="headerlink" href="#enabling-tls" title="Permanent link">&para;</a></h2>
+<p>Click-Dog's gRPC connection to the OTEL collector carries span data over the network. TLS encrypts query text, durations, and trace metadata in transit.</p>
+<blockquote>
+<p>The ClickHouse connection (<code>localhost:9000</code>) stays on loopback and typically doesn't need TLS.</p>
+</blockquote>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="nt">exporters</span><span class="p">:</span>
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="w">  </span><span class="nt">otel</span><span class="p">:</span>
+<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a><span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">collector_address</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">collector.internal:4317</span>
+<a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a><span class="w">      </span><span class="nt">secure</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a><span class="w">      </span><span class="nt">ca_cert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/click-dog/tls/ca.pem</span><span class="w">        </span><span class="c1"># CA that signed collector&#39;s cert</span>
+<a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a><span class="w">      </span><span class="nt">client_cert</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/click-dog/tls/tls.crt</span><span class="w">    </span><span class="c1"># optional, for mTLS</span>
+<a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a><span class="w">      </span><span class="nt">client_key</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/etc/click-dog/tls/tls.key</span><span class="w">     </span><span class="c1"># optional, for mTLS</span>
+</code></pre></div>
+<p>If your collector uses a well-known CA (e.g., cloud provider), you only need <code>secure: true</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>exporters.otel[].secure</code></td>
+<td>Enable TLS on gRPC to collector</td>
+</tr>
+<tr>
+<td><code>exporters.otel[].ca_cert</code></td>
+<td>CA certificate to verify collector</td>
+</tr>
+<tr>
+<td><code>exporters.otel[].client_cert</code></td>
+<td>Client cert for mTLS (optional)</td>
+</tr>
+<tr>
+<td><code>exporters.otel[].client_key</code></td>
+<td>Client key for mTLS (optional)</td>
+</tr>
+<tr>
+<td><code>exporters.otel[].insecure_skip_verify</code></td>
+<td>Skip verification (testing only)</td>
+</tr>
+<tr>
+<td><code>clickhouse.secure</code></td>
+<td>Enable TLS to ClickHouse (rarely needed)</td>
+</tr>
+<tr>
+<td><code>clickhouse.ca_cert</code></td>
+<td>CA cert for ClickHouse TLS</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="scaling-considerations">Scaling Considerations<a class="headerlink" href="#scaling-considerations" title="Permanent link">&para;</a></h2>
+<h3 id="otel-collector-capacity">OTEL Collector Capacity<a class="headerlink" href="#otel-collector-capacity" title="Permanent link">&para;</a></h3>
+<p>All click-dog instances push to your OTEL collector. Size it for:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>Max throughput = N nodes × 1000 spans/cycle × (60s / 30s interval)
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>              = N × 2000 spans/minute (worst case)
+</code></pre></div>
+<p>For 50 nodes: up to 100k spans/minute. Mitigations:
+- Collector pool behind a load balancer
+- Increase <code>check_interval_s</code> to reduce frequency
+- Lower <code>max_spans_per_cycle</code> per node
+- Use <code>batch_size</code> + <code>batch_delay_ms</code> to smooth bursts</p>
+<h3 id="resource-footprint">Resource Footprint<a class="headerlink" href="#resource-footprint" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Resource</th>
+<th>Per Node</th>
+<th>50-Node Cluster</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CPU</td>
+<td>&lt;50m</td>
+<td>~2.5 vCPU</td>
+</tr>
+<tr>
+<td>Memory</td>
+<td>~40-60 MiB</td>
+<td>~3 GiB</td>
+</tr>
+<tr>
+<td>Connections</td>
+<td>2 to ClickHouse</td>
+<td>100 total</td>
+</tr>
+<tr>
+<td>Network</td>
+<td>Minimal</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Disk</td>
+<td>Logs only (stderr)</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<h3 id="clickhouse-impact">ClickHouse Impact<a class="headerlink" href="#clickhouse-impact" title="Permanent link">&para;</a></h3>
+<p>Each sidecar runs a lightweight SELECT against <code>system.opentelemetry_span_log</code> every 30 seconds, using at most 2 connections with a 30-second timeout. Circuit breaker stops querying if ClickHouse is struggling. Total cluster impact is negligible.</p>
+<hr />
+<h2 id="verifying-the-deployment">Verifying the Deployment<a class="headerlink" href="#verifying-the-deployment" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="c1"># Per-host systemd status</span>
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>sudo<span class="w"> </span>./deploy/install.sh<span class="w"> </span>status
+<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a>
+<a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a><span class="c1"># Fleet-wide status via an Ansible ad-hoc command — the playbook</span>
+<a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a><span class="c1"># does not currently expose a `status` tag, so run systemctl</span>
+<a id="__codelineno-24-6" name="__codelineno-24-6" href="#__codelineno-24-6"></a><span class="c1"># directly over the same inventory:</span>
+<a id="__codelineno-24-7" name="__codelineno-24-7" href="#__codelineno-24-7"></a>ansible<span class="w"> </span>clickhouse<span class="w"> </span>-i<span class="w"> </span>deploy/ansible/inventory.ini<span class="w"> </span>--become<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-24-8" name="__codelineno-24-8" href="#__codelineno-24-8"></a><span class="w">  </span>-m<span class="w"> </span>systemd<span class="w"> </span>-a<span class="w"> </span><span class="s2">&quot;name=click-dog&quot;</span>
+<a id="__codelineno-24-9" name="__codelineno-24-9" href="#__codelineno-24-9"></a>
+<a id="__codelineno-24-10" name="__codelineno-24-10" href="#__codelineno-24-10"></a><span class="c1"># Kubernetes</span>
+<a id="__codelineno-24-11" name="__codelineno-24-11" href="#__codelineno-24-11"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>click-dog<span class="w"> </span>-o<span class="w"> </span>wide
+<a id="__codelineno-24-12" name="__codelineno-24-12" href="#__codelineno-24-12"></a>
+<a id="__codelineno-24-13" name="__codelineno-24-13" href="#__codelineno-24-13"></a><span class="c1"># Logs (look for &quot;Exported:&quot; lines)</span>
+<a id="__codelineno-24-14" name="__codelineno-24-14" href="#__codelineno-24-14"></a>ssh<span class="w"> </span>ch-node-01<span class="w"> </span>journalctl<span class="w"> </span>-u<span class="w"> </span>click-dog<span class="w"> </span>-n<span class="w"> </span><span class="m">20</span><span class="w"> </span>--no-pager
+<a id="__codelineno-24-15" name="__codelineno-24-15" href="#__codelineno-24-15"></a>
+<a id="__codelineno-24-16" name="__codelineno-24-16" href="#__codelineno-24-16"></a><span class="c1"># Liveness + readiness (dedicated health listener)</span>
+<a id="__codelineno-24-17" name="__codelineno-24-17" href="#__codelineno-24-17"></a>curl<span class="w"> </span>-s<span class="w"> </span>localhost:8686/healthz
+<a id="__codelineno-24-18" name="__codelineno-24-18" href="#__codelineno-24-18"></a>curl<span class="w"> </span>-s<span class="w"> </span>localhost:8686/readyz<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq
+<a id="__codelineno-24-19" name="__codelineno-24-19" href="#__codelineno-24-19"></a>
+<a id="__codelineno-24-20" name="__codelineno-24-20" href="#__codelineno-24-20"></a><span class="c1"># Prometheus metrics (scrape listener)</span>
+<a id="__codelineno-24-21" name="__codelineno-24-21" href="#__codelineno-24-21"></a>curl<span class="w"> </span>-s<span class="w"> </span>localhost:9090/metrics
+</code></pre></div>
+<hr />
+<h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
+<h3 id="instance-not-exporting-spans">Instance Not Exporting Spans<a class="headerlink" href="#instance-not-exporting-spans" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Check ClickHouse tracing is enabled:
+   <div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="k">SELECT</span><span class="w"> </span><span class="k">count</span><span class="p">()</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="k">system</span><span class="p">.</span><span class="n">opentelemetry_span_log</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">finish_date</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">today</span><span class="p">()</span>
+</code></pre></div></li>
+<li>Check click-dog can reach its local ClickHouse: logs will show connection status.</li>
+<li>Check the OTEL collector is reachable: logs will show export errors if not.</li>
+</ol>
+<h3 id="circuit-breaker-open-on-multiple-nodes">Circuit Breaker Open on Multiple Nodes<a class="headerlink" href="#circuit-breaker-open-on-multiple-nodes" title="Permanent link">&para;</a></h3>
+<p>The shared downstream (OTEL collector) is likely overwhelmed or down. Check collector health first. All instances will back off independently.</p>
+<h3 id="leader-election-failing">Leader Election Failing<a class="headerlink" href="#leader-election-failing" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Verify Keeper is reachable: <code>echo ruok | nc keeper-01 9181</code> should return <code>imok</code>.</li>
+<li>Check <code>ha.keeper.hosts</code> in config matches your Keeper ensemble.</li>
+<li>Click-dog falls back to standalone mode if Keeper is unreachable — it logs a warning but continues exporting.</li>
+</ol>
+<h3 id="high-memory-on-a-node">High Memory on a Node<a class="headerlink" href="#high-memory-on-a-node" title="Permanent link">&para;</a></h3>
+<p>The default <code>dedup_cache_size: 10000</code> uses ~160 KiB. Only increase if you see duplicate exports in your observability backend.</p>
+<hr />
+<h2 id="license-and-contributing">License and contributing<a class="headerlink" href="#license-and-contributing" title="Permanent link">&para;</a></h2>
+<p>Click-Dog is licensed under <a href="https://github.com/coltconsulting/click-dog/blob/master/LICENSE">Apache 2.0</a>. Forks and redistributions are welcome under the same terms.</p>
+<p>Contributions require a <a href="https://developercertificate.org/">Developer Certificate of Origin</a> (DCO) <code>Signed-off-by</code> trailer on every commit — <code>git commit -s</code> adds it for you. The DCO is checked in CI; see the root <a href="https://github.com/coltconsulting/click-dog/blob/master/CONTRIBUTING.md">CONTRIBUTING.md</a> for the full contributor contract.</p>
+<p>"Click-Dog" is an unregistered trademark of Colt Consulting Ltd; the Apache 2.0 grant does not cover the name (per section 6 of the license). Operational and packaging guidance is in <a href="https://github.com/coltconsulting/click-dog/blob/master/TRADEMARKS.md">TRADEMARKS.md</a>. Third-party attributions are in <a href="https://github.com/coltconsulting/click-dog/blob/master/NOTICE">NOTICE</a>.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/coltconsulting/click-dog" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tracking", "navigation.sections", "navigation.expand", "navigation.top", "search.suggest", "search.highlight", "content.code.copy", "content.code.annotate"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+  
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../javascripts/table-wbr.js"></script>
+      
+    
+  <!-- Make the "Click-Dog" wordmark in the docs header link to the homepage,
+       like the logo icon already does. We reuse the logo's href so the link is
+       correct from any depth; if JS is off the wordmark just stays plain text. -->
+  <script>
+    (function () {
+      var logo = document.querySelector('.md-header [data-md-component="logo"]');
+      var name = document.querySelector('.md-header__title .md-header__topic:not([data-md-component="header-topic"]) .md-ellipsis');
+      if (!logo || !name || name.querySelector('a')) return;
+      var a = document.createElement('a');
+      a.href = logo.getAttribute('href');
+      a.textContent = name.textContent.trim();
+      a.setAttribute('aria-label', 'Click-Dog home');
+      a.style.color = 'inherit';
+      a.style.textDecoration = 'none';
+      name.textContent = '';
+      name.appendChild(a);
+    })();
+  </script>
+
+  </body>
+</html>

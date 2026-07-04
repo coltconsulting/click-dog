@@ -1,0 +1,2475 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Source-safe query observability for ClickHouse today, with more telemetry sources planned">
+      
+      
+      
+        <link rel="canonical" href="https://click-dog.com/span-attributes/">
+      
+      
+        <link rel="prev" href="../query-analysis/">
+      
+      
+        <link rel="next" href="../observability/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Span Attributes - Click-Dog</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=IBM+Plex+Sans:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"IBM Plex Sans";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  
+
+  <!-- Brand fonts (match the landing) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <!-- Favicon -->
+  <link rel="icon" href="../assets/favicon.png">
+  <link rel="icon" sizes="32x32" href="../assets/favicon-32.png">
+  <link rel="apple-touch-icon" href="../assets/favicon.png">
+
+  <!-- Open Graph / Twitter social card.
+       Guard `page` — it is None on the generated 404 page, which also
+       extends this template. -->
+  
+  
+  
+  
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Span Attributes">
+  <meta property="og:description" content="Source-safe query observability for ClickHouse today, with more telemetry sources planned">
+  <meta property="og:image" content="https://click-dog.com/assets/social-card.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Span Attributes">
+  <meta name="twitter:description" content="Source-safe query observability for ClickHouse today, with more telemetry sources planned">
+  <meta name="twitter:image" content="https://click-dog.com/assets/social-card.png">
+
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="amber">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#span-attributes-reference" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+        <aside class="md-banner">
+          <div class="md-banner__inner md-grid md-typeset">
+            
+            
+  <strong>Public beta.</strong> Newly open source — the public API and config may still change. Click-Dog has been extensively tested and running in production for months.
+
+          </div>
+          
+        </aside>
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Click-Dog" class="md-header__button md-logo" aria-label="Click-Dog" data-md-component="logo">
+      
+  <img src="../assets/click-dog-logo-light.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Click-Dog
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Span Attributes
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="amber"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="amber"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/coltconsulting/click-dog" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    coltconsulting/click-dog
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Click-Dog" class="md-nav__button md-logo" aria-label="Click-Dog" data-md-component="logo">
+      
+  <img src="../assets/click-dog-logo-light.svg" alt="logo">
+
+    </a>
+    Click-Dog
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/coltconsulting/click-dog" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    coltconsulting/click-dog
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Main Site
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Setup
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integrations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integrations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/datadog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Datadog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/honeycomb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Honeycomb
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/generic-otlp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Generic OTLP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/splunk-hec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Splunk HEC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analysis
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Analysis
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../query-analysis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Query Analysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Span Attributes
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Span Attributes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scheduled-mode-opentelemetry-span-log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scheduled Mode — OpenTelemetry Span Log
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scheduled Mode — OpenTelemetry Span Log">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#resource-attributes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resource Attributes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#span-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Span Fields
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#span-attributes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Span Attributes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#log_comment-extraction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        log_comment Extraction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#query_log-enrichment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        query_log Enrichment
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#trace-context-propagation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trace Context Propagation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Trace Context Propagation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#client-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client Examples
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#backfill-mode-query-log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backfill Mode — Query Log
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Backfill Mode — Query Log">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#resource-attributes_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resource Attributes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#span-fields_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Span Fields
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#span-attributes_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Span Attributes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Span Attributes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#query-identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Query Identity
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#client-information" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client Information
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#query-statistics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Query Statistics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scope-information" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope Information
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#error-information" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Error Information
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#query-text-truncation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Query Text Truncation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#query-family-rollups" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Query Family Rollups
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#semantic-conventions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Semantic Conventions
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Observability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../resilience/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resilience
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../operating/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operating Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../kubernetes-clickhouse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kubernetes — ClickHouse Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../modes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operation Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../filtering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Filtering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../changelog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../support/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Support
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#scheduled-mode-opentelemetry-span-log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scheduled Mode — OpenTelemetry Span Log
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Scheduled Mode — OpenTelemetry Span Log">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#resource-attributes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resource Attributes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#span-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Span Fields
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#span-attributes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Span Attributes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#log_comment-extraction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        log_comment Extraction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#query_log-enrichment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        query_log Enrichment
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#trace-context-propagation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trace Context Propagation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Trace Context Propagation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#client-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client Examples
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#backfill-mode-query-log" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Backfill Mode — Query Log
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Backfill Mode — Query Log">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#resource-attributes_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resource Attributes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#span-fields_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Span Fields
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#span-attributes_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Span Attributes
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Span Attributes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#query-identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Query Identity
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#client-information" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Client Information
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#query-statistics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Query Statistics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scope-information" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scope Information
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#error-information" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Error Information
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#query-text-truncation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Query Text Truncation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#query-family-rollups" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Query Family Rollups
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#semantic-conventions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Semantic Conventions
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="span-attributes-reference">Span Attributes Reference<a class="headerlink" href="#span-attributes-reference" title="Permanent link">&para;</a></h1>
+<p>Click-Dog exports two types of spans depending on the operation mode. Each type carries different attributes.</p>
+<h2 id="scheduled-mode-opentelemetry-span-log">Scheduled Mode — OpenTelemetry Span Log<a class="headerlink" href="#scheduled-mode-opentelemetry-span-log" title="Permanent link">&para;</a></h2>
+<p>In scheduled mode, click-dog reads from <code>system.opentelemetry_span_log</code> and re-exports spans with their original structure preserved.</p>
+<h3 id="resource-attributes">Resource Attributes<a class="headerlink" href="#resource-attributes" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>service.name</code></td>
+<td>Configured <code>exporters.otel[].service_name</code> (default: <code>click-dog-monitor</code>)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="span-fields">Span Fields<a class="headerlink" href="#span-fields" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>trace_id</code></td>
+<td>Original ClickHouse trace ID (UUID, 16 bytes)</td>
+</tr>
+<tr>
+<td><code>span_id</code></td>
+<td>Original span ID (uint64, 8 bytes big-endian)</td>
+</tr>
+<tr>
+<td><code>parent_span_id</code></td>
+<td>Parent span ID (uint64, 0 if root span)</td>
+</tr>
+<tr>
+<td><code>name</code></td>
+<td>Operation name (e.g., <code>DB::InterpreterSelectQuery::execute()</code>)</td>
+</tr>
+<tr>
+<td><code>kind</code></td>
+<td>One of: INTERNAL, SERVER, CLIENT, PRODUCER, CONSUMER</td>
+</tr>
+<tr>
+<td><code>start_time</code></td>
+<td>Microsecond precision from ClickHouse</td>
+</tr>
+<tr>
+<td><code>end_time</code></td>
+<td>Microsecond precision from ClickHouse</td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td>Always OK</td>
+</tr>
+</tbody>
+</table>
+<h3 id="span-attributes">Span Attributes<a class="headerlink" href="#span-attributes" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>hostname</code></td>
+<td>string</td>
+<td>ClickHouse server hostname</td>
+</tr>
+<tr>
+<td><code>duration_ms</code></td>
+<td>int64</td>
+<td>Computed duration in milliseconds (added by click-dog)</td>
+</tr>
+<tr>
+<td><code>db.statement</code></td>
+<td>string</td>
+<td>SQL query text (from ClickHouse span attributes)</td>
+</tr>
+<tr>
+<td><code>client.address</code></td>
+<td>string</td>
+<td>Client IP address (from ClickHouse span attributes)</td>
+</tr>
+<tr>
+<td><code>log_comment.*</code></td>
+<td>string</td>
+<td>Extracted from <code>log_comment</code> query parameter in URI attributes (see below)</td>
+</tr>
+<tr>
+<td><code>log_comment</code></td>
+<td>string</td>
+<td>Raw <code>log_comment</code> value when it is not valid JSON</td>
+</tr>
+<tr>
+<td><em>additional</em></td>
+<td>string</td>
+<td>All other attributes from the ClickHouse <code>attribute</code> map are passed through as-is</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>attribute</code> map in ClickHouse's span log may contain various keys depending on the operation type and ClickHouse version. Click-dog forwards all of them.</p>
+<h3 id="log_comment-extraction">log_comment Extraction<a class="headerlink" href="#log_comment-extraction" title="Permanent link">&para;</a></h3>
+<p>ClickHouse clients can tag queries using the <code>log_comment</code> query setting. When this value appears URL-encoded in a span's URI attributes (<code>http.url</code>, <code>http.target</code>), click-dog extracts it automatically.</p>
+<p>If the value is JSON, each key is promoted to a span attribute prefixed with <code>log_comment.</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>log_comment={&quot;app&quot;: &quot;Dash8&quot;, &quot;query_name&quot;: &quot;what_watched&quot;}
+</code></pre></div>
+<p>Produces:</p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>log_comment.app</code></td>
+<td><code>Dash8</code></td>
+</tr>
+<tr>
+<td><code>log_comment.query_name</code></td>
+<td><code>what_watched</code></td>
+</tr>
+</tbody>
+</table>
+<p>If the value is not JSON, it is set as a single <code>log_comment</code> attribute.</p>
+<p>This is enabled by default. To disable, set <code>monitor.extract_log_comment: false</code> in the config.</p>
+<h3 id="query_log-enrichment">query_log Enrichment<a class="headerlink" href="#query_log-enrichment" title="Permanent link">&para;</a></h3>
+<p>When <code>monitor.enrich_from_query_log</code> is enabled (default: <code>true</code>), click-dog automatically enriches spans with metadata from <code>system.query_log</code>. The join key is <code>query_id</code>, which appears as a primary column in <code>query_log</code> and as the <code>clickhouse.query_id</code> attribute on <code>opentelemetry_span_log</code> spans.</p>
+<p>For each batch of exported spans, click-dog collects unique <code>clickhouse.query_id</code> values, queries <code>query_log</code> for matching rows, and adds the following attributes to each span whose query_id matches:</p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>query_log.query_id</code></td>
+<td>string</td>
+<td>ClickHouse query ID</td>
+</tr>
+<tr>
+<td><code>query_log.user</code></td>
+<td>string</td>
+<td>ClickHouse user that executed the query</td>
+</tr>
+<tr>
+<td><code>query_log.client_name</code></td>
+<td>string</td>
+<td>Client application/library name</td>
+</tr>
+<tr>
+<td><code>query_log.client_hostname</code></td>
+<td>string</td>
+<td>Client hostname</td>
+</tr>
+<tr>
+<td><code>query_log.client_address</code></td>
+<td>string</td>
+<td>Client IP address</td>
+</tr>
+<tr>
+<td><code>query_log.query_duration_ms</code></td>
+<td>int64</td>
+<td>Query duration in milliseconds</td>
+</tr>
+<tr>
+<td><code>query_log.normalized_query_hash</code></td>
+<td>string</td>
+<td>Exact ClickHouse normalized query hash for grouping query shapes (only when supported by ClickHouse)</td>
+</tr>
+<tr>
+<td><code>query_log.normalized_query</code></td>
+<td>string</td>
+<td>Truncated <code>normalizeQuery(query)</code> preview with literals removed (only when supported by ClickHouse)</td>
+</tr>
+<tr>
+<td><code>query_log.read_rows</code></td>
+<td>int64</td>
+<td>Number of rows read</td>
+</tr>
+<tr>
+<td><code>query_log.read_bytes</code></td>
+<td>int64</td>
+<td>Bytes read</td>
+</tr>
+<tr>
+<td><code>query_log.written_rows</code></td>
+<td>int64</td>
+<td>Number of rows written</td>
+</tr>
+<tr>
+<td><code>query_log.written_bytes</code></td>
+<td>int64</td>
+<td>Bytes written</td>
+</tr>
+<tr>
+<td><code>query_log.result_rows</code></td>
+<td>int64</td>
+<td>Number of result rows</td>
+</tr>
+<tr>
+<td><code>query_log.result_bytes</code></td>
+<td>int64</td>
+<td>Result size in bytes</td>
+</tr>
+<tr>
+<td><code>query_log.memory_usage</code></td>
+<td>int64</td>
+<td>Peak memory usage in bytes</td>
+</tr>
+<tr>
+<td><code>query_log.exception_code</code></td>
+<td>int</td>
+<td>ClickHouse exception code (only when non-zero)</td>
+</tr>
+<tr>
+<td><code>query_log.databases</code></td>
+<td>string[]</td>
+<td>List of databases accessed (only when non-empty)</td>
+</tr>
+<tr>
+<td><code>query_log.tables</code></td>
+<td>string[]</td>
+<td>List of tables accessed (only when non-empty)</td>
+</tr>
+<tr>
+<td><code>query_log.databases_csv</code></td>
+<td>string</td>
+<td>Legacy-compatible comma-separated list of databases accessed (only when non-empty)</td>
+</tr>
+<tr>
+<td><code>query_log.tables_csv</code></td>
+<td>string</td>
+<td>Legacy-compatible comma-separated list of tables accessed (only when non-empty)</td>
+</tr>
+</tbody>
+</table>
+<p><code>query_log.databases</code> and <code>query_log.tables</code> are emitted as OTLP string-array
+attributes in scheduled/live mode so Datadog facets fan out by each individual
+database or table. The <code>_csv</code> fields preserve the previous joined-string shape
+for dashboards or monitors that already match exact table/database combinations.</p>
+<p>Enrichment is non-fatal: if the query fails for any reason, a warning is logged (with exponential backoff) and spans are exported without enrichment. Spans without a <code>clickhouse.query_id</code> attribute are skipped entirely.</p>
+<div class="admonition warning">
+<p class="admonition-title">Enrichment scope — root query spans only</p>
+<p>Only spans carrying the <code>clickhouse.query_id</code> attribute receive <code>query_log.*</code> attributes. In practice, this is the root query span for each ClickHouse query — child spans (execution stages, merges, etc.) within the same trace are <strong>not</strong> enriched. This is by design: <code>query_id</code> identifies the query, not the trace, so attaching query-level stats to internal sub-operations would be misleading. If you need <code>query_log.*</code> attributes on all spans in a trace, use your OTEL collector to propagate them from the root span.</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Distributed queries</p>
+<p>Distributed queries generate separate <code>query_log</code> rows per shard, each with its own <code>query_id</code>. Each matching span is enriched independently; stats like <code>query_log.read_rows</code> reflect the per-shard execution, not the full distributed query total.</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Privacy</p>
+<p><code>query_log.user</code>, <code>query_log.client_address</code>, and <code>query_log.client_hostname</code> may contain identity or internal network information. <code>query_log.normalized_query</code> removes literal values but can still reveal table names, column names, and query shape. If your spans are exported to an external backend (Datadog, Honeycomb, etc.), consider filtering these attributes at your OTEL collector layer if PII, internal IPs, schema names, or query shapes should not leave your network.</p>
+</div>
+<p>To disable, set <code>monitor.enrich_from_query_log: false</code> in the config.</p>
+<hr />
+<h2 id="trace-context-propagation">Trace Context Propagation<a class="headerlink" href="#trace-context-propagation" title="Permanent link">&para;</a></h2>
+<p>ClickHouse supports <a href="https://www.w3.org/TR/trace-context/">W3C Trace Context</a> propagation over its HTTP interface. When a client sends the <code>traceparent</code> header with queries, ClickHouse continues the upstream trace ID for all internal spans it generates.</p>
+<p>Click-dog preserves trace IDs from <code>system.opentelemetry_span_log</code> as-is — so if your application propagates <code>traceparent</code>, the ClickHouse spans exported by click-dog will share the same trace ID as your application spans. <strong>Trace linking works automatically</strong> with no click-dog configuration needed.</p>
+<h3 id="setup">Setup<a class="headerlink" href="#setup" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Enable <code>opentelemetry_span_log</code> in ClickHouse (already required for click-dog)</li>
+<li>Configure your ClickHouse client to send the <code>traceparent</code> header with the current trace context</li>
+<li>No click-dog config changes needed</li>
+</ol>
+<h3 id="client-examples">Client Examples<a class="headerlink" href="#client-examples" title="Permanent link">&para;</a></h3>
+<p><strong>Python (clickhouse-connect):</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">clickhouse_connect</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">opentelemetry</span><span class="w"> </span><span class="kn">import</span> <span class="n">trace</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">tracer</span> <span class="o">=</span> <span class="n">trace</span><span class="o">.</span><span class="n">get_tracer</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="k">with</span> <span class="n">tracer</span><span class="o">.</span><span class="n">start_as_current_span</span><span class="p">(</span><span class="s2">&quot;my-query&quot;</span><span class="p">):</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    <span class="c1"># clickhouse-connect automatically propagates trace context</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    <span class="c1"># when opentelemetry-api is installed</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="n">client</span><span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;SELECT count() FROM events&quot;</span><span class="p">)</span>
+</code></pre></div></p>
+<p><strong>Go (clickhouse-go):</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1">// Pass a context with an active span — clickhouse-go propagates</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="c1">// the trace context via the native protocol.</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">span</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">tracer</span><span class="p">.</span><span class="nx">Start</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;my-query&quot;</span><span class="p">)</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="k">defer</span><span class="w"> </span><span class="nx">span</span><span class="p">.</span><span class="nx">End</span><span class="p">()</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="nx">rows</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">conn</span><span class="p">.</span><span class="nx">Query</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;SELECT count() FROM events&quot;</span><span class="p">)</span>
+</code></pre></div></p>
+<p><strong>HTTP (any language):</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>GET /?query=SELECT+1 HTTP/1.1
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>Host: clickhouse:8123
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
+</code></pre></div></p>
+<hr />
+<h2 id="backfill-mode-query-log">Backfill Mode — Query Log<a class="headerlink" href="#backfill-mode-query-log" title="Permanent link">&para;</a></h2>
+<p>In backfill mode, click-dog reads from <code>system.query_log</code> and creates new single-span traces for each query.
+Trace and span IDs are deterministic for each query-log row (<code>query_id</code>, <code>event_time</code>, and <code>query_kind</code>), so retries or reruns of the same backfill window produce the same span identity.</p>
+<h3 id="resource-attributes_1">Resource Attributes<a class="headerlink" href="#resource-attributes_1" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>service.name</code></td>
+<td>Configured <code>exporters.otel[].service_name</code> (default: <code>click-dog-monitor</code>)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="span-fields_1">Span Fields<a class="headerlink" href="#span-fields_1" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>trace_id</code></td>
+<td>Deterministically derived from the query-log row identity</td>
+</tr>
+<tr>
+<td><code>span_id</code></td>
+<td>Deterministically derived from the query-log row identity</td>
+</tr>
+<tr>
+<td><code>name</code></td>
+<td><code>clickhouse.query</code></td>
+</tr>
+<tr>
+<td><code>kind</code></td>
+<td>CLIENT</td>
+</tr>
+<tr>
+<td><code>start_time</code></td>
+<td><code>event_time - query_duration</code></td>
+</tr>
+<tr>
+<td><code>end_time</code></td>
+<td><code>event_time</code> from query log</td>
+</tr>
+</tbody>
+</table>
+<h3 id="span-attributes_1">Span Attributes<a class="headerlink" href="#span-attributes_1" title="Permanent link">&para;</a></h3>
+<h4 id="query-identity">Query Identity<a class="headerlink" href="#query-identity" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>db.system</code></td>
+<td>string</td>
+<td>Always <code>clickhouse</code></td>
+</tr>
+<tr>
+<td><code>db.statement</code></td>
+<td>string</td>
+<td>SQL query text (truncated per <code>exporters.otel[].max_query_length</code>)</td>
+</tr>
+<tr>
+<td><code>db.query_id</code></td>
+<td>string</td>
+<td>ClickHouse query ID</td>
+</tr>
+<tr>
+<td><code>db.query_kind</code></td>
+<td>string</td>
+<td>Event type: <code>QueryFinish</code> or <code>ExceptionWhileProcessing</code></td>
+</tr>
+<tr>
+<td><code>db.query_duration_ms</code></td>
+<td>int64</td>
+<td>Query duration in milliseconds</td>
+</tr>
+<tr>
+<td><code>db.normalized_query_hash</code></td>
+<td>string</td>
+<td>Exact ClickHouse normalized query hash for grouping query shapes (only when supported by ClickHouse)</td>
+</tr>
+<tr>
+<td><code>db.normalized_query</code></td>
+<td>string</td>
+<td>Truncated <code>normalizeQuery(query)</code> preview with literals removed (only when supported by ClickHouse)</td>
+</tr>
+<tr>
+<td><code>db.user</code></td>
+<td>string</td>
+<td>ClickHouse user that executed the query</td>
+</tr>
+</tbody>
+</table>
+<h4 id="client-information">Client Information<a class="headerlink" href="#client-information" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>client.address</code></td>
+<td>string</td>
+<td>Client IP address</td>
+</tr>
+<tr>
+<td><code>client.name</code></td>
+<td>string</td>
+<td>Client application name</td>
+</tr>
+<tr>
+<td><code>client.hostname</code></td>
+<td>string</td>
+<td>Client hostname</td>
+</tr>
+</tbody>
+</table>
+<h4 id="query-statistics">Query Statistics<a class="headerlink" href="#query-statistics" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>db.read_rows</code></td>
+<td>int64</td>
+<td>Number of rows read</td>
+</tr>
+<tr>
+<td><code>db.read_bytes</code></td>
+<td>int64</td>
+<td>Bytes read</td>
+</tr>
+<tr>
+<td><code>db.written_rows</code></td>
+<td>int64</td>
+<td>Number of rows written</td>
+</tr>
+<tr>
+<td><code>db.written_bytes</code></td>
+<td>int64</td>
+<td>Bytes written</td>
+</tr>
+<tr>
+<td><code>db.result_rows</code></td>
+<td>int64</td>
+<td>Number of result rows</td>
+</tr>
+<tr>
+<td><code>db.result_bytes</code></td>
+<td>int64</td>
+<td>Result size in bytes</td>
+</tr>
+<tr>
+<td><code>db.memory_usage</code></td>
+<td>int64</td>
+<td>Peak memory usage in bytes</td>
+</tr>
+</tbody>
+</table>
+<h4 id="scope-information">Scope Information<a class="headerlink" href="#scope-information" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>db.databases</code></td>
+<td>string[]</td>
+<td>List of databases accessed (if any)</td>
+</tr>
+<tr>
+<td><code>db.tables</code></td>
+<td>string[]</td>
+<td>List of tables accessed (if any)</td>
+</tr>
+</tbody>
+</table>
+<h4 id="error-information">Error Information<a class="headerlink" href="#error-information" title="Permanent link">&para;</a></h4>
+<p>Present only when the query failed (<code>ExceptionWhileProcessing</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>error</code></td>
+<td>bool</td>
+<td><code>true</code> if the query failed</td>
+</tr>
+<tr>
+<td><code>db.exception_code</code></td>
+<td>int</td>
+<td>ClickHouse exception code</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="query-text-truncation">Query Text Truncation<a class="headerlink" href="#query-text-truncation" title="Permanent link">&para;</a></h2>
+<p>SQL query text (<code>db.statement</code>) and normalized query previews (<code>db.normalized_query</code>, <code>query_log.normalized_query</code>) are bounded before export:</p>
+<ol>
+<li><strong>Fetch-time</strong> (<code>monitor.max_query_length</code>): Queries with SQL longer than this are skipped entirely during the ClickHouse query</li>
+<li><strong>Live enrichment</strong> (<code>monitor.max_query_length</code>): <code>query_log.normalized_query</code> is truncated to this length with <code>...</code> appended</li>
+<li><strong>Export-time</strong> (<code>exporters.otel[].max_query_length</code> / <code>exporters.splunk_hec[].max_query_length</code>): <code>db.statement</code>, <code>db.normalized_query</code>, and Splunk query fields are truncated to this length with <code>...</code> appended</li>
+</ol>
+<p>All default to 100,000 characters after config loading. A value of <code>0</code> or an
+omitted key is coerced to the 100,000-character default for
+<code>monitor.max_query_length</code>, <code>exporters.otel[].max_query_length</code>, and
+<code>exporters.splunk_hec[].max_query_length</code>, so <code>0</code> does not disable these limits
+at the config layer.</p>
+<p>Normalized query attributes are exact ClickHouse-native query-family primitives: <code>normalized_query_hash</code> is the grouping key, and <code>normalized_query</code> is a human-readable literal-stripped preview. They do not perform fuzzy or semantic rollups across related SQL shapes; use <code>log_comment</code> for explicit application intent.</p>
+<h2 id="query-family-rollups">Query Family Rollups<a class="headerlink" href="#query-family-rollups" title="Permanent link">&para;</a></h2>
+<p>Click-dog also has a higher-level query-family rollup path for dashboard and offline analysis code. This is not part of the hot live-export path and it does not cluster individual query executions. The reader first aggregates <code>system.query_log</code> into exact groups keyed by one <code>normalized_query_hash</code>, then performs deterministic in-memory rollups over those exact groups.</p>
+<p>Product contract:</p>
+<ul>
+<li><strong>Exact group</strong>: one <code>normalized_query_hash</code>, one bounded representative <code>normalizeQuery(query)</code> preview, and aggregate stats from matching <code>system.query_log</code> rows.</li>
+<li><strong>Rollup family</strong>: one or more exact groups that pass conservative structural similarity checks. The family preserves its member <code>normalized_query_hash</code> values, a representative normalized query preview, merge explanations, and family-level stats.</li>
+</ul>
+<p>The baseline rollup algorithm extracts statement kind, safely referenced tables, major clause structure (<code>WHERE</code>, <code>JOIN</code>, <code>GROUP BY</code>, <code>ORDER BY</code>, <code>LIMIT</code>), token sets, and token shingles from normalized SQL. It uses Jaccard-style similarity over those features with hard blockers for different statement kinds and disjoint safely extracted tables. There is no AI/LLM naming in this path. <code>log_comment</code> remains the strongest way to attach application or business intent.</p>
+<p>Family stats are derived from exact-group aggregates. Counts are summed; memory and percentile-like stats are conservatively rolled up from member groups because raw executions are not clustered. Top users, clients, and tables are combined from the exact groups' top values.</p>
+<p>Privacy: normalized query previews remove literal values, but they can still reveal table names, column names, and query shape. Rollup representative previews are bounded/truncated for display, but they should still be treated as schema-sensitive telemetry.</p>
+<p>Dashboard/export limitation: the shipped Datadog query dashboard consumes span attributes, so it currently shows exact normalized query families (<code>query_log.normalized_query_hash</code> and <code>query_log.normalized_query</code>) rather than these higher-level rollup families. A future export or storage surface can expose rollup family IDs and labels cleanly without forcing them into per-span trace export.</p>
+<hr />
+<h2 id="semantic-conventions">Semantic Conventions<a class="headerlink" href="#semantic-conventions" title="Permanent link">&para;</a></h2>
+<p>Click-Dog follows <a href="https://opentelemetry.io/docs/specs/semconv/">OpenTelemetry Semantic Conventions</a> where applicable:</p>
+<ul>
+<li><code>db.system</code> — identifies the database system</li>
+<li><code>db.statement</code> — the database statement being executed</li>
+<li><code>db.user</code> — the database user</li>
+<li><code>client.address</code> — client IP address</li>
+<li><code>service.name</code> — the logical service name</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/coltconsulting/click-dog" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tracking", "navigation.sections", "navigation.expand", "navigation.top", "search.suggest", "search.highlight", "content.code.copy", "content.code.annotate"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+  
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../javascripts/table-wbr.js"></script>
+      
+    
+  <!-- Make the "Click-Dog" wordmark in the docs header link to the homepage,
+       like the logo icon already does. We reuse the logo's href so the link is
+       correct from any depth; if JS is off the wordmark just stays plain text. -->
+  <script>
+    (function () {
+      var logo = document.querySelector('.md-header [data-md-component="logo"]');
+      var name = document.querySelector('.md-header__title .md-header__topic:not([data-md-component="header-topic"]) .md-ellipsis');
+      if (!logo || !name || name.querySelector('a')) return;
+      var a = document.createElement('a');
+      a.href = logo.getAttribute('href');
+      a.textContent = name.textContent.trim();
+      a.setAttribute('aria-label', 'Click-Dog home');
+      a.style.color = 'inherit';
+      a.style.textDecoration = 'none';
+      name.textContent = '';
+      name.appendChild(a);
+    })();
+  </script>
+
+  </body>
+</html>

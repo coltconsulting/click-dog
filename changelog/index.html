@@ -1,0 +1,1913 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Source-safe query observability for ClickHouse today, with more telemetry sources planned">
+      
+      
+      
+        <link rel="canonical" href="https://click-dog.com/changelog/">
+      
+      
+        <link rel="prev" href="../architecture/">
+      
+      
+        <link rel="next" href="../support/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Changelog - Click-Dog</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=IBM+Plex+Sans:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"IBM Plex Sans";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  
+
+  <!-- Brand fonts (match the landing) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <!-- Favicon -->
+  <link rel="icon" href="../assets/favicon.png">
+  <link rel="icon" sizes="32x32" href="../assets/favicon-32.png">
+  <link rel="apple-touch-icon" href="../assets/favicon.png">
+
+  <!-- Open Graph / Twitter social card.
+       Guard `page` — it is None on the generated 404 page, which also
+       extends this template. -->
+  
+  
+  
+  
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Changelog">
+  <meta property="og:description" content="Source-safe query observability for ClickHouse today, with more telemetry sources planned">
+  <meta property="og:image" content="https://click-dog.com/assets/social-card.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Changelog">
+  <meta name="twitter:description" content="Source-safe query observability for ClickHouse today, with more telemetry sources planned">
+  <meta name="twitter:image" content="https://click-dog.com/assets/social-card.png">
+
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="amber">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#changelog" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+        <aside class="md-banner">
+          <div class="md-banner__inner md-grid md-typeset">
+            
+            
+  <strong>Public beta.</strong> Newly open source — the public API and config may still change. Click-Dog has been extensively tested and running in production for months.
+
+          </div>
+          
+        </aside>
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Click-Dog" class="md-header__button md-logo" aria-label="Click-Dog" data-md-component="logo">
+      
+  <img src="../assets/click-dog-logo-light.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Click-Dog
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Changelog
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="amber"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="amber"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/coltconsulting/click-dog" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    coltconsulting/click-dog
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Click-Dog" class="md-nav__button md-logo" aria-label="Click-Dog" data-md-component="logo">
+      
+  <img src="../assets/click-dog-logo-light.svg" alt="logo">
+
+    </a>
+    Click-Dog
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/coltconsulting/click-dog" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    coltconsulting/click-dog
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Main Site
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Setup
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Integrations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Integrations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/datadog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Datadog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/honeycomb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Honeycomb
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/generic-otlp/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Generic OTLP
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../integrations/splunk-hec/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Splunk HEC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analysis
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Analysis
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../query-analysis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Query Analysis
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../span-attributes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Span Attributes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operate
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operate
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Observability
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../resilience/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resilience
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../operating/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operating Contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../kubernetes-clickhouse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kubernetes — ClickHouse Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../modes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operation Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../filtering/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Filtering
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#v26066-beta-2026-06-12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [v26.06.6-beta] - 2026-06-12
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[v26.06.6-beta] - 2026-06-12">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#security" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v26065-beta-2026-06-08" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [v26.06.5-beta] - 2026-06-08
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[v26.06.5-beta] - 2026-06-08">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Removed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added-earlier-in-this-development-line" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added (earlier in this development line)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed-earlier-in-this-development-line" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed (earlier in this development line)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#security_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#project" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#010-initial-release" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [0.1.0] - Initial Release
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[0.1.0] - Initial Release">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../support/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Support
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#v26066-beta-2026-06-12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [v26.06.6-beta] - 2026-06-12
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[v26.06.6-beta] - 2026-06-12">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#changed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fixed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#security" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v26065-beta-2026-06-08" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [v26.06.5-beta] - 2026-06-08
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[v26.06.5-beta] - 2026-06-08">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fixed_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Removed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#added-earlier-in-this-development-line" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added (earlier in this development line)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#changed-earlier-in-this-development-line" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed (earlier in this development line)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#security_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#project" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#010-initial-release" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        [0.1.0] - Initial Release
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="[0.1.0] - Initial Release">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#added_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="changelog">Changelog<a class="headerlink" href="#changelog" title="Permanent link">&para;</a></h1>
+<p>All notable changes to Click-Dog will be documented in this file.</p>
+<p>The format is based on <a href="https://keepachangelog.com/">Keep a Changelog</a>, and this project uses <a href="https://calver.org/">calendar versioning</a> (<code>vYY.MM.idx</code>).</p>
+<h2 id="v26066-beta-2026-06-12">[v26.06.6-beta] - 2026-06-12<a class="headerlink" href="#v26066-beta-2026-06-12" title="Permanent link">&para;</a></h2>
+<h3 id="changed">Changed<a class="headerlink" href="#changed" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Breaking (beta): the default OTEL service name is now <code>click-dog-monitor</code></strong> (was <code>clickdog-monitor</code>) — brand consistency with everything else click-dog ships. Changed at every source of the value: the config default, <code>click-dog init</code> and the wizard, <code>install.sh -service</code>, the deploy templates (Ansible / Kubernetes / Docker), the example configs, the Datadog query dashboard's <code>$service</code> template-variable default, and the docs. A deployment that relied on the <em>default</em> exports under the new name after upgrading — update dashboards/monitors filtering <code>service:clickdog-monitor</code>, or pin <code>service_name: clickdog-monitor</code> in config to keep the old name. Re-run <code>click-dog create-dashboards --on-exists overwrite</code> to pick up the new dashboard default.</li>
+<li><strong><code>create-dashboards</code> output now states what was found vs what was done</strong> — <code>[query] not found in Datadog — creating</code>, <code>up to date — the live dashboard already matches this build</code>, <code>live dashboard differs from this build (live: X → build: Y)</code> — replacing the ambiguous <code>definition source: embedded (X)</code> line. Headless (non-interactive) runs print the same findings.</li>
+<li><strong>Install lifecycle defaults aligned across install paths</strong> (issue #233) — the production <code>click-dog init</code> profile now enables the dedicated health listener, so default systemd installs serve <code>/healthz</code>/<code>/readyz</code> and <code>click-dog deploy status</code> works out of the box. The Ansible playbook picks up the production filter/metrics/health defaults, <code>Restart=on-failure</code> with start limits, and post-install <code>/healthz</code> (plus canary <code>/readyz</code>) verification. The guided update path for an existing install stages the new binary, rejects downgrades, validates the existing config before the swap, and keeps a <code>.prev</code> rollback binary.</li>
+</ul>
+<h3 id="added">Added<a class="headerlink" href="#added" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>HA leader/standby state is first-class in metrics</strong> (issue #239) — new <code>click_dog_leader</code> gauge (<code>1</code> on the active leader, <code>0</code> on standbys) and a <code>role="active|standby"</code>-labeled variant of <code>click_dog_last_success_timestamp_seconds</code>. The bare legacy series is retained for existing scrapes; new HA-aware alerts should key on <code>role:active</code>. The shipped Datadog health dashboard and docs now exclude standbys from stale-export alerting.</li>
+</ul>
+<h3 id="fixed">Fixed<a class="headerlink" href="#fixed" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Healthy HA standbys no longer read as unhealthy</strong> (issue #239) — leader-gated standby cycles are recorded under an explicit skip reason, so <code>/status</code> reports a healthy idle standby while breaker-open skips remain unhealthy.</li>
+<li><strong>Legacy <code>ha.enabled</code> key now fails with a pointed error</strong> (issue #237) — configs still carrying the removed key get <em>"ha.enabled has been removed: leader election is enabled by setting ha.keeper.hosts — delete the ha.enabled key"</em> instead of a generic unknown-field error.</li>
+<li><strong>Disabled or short-retention <code>query_log</code> no longer silently blinds the topology audit</strong> (issue #238) — on zero-reader ticks the detector probes local <code>system.query_log</code> for recent rows and WARNs once if the window is empty (log-only; gauge and debounce behavior unchanged, and a healthy fleet never pays for the probe).</li>
+<li><strong>Topology warning remediation acknowledges legitimate duplication</strong> (issue #241) — the <code>multi_instance_cluster_queries</code> remediation text, the dashboard's topology note, and the Datadog guide now say a red tile can also reflect bounded by-design duplication (Keeper-outage fail-open, long-running backfill from another host) and self-clears once resolved.</li>
+</ul>
+<h3 id="security">Security<a class="headerlink" href="#security" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Self-update fails closed on oversized archive members</strong> (issue #246) — a binary entry larger than the extraction limit is now rejected before extraction instead of being silently truncated by the limited reader.</li>
+</ul>
+<h2 id="v26065-beta-2026-06-08">[v26.06.5-beta] - 2026-06-08<a class="headerlink" href="#v26065-beta-2026-06-08" title="Permanent link">&para;</a></h2>
+<p><em>Cumulative notes for the alpha/beta line through v26.06.5-beta.</em></p>
+<h3 id="fixed_1">Fixed<a class="headerlink" href="#fixed_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Adaptive backoff now recovers after a sustained outage.</strong> <code>RecordSuccess</code> only reset the poll interval to base when the <em>previous</em> success was within <code>reset_after_s</code>, but <code>RecordFailure</code> never advanced that timestamp — so after any outage long enough to push the interval past <code>reset_after_s</code> (default 60s), the poller stayed pinned at <code>max_interval</code> (default 300s) until restart, silently degrading span freshness ~10×. A single successful poll now snaps the interval straight back to base.</li>
+<li><strong><code>query_log</code> backfill exports now get deterministic span IDs.</strong> The OTLP <code>ExportQuery</code> path derived a fresh random <code>(trace_id, span_id)</code> on every call, so a partial-failure retry or a re-run backfill window produced duplicate spans the collector couldn't dedup. IDs are now derived deterministically from the ClickHouse <code>query_id</code> (random fallback only for the rare row with no <code>query_id</code>).</li>
+<li><strong>Live-mode dedup keys off the composite <code>(trace_id, span_id)</code> pair</strong> (issue #96). Previously the LRU dedup cache keyed off <code>span_id</code> alone, but OTLP span IDs are only unique within a trace — when two unrelated traces produced spans with the same 64-bit span ID (rare but possible), the second arrival was silently dropped instead of exported. The cache is now keyed by a <code>model.SpanKey { TraceID, SpanID }</code> struct, and exporter results carry accepted <code>SpanKey</code> values so the processor marks only successfully exported composite keys as seen. Partial-failure semantics are unchanged: failed exports still leave every unexported span available for retry. Downstream collectors continue to dedup by <code>(trace_id, span_id)</code>.</li>
+</ul>
+<h3 id="changed_1">Changed<a class="headerlink" href="#changed_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Breaking: exporter results now include per-sink status</strong> (issues #126, #130) — <code>SpanExporter.ExportSpans</code> and <code>ExportQuery</code> return <code>model.ExportResult</code> plus <code>error</code>, reporting total sent/accepted counts and one <code>ExportSinkStatus</code> per backend. Custom exporter implementations must update to the new interface. <code>MultiExporter</code> still keeps the strict all-sinks-required retry policy, while metrics and warning logs now expose which sink accepted or failed each export attempt via the <code>click_dog_export_*_total{sink}</code> counters.</li>
+<li><strong>MultiExporter span fan-out policy is explicit</strong> (issue #127) — <code>NewMultiExporter</code> now accepts <code>WithMultiExporterPolicy(...)</code>. The default <code>PolicyAllRequired</code> preserves the strict all-sinks-required behavior; <code>PolicyAnySuccess</code> returns spans accepted by any successful sink while still surfacing failed sink status through <code>ExportResult</code>. <code>ExportQuery</code> remains all-required for backfill correctness. No YAML setting is added in this change; production config keeps the default strict policy.</li>
+<li><strong>MultiExporter is now strict by default</strong> — when multiple sinks are configured, <em>any</em> sink failure (partial or total) returns an error from <code>ExportSpans</code> / <code>ExportQuery</code>. The previous behavior of treating "at least one sink succeeded" as success silently hid dead backends from the circuit breaker, adaptive backoff, error metrics, and <code>/readyz</code>. With the new contract every cycle that fails a sink is marked an error (<code>click_dog_cycle_results_total{result="error"}</code>) and feeds the breaker; sinks that previously succeeded will receive the spans again on retry, and downstream collectors dedup by <code>(trace_id, span_id)</code>. See <a href="https://github.com/coltconsulting/click-dog/blob/master/docs/development/architecture.md#multiexporter-behavior">Multi-Sink Architecture</a>.</li>
+<li><strong>Processor pipeline extracted to <code>internal/processor</code></strong> (issue #133). The scheduled-mode loop, canary, heartbeat, enrichment, and backfill driver now live in a dedicated package. No behavioral change; this only affects custom forks that imported the old top-level <code>processor.go</code>.</li>
+<li><strong>OTLP span batches stream into size-bounded chunks</strong> (issue #121). <code>OTELExporter.ExportSpans</code> now estimates the proto-encoded size of each span incrementally and flushes a chunk before the next span would push it over gRPC's 4 MiB ceiling. Recursive splitting handles pathological single-span overflow. Operators no longer need to size <code>batch_size</code> defensively around span text length; the exporter never sends a request larger than the gRPC limit.</li>
+<li><strong>Datadog Application Query Analysis dashboard is now explicitly live-span-only</strong> — widget queries require <code>resource_name:query @click_dog.source:span_log</code> and the dashboard/docs call out the separate historical backfill contract (<code>clickhouse.query</code>, <code>click_dog.source=query_log</code>, <code>db.*</code>). Operators importing the updated dashboard need click-dog <code>v26.03.1</code> or newer, or any build that emits <code>click_dog.source</code>; older binaries will not match the new source filter until upgraded.</li>
+</ul>
+<h3 id="removed">Removed<a class="headerlink" href="#removed" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Breaking: the legacy top-level <code>otel:</code> config key.</strong> Use the <code>exporters.otel[]</code> list form (the documented form since <code>v25.04.0</code>). Configs still using the top-level <code>otel:</code> block now fail to load with an unknown-field error instead of being silently auto-promoted. Migrate <code>otel: { collector_address: … }</code> to <code>exporters: { otel: [ { collector_address: … } ] }</code>.</li>
+<li><strong>Breaking: the <code>click_dog_cycles_total</code> and <code>click_dog_errors_total</code> metrics.</strong> Both are derivable from <code>click_dog_cycle_results_total{result}</code> (sum across results = total cycles; <code>{result="error"}</code> = error cycles). The shipped Datadog health dashboard and its OpenMetrics rename list have been repointed; external dashboards or alerts on the old names must migrate.</li>
+<li><strong>The <code>monitor.backoff.reset_after_s</code> setting.</strong> Backoff now resets on the first successful poll (see Fixed above), so the knob no longer had any effect; it is rejected as an unknown config field. Remove it from existing configs.</li>
+</ul>
+<h3 id="added_1">Added<a class="headerlink" href="#added_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Cluster query mode now supports normalized query fields when all replicas are compatible</strong> (issue #184) — at startup click-dog probes <code>clusterAllReplicas('&lt;cluster&gt;', system.columns)</code> and enables <code>normalized_query_hash</code> / <code>normalized_query</code> only when every replica reports the column. Mixed-version, unreachable, or unconfigured-cluster setups keep the safe fallback. The verdict is logged and surfaced as the <code>normalized_query_hash support</code> line in <code>click-dog check</code> (with the <code>N of N replicas</code> count).</li>
+<li><strong>Unresolved <code>${VAR}</code> config references now warn at load.</strong> A typo'd or unset braced reference such as <code>${CLICKHOUSE_PASSWORD}</code> previously expanded silently to an empty string; click-dog now emits a warning at startup and under <code>-validate</code> naming the unset variable.</li>
+<li><strong>Per-call exporter timeout</strong> (<code>monitor.export_timeout_s</code>, default <code>30</code>s) — every backend call (live span batch, backfill query, degraded-mode canary) runs under this deadline. A stuck collector now fails into the normal retry / backoff / circuit-breaker path instead of pinning a cycle indefinitely. Multi-sink fan-out shares the same budget rather than multiplying it per sink. Set to <code>0</code> to disable the client-side deadline.</li>
+<li><strong>Per-sink export observability counters</strong> — <code>click_dog_export_attempts_total{sink}</code>, <code>click_dog_export_accepted_total{sink}</code>, and <code>click_dog_export_errors_total{sink}</code> expose which backend accepted or failed each export attempt. With a single configured exporter the label is the bare kind (<code>otel</code> or <code>splunk_hec</code>); with the multi-sink fan-out wrapper each sink is labeled <code>otel[&lt;i&gt;]:&lt;collector_address&gt;</code> / <code>splunk_hec[&lt;i&gt;]:&lt;endpoint&gt;</code> so dashboards can distinguish the individual backends. See <a href="../observability/#available-metrics">Observability — Available Metrics</a>.</li>
+<li><strong>Normalized query family attributes</strong> (issue #84) — when ClickHouse supports it, every exported span gains <code>query_log.normalized_query_hash</code> (live) or <code>db.normalized_query_hash</code> (backfill) and a literal-stripped <code>normalized_query</code> preview. The Datadog query dashboard groups by these. See <a href="../span-attributes/#query_log-enrichment">Span Attributes — query_log Enrichment</a> and <a href="../span-attributes/#query-family-rollups">Query Family Rollups</a>.</li>
+<li><strong>Datadog health-cockpit dashboard</strong> — the shipped <code>dashboards/datadog-clickdog-health.json</code> now leads with current action state (last success age, breaker, error rate, throughput, backoff) and follows with trends and lifetime counters. <code>click-dog create-dashboards</code> provisions it alongside the query dashboard.</li>
+<li><strong><code>/clusterz</code> aggregate health endpoint</strong> (phase 1 of issue #19) — the HA leader can fan out <code>/readyz</code> to a statically configured peer list and serve a single dashboard / on-call URL. Followers return <code>404 {"status":"not_leader"}</code>. See <a href="../observability/#cluster-health">Observability — Cluster Health</a>.</li>
+</ul>
+<h3 id="added-earlier-in-this-development-line">Added (earlier in this development line)<a class="headerlink" href="#added-earlier-in-this-development-line" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Multi-sink exporter architecture</strong> — <code>SpanExporter</code> interface allows multiple export backends simultaneously.</li>
+<li><strong>MultiExporter</strong> — fan-out wrapper that sends spans to all configured backends.</li>
+<li><strong>Multiple OTEL backends</strong> — configure multiple <code>exporters.otel[]</code> entries (and/or <code>exporters.splunk_hec[]</code>) for redundancy or multi-destination export.</li>
+<li><strong>Heartbeat logging</strong> — periodic summary logs replace per-cycle noise for quieter operation.</li>
+<li><strong>Degradation simulation tests</strong> — Docker-based tests that validate circuit breaker and backoff against real cluster failures.</li>
+<li><strong>Validate mode</strong> — <code>-validate</code> flag to check config without connecting.</li>
+<li>Official documentation site with user/developer split.</li>
+<li>Deployment guide (install script, Ansible, Kubernetes, systemd, containers).</li>
+<li>Integration guides for Datadog, Honeycomb, and generic OTLP.</li>
+<li>Architecture and testing guides for contributors.</li>
+</ul>
+<h3 id="changed-earlier-in-this-development-line">Changed (earlier in this development line)<a class="headerlink" href="#changed-earlier-in-this-development-line" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Renamed <code>max_queries_per_run</code> to <code>max_spans_per_cycle</code> for clarity. Config loading now rejects unknown keys, so the old name surfaces as a load-time error — rename it to <code>max_spans_per_cycle</code>.</li>
+<li><strong><code>max_spans_per_cycle</code> now caps spans, not traces</strong> (issue #91). Previously the value bounded the trace ID query and step 2 multiplied it by 100, so up to <code>max_spans_per_cycle * 100</code> spans could be fetched and exported per cycle (clamped at the internal <code>MaxSpanQueryLimit</code> of 100,000). The configured value is now the actual SQL <code>LIMIT</code> on the spans query, matching the documented behavior. <strong>Operator impact:</strong> under the same config, total exported span volume per cycle drops from up to 100x the cap to at most the cap. If you previously sized the value down to compensate, you may now need to raise it; partial traces continue across cycles via the lookback overlap + dedup cache.</li>
+<li>Degradation tests excluded from regular CI, available as separate GitHub Actions workflow.</li>
+<li>Default <code>log_level</code> is <code>info</code> (not <code>error</code> as previously documented).</li>
+</ul>
+<h3 id="security_1">Security<a class="headerlink" href="#security_1" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Log file mode tightened to <code>0640</code></strong> — previously <code>0644</code> (world-readable). A separate log-shipping agent running under a different UID must now share the click-dog service user's group; see <a href="../configuration/#log-file-permissions">Logging</a> for setup notes.</li>
+<li><strong><code>log_rotation.max_size_mb: 0</code> and <code>max_files: 0</code> are rejected</strong> — explicit <code>0</code> would silently disable rotation and produce unbounded log growth. Omit the keys to take the defaults (100 MB / 3 files).</li>
+<li><strong>Wider credential redaction in log output</strong> — sanitizer now scrubs space-separated forms (e.g. <code>password 'x'</code>, <code>AuthToken xyz</code>) emitted by some driver / wrapper errors. Defense-in-depth; no known leak today.</li>
+</ul>
+<h3 id="project">Project<a class="headerlink" href="#project" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Apache 2.0 + DCO contribution model</strong> — Click-Dog is licensed under <a href="https://github.com/coltconsulting/click-dog/blob/master/LICENSE">Apache 2.0</a> and contributions require a <a href="https://developercertificate.org/">DCO</a> <code>Signed-off-by</code> trailer on every commit (<code>git commit -s</code>). The root <a href="https://github.com/coltconsulting/click-dog/blob/master/CONTRIBUTING.md">CONTRIBUTING.md</a> is the authoritative source; <a href="https://github.com/coltconsulting/click-dog/blob/master/TRADEMARKS.md">TRADEMARKS.md</a> and <a href="https://github.com/coltconsulting/click-dog/blob/master/NOTICE">NOTICE</a> cover the trademark policy and third-party attributions respectively.</li>
+<li><strong><code>gofmt</code> drift is enforced in CI and <code>make preflight</code></strong> — <code>make fmt-check</code> runs the same sweep both gates use; format your tree before pushing or CI will bounce the PR.</li>
+<li><strong>Hybrid installer</strong> — the install path is now a thin bootstrap shell that downloads and cosign-verifies the signed release archive, then hands off to per-mode templates under <code>deploy/templates/</code> for Kubernetes and Docker output. Multi-host SSH plumbing is no longer in the shell entry point; use the Ansible playbook in <code>deploy/ansible/</code> for multi-node rollouts. See <a href="../install/">Install</a>.</li>
+</ul>
+<hr />
+<h2 id="010-initial-release">[0.1.0] - Initial Release<a class="headerlink" href="#010-initial-release" title="Permanent link">&para;</a></h2>
+<h3 id="added_2">Added<a class="headerlink" href="#added_2" title="Permanent link">&para;</a></h3>
+<ul>
+<li>OpenTelemetry span export from <code>system.opentelemetry_span_log</code></li>
+<li>Query log export from <code>system.query_log</code> (backfill mode)</li>
+<li>Scheduled mode with configurable polling interval</li>
+<li>Backfill mode for historical time ranges</li>
+<li>Two-tier duration filtering (trace-level and span-level)</li>
+<li>SQL-level filtering for efficiency</li>
+<li>LRU deduplication cache (configurable size, default 10,000)</li>
+<li>Batch processing with configurable size and delay</li>
+<li>Circuit breaker pattern for ClickHouse protection</li>
+<li>Adaptive backoff with exponential retry</li>
+<li>Connection health checks</li>
+<li>Operation whitelist with wildcard support</li>
+<li>IP whitelist</li>
+<li>Query blacklist with regex patterns</li>
+<li>Query length filtering (fetch-time skip + export-time truncation)</li>
+<li>Rate limiting (<code>max_spans_per_cycle</code>)</li>
+<li>Connection pooling with configurable limits</li>
+<li>Query timeouts</li>
+<li>ClickHouse cluster mode support (<code>cluster()</code> function)</li>
+<li>TLS support for both ClickHouse and OTEL connections</li>
+<li>Mutual TLS (mTLS) for OTEL exporter</li>
+<li>Environment variable expansion in config (<code>${VAR}</code> and <code>$VAR</code>)</li>
+<li>Configurable logging (debug/info/warn/error) to stderr or file</li>
+<li>YAML-based configuration</li>
+<li>CI/CD with GitHub Actions</li>
+<li>Automated releases with GoReleaser</li>
+<li>Comprehensive test suite with mock OTEL collector</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/coltconsulting/click-dog" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tracking", "navigation.sections", "navigation.expand", "navigation.top", "search.suggest", "search.highlight", "content.code.copy", "content.code.annotate"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+  
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../javascripts/table-wbr.js"></script>
+      
+    
+  <!-- Make the "Click-Dog" wordmark in the docs header link to the homepage,
+       like the logo icon already does. We reuse the logo's href so the link is
+       correct from any depth; if JS is off the wordmark just stays plain text. -->
+  <script>
+    (function () {
+      var logo = document.querySelector('.md-header [data-md-component="logo"]');
+      var name = document.querySelector('.md-header__title .md-header__topic:not([data-md-component="header-topic"]) .md-ellipsis');
+      if (!logo || !name || name.querySelector('a')) return;
+      var a = document.createElement('a');
+      a.href = logo.getAttribute('href');
+      a.textContent = name.textContent.trim();
+      a.setAttribute('aria-label', 'Click-Dog home');
+      a.style.color = 'inherit';
+      a.style.textDecoration = 'none';
+      name.textContent = '';
+      name.appendChild(a);
+    })();
+  </script>
+
+  </body>
+</html>
