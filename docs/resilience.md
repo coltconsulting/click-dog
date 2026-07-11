@@ -10,7 +10,7 @@ Before each polling cycle, click-dog performs a non-blocking health check on the
 [WARN] ClickHouse connection health check failed: ...
 ```
 
-Health checks use a 5-second timeout and prevent stale connections from triggering the circuit breaker. If the health check fails, the cycle is skipped and an error is recorded for backoff purposes.
+Health checks use a 5-second timeout. If the health check fails, the cycle is aborted before any span query runs and is recorded as an error cycle (`cycle_results_total{result="error"}`), which feeds both the circuit breaker and adaptive backoff — repeated health-check failures will open the breaker just like repeated query failures.
 
 ---
 
@@ -99,8 +99,8 @@ On success, if the interval has been backed off, it immediately resets to the ba
 ### Log Output
 
 ```
-[WARN] Backoff increased to 1m0s after 1 consecutive failures
-[WARN] Backoff increased to 2m0s after 2 consecutive failures
+[WARN] Backoff increased: 30s → 1m0s (failures=1, factor=2.0)
+[WARN] Backoff increased: 1m0s → 2m0s (failures=2, factor=2.0)
 [INFO] Backoff reset to base interval: 30s
 ```
 

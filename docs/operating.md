@@ -255,7 +255,7 @@ leader). Consequences:
   existing `use_cluster_queries: true` deployments.
 - With Keeper, only the leader exports; standbys record skipped cycles (their
   last-success gauge stays at zero by design). Failover promotes a standby within
-  ~one session TTL (≤10s) and re-reads `now - lookback`, so the boundary is a
+  ~one Keeper session timeout (10s with the default `session_timeout_s`) and re-reads `now - lookback`, so the boundary is a
   **deduped overlap**, never a gap.
 - **Keeper disruptions fail open.** Once an instance has joined, any later
   disruption — session expiry, reconnect backoff, a partition, or a watch-path

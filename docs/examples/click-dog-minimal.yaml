@@ -4,9 +4,9 @@
 # for the full reference. Switch to the `production` profile before any
 # real deployment.
 #
-# Intentional omissions (each is fine because LoadConfig defaults it):
-#   - clickhouse.username   → defaults to "default"
-#   - log_level             → defaults to "info"
+# Intentional omissions (each is safe to leave out):
+#   - clickhouse.username   → the ClickHouse driver connects as the "default"
+#     user when no username is set (click-dog itself applies no default)
 #   - monitor.circuit_breaker / backoff → minimal leaves resilience blocks out;
 #     switch to `production` before a real deployment to materialize them
 #   - filters.blacklist_operations → shipped commented-out below (inactive);

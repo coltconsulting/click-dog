@@ -2,7 +2,8 @@
 
 Click-Dog supports two long-running modes — **scheduled** (continuous
 monitoring) and **backfill** (one-shot historical export) — plus short-lived
-inspection modes (**validate**, **dry-run**, and `click-dog analyze`) and a
+inspection modes (**validate**, **dry-run**, and `click-dog analyze`), a
+`click-dog flush` control command for nudging a running service, and a
 separate `click-dog deploy` subcommand family for emitting Kubernetes /
 Docker manifests. Scheduled and backfill can run simultaneously as two
 separate processes.
@@ -158,11 +159,13 @@ Validates the configuration file and prints parsed settings without connecting t
 ### Output
 
 Prints parsed settings including:
+- Any deprecation / environment / validation warnings from config load
 - ClickHouse connection details
-- Configured exporters (count and types)
-- Monitor settings (durations, intervals, batching)
-- HA status
-- Filter summary
+- Configured exporters (count, plus one line per OTEL / Splunk HEC sink)
+- Monitor settings (minimum trace duration and check interval)
+- HA leader-election status (when configured)
+- Self-metrics (OTLP push) state — always shown, on or off — plus the
+  metrics, health, and webhook listeners when enabled
 
 Exits with code 0 if valid, non-zero if there are errors.
 
@@ -216,6 +219,27 @@ Use it to:
 > scheduled `--dry-run` exits after one cycle. If you need rolling
 > summaries, re-invoke periodically (cron, `watch`, etc.) or open a
 > follow-up issue.
+
+---
+
+## `click-dog flush` (immediate cycle)
+
+`click-dog flush` signals an already-running click-dog service to run an
+immediate fetch-and-export cycle instead of waiting for the next tick. The
+poll timer resets after the flush, so there is no overlap with the next
+regular cycle.
+
+```bash
+click-dog flush [-config /etc/click-dog/click-dog.yaml]
+```
+
+- **Single-node:** sends `SIGUSR1` to the local process (found via systemd)
+- **HA mode:** writes a flush request to Keeper that the current leader picks up
+- **Best-effort:** if the signal or request is lost, the next regular cycle
+  runs as normal
+
+The same trigger is available over HTTP as `POST /flush` on the admin
+listener (default `127.0.0.1:9091`) — see [Observability](observability.md).
 
 ---
 

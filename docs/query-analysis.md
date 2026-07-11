@@ -42,6 +42,11 @@ connections are opened.
 | `-format` | `table` | `table` or `json` |
 | `-output` | stdout | Write the report to a path instead of stdout |
 | `--redact-dimensions` | off | Redact user/client/host dimension values |
+| `-min-executions` | `3` | Minimum executions for exact query-family groups |
+| `-family-limit` | `200` | Exact normalized groups fetched before rollup |
+| `-span-sample-limit` | `0` | Max spans sampled for attribution and coverage (`0` = auto) |
+| `-query-preview-length` | `500` | Max normalized-query preview length in the report |
+| `-config` | auto | Path to the configuration file. When omitted, tries `/etc/click-dog/click-dog.yaml` then `./click-dog.yaml` |
 
 !!! note "Reports are operational artifacts"
     JSON reports contain normalized SQL and dimension values that can reveal

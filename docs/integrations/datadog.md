@@ -92,6 +92,15 @@ query-log enrichment and user filters work), and that `normalized_query_hash`
 is available (so the query-family widgets populate). Warn/fail lines print the
 exact fix.
 
+To confirm a span actually reaches Datadog end-to-end, send a synthetic one:
+
+```bash
+click-dog test-span -config /etc/click-dog/click-dog.yaml
+```
+
+It goes to every configured exporter and is tagged `click_dog.test=true` so it
+is easy to find (and filter out) in the backend.
+
 Then, in Datadog, navigate to **APM > Traces** and search for:
 - Service: `click-dog-monitor`
 - Look for spans with `db.statement`, `duration_ms`, and `hostname` attributes

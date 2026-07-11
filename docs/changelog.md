@@ -4,6 +4,35 @@ All notable changes to Click-Dog will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project uses [calendar versioning](https://calver.org/) (`vYY.MM.idx`).
 
+## [v26.07.2] - 2026-07-04
+
+First generally available release. Ships the same binaries as v26.07.1 (whose
+artifact publishing failed mid-release — see below); the changes here are all
+in the release pipeline itself.
+
+### Fixed
+- **Release artifacts build once, from the public repo** — a GA tag now runs GoReleaser only in the public repository (the internal repo's tag run is a CI gate only), preventing duplicate GitHub releases and duplicate `ghcr.io` image pushes.
+- **Container images link to the right repo** — published images now carry OCI `source`/`url`/`documentation` labels pinned to `github.com/coltconsulting/click-dog` and `click-dog.com`, so GHCR associates the package with the public repository.
+
+### Added
+- **Secret-scan configuration** — a gitleaks config that keeps the secret-scan gate strict while exempting the query analyzers' metric-key literals (`internal/analysis/`), the one known false-positive class.
+
+## [v26.07.1] - 2026-07-02
+
+Release publishing failed during the Docker image build (GoReleaser derived
+the project name from the wrong git remote), so no artifacts were published
+for this tag; v26.07.2 re-cut the release with the pipeline fixed. The code
+changes below shipped in v26.07.2.
+
+### Added
+- **Self-metrics state is visible at startup and in `-validate`** — startup logs one line covering the OTLP self-metrics push in both states (endpoint, connection source, interval, and host when enabled; an explicit "push disabled" pointer when not), and `-validate` output includes the same self-metrics summary. Previously a disabled push was silent, making a blank Datadog Health dashboard hard to diagnose.
+
+### Changed
+- **`clickhouse.port: 0` is now rejected** — the port must be 1–65535; an omitted port still defaults to `9000`, applied explicitly at config load.
+
+### Documentation
+- Expanded reference coverage: user-filter SQL pushdown semantics in Filtering, the `deploy` manifest generators in Operation Modes, `analyze trace` drilldown in Query Analysis, and fuller annotation of the example configs (intentional omissions, canary rationale).
+
 ## [v26.06.6-beta] - 2026-06-12
 
 ### Changed

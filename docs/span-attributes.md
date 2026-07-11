@@ -29,7 +29,8 @@ In scheduled mode, click-dog reads from `system.opentelemetry_span_log` and re-e
 
 | Attribute | Type | Description |
 |---|---|---|
-| `hostname` | string | ClickHouse server hostname |
+| `click_dog.source` | string | Always `span_log` in scheduled mode (added by click-dog; distinguishes live spans from backfill's `query_log`) |
+| `hostname` | string | ClickHouse server hostname (added by click-dog from the span log's `hostname` column) |
 | `duration_ms` | int64 | Computed duration in milliseconds (added by click-dog) |
 | `db.statement` | string | SQL query text (from ClickHouse span attributes) |
 | `client.address` | string | Client IP address (from ClickHouse span attributes) |
@@ -181,6 +182,7 @@ Trace and span IDs are deterministic for each query-log row (`query_id`, `event_
 
 | Attribute | Type | Description |
 |---|---|---|
+| `click_dog.source` | string | Always `query_log` in backfill mode (added by click-dog; distinguishes backfill spans from scheduled mode's `span_log`) |
 | `db.system` | string | Always `clickhouse` |
 | `db.statement` | string | SQL query text (truncated per `exporters.otel[].max_query_length`) |
 | `db.query_id` | string | ClickHouse query ID |

@@ -34,6 +34,7 @@ The following fields support environment variable expansion:
 - `exporters.otel[].collector_address`, `exporters.otel[].ca_cert`, `exporters.otel[].client_cert`, `exporters.otel[].client_key`
 - `exporters.splunk_hec[].endpoint`, `exporters.splunk_hec[].token`
 - `ha.keeper.auth_user`, `ha.keeper.auth_password`
+- `metrics.otlp.collector_address`, `metrics.otlp.host`, `metrics.otlp.service_name`
 - `webhook.url`
 
 The `*_file` secret-path fields (`clickhouse.password_file`, `exporters.splunk_hec[].token_file`, `ha.keeper.auth_password_file`) are also expanded, so the path can reference an environment variable — e.g. `password_file: ${SECRET_PATH}`.
@@ -408,6 +409,32 @@ See [Resilience](resilience.md) for details on circuit breaker behavior.
 
 ---
 
+## Canary
+
+Keeps a lightweight probe running while the circuit breaker is open. Instead of
+going fully dark during an incident, click-dog runs a single cheap canary query
+against ClickHouse and exports one synthetic span with the result, so operators
+retain visibility into whether long queries still exist. A successful canary
+also records a circuit-breaker success, helping the breaker recover.
+
+```yaml
+monitor:
+  canary:
+    enabled: false               # Run canary probes while the breaker is open (default: false)
+    threshold_duration_ms: 60000 # Query-duration threshold the canary probes for (default: 60000)
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `enabled` | `false` | Run the canary query and export its synthetic span during degraded (breaker-open) mode |
+| `threshold_duration_ms` | `60000` | Duration threshold (ms) the canary query probes for. `0` or omitted falls back to the default; negative values are rejected at config load |
+
+Canary spans carry `click_dog.canary="true"` and `click_dog.degraded="true"` so
+they can be filtered in your backend. See
+[Troubleshooting — canary queries](troubleshooting.md#canary-queries-in-degraded-mode).
+
+---
+
 ## Adaptive Backoff
 
 Increases polling interval when errors occur, reducing load on a struggling ClickHouse.
@@ -424,7 +451,7 @@ monitor:
 |-------|---------|-------------|
 | `enabled` | `false` | Enable adaptive backoff. Note: the [install script](install.md) enables this by default in generated configs |
 | `max_interval_s` | `300` | Maximum polling interval in seconds (5 minutes) |
-| `backoff_factor` | `2.0` | Multiply the current interval by this factor on each failure |
+| `backoff_factor` | `2.0` | Multiply the current interval by this factor on each failure. Must be greater than `1` — values in `(0, 1]` are rejected at config load |
 
 See [Resilience](resilience.md) for details on backoff behavior.
 

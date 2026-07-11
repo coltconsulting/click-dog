@@ -38,6 +38,13 @@ Run the connectivity and data-plane checks:
 click-dog check -config /etc/click-dog/click-dog.yaml
 ```
 
+To confirm an event actually reaches Splunk end-to-end, send a synthetic span
+tagged `click_dog.test=true` to every configured sink:
+
+```bash
+click-dog test-span -config /etc/click-dog/click-dog.yaml
+```
+
 Then search the configured Splunk index for events with:
 
 ```text

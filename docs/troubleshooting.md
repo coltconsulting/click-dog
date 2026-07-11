@@ -179,7 +179,7 @@ Times must be RFC3339 format with timezone:
 
 ### Backoff Increasing Unexpectedly
 
-**Symptom:** `Backoff increased to Xs after N consecutive failures` in logs.
+**Symptom:** `Backoff increased: 30s → 1m0s (failures=1, factor=2.0)` in logs.
 
 - This means ClickHouse health checks or queries are failing repeatedly
 - Check ClickHouse connectivity: `clickhouse-client -q "SELECT 1"`
