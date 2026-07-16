@@ -217,6 +217,7 @@ func TestLoadConfig_EnvVarExpansion(t *testing.T) {
 	t.Setenv("CD_TEST_HOST", "env-host.example.com")
 	t.Setenv("CD_TEST_PASS", "supersecret")
 	t.Setenv("CD_TEST_USER", "admin")
+	t.Setenv("CD_TEST_SERVICE", "env-service")
 
 	yaml := `
 clickhouse:
@@ -228,6 +229,7 @@ clickhouse:
 exporters:
   otel:
     - collector_address: localhost:4317
+      service_name: ${CD_TEST_SERVICE}
 monitor:
   enabled: true
   min_trace_duration_ms: 1000
@@ -245,6 +247,9 @@ monitor:
 	}
 	if cfg.ClickHouse.Password != "supersecret" {
 		t.Errorf("password = %q, want supersecret", cfg.ClickHouse.Password)
+	}
+	if cfg.Exporters.OTEL[0].ServiceName != "env-service" {
+		t.Errorf("service_name = %q, want env-service", cfg.Exporters.OTEL[0].ServiceName)
 	}
 }
 

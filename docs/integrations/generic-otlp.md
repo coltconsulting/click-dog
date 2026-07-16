@@ -174,7 +174,7 @@ Click-Dog exports standard OTLP trace data. Every span includes:
 - `kind`: Span kind (INTERNAL, SERVER, CLIENT, PRODUCER, CONSUMER)
 - `start_time`: Microsecond precision from ClickHouse
 - `end_time`: Microsecond precision from ClickHouse
-- `status`: OK
+- `status`: OK for live span-log spans; backfill query-log spans carry ERROR when the query failed (`exception_code != 0`)
 
 ### Span Attributes
 
@@ -192,7 +192,8 @@ exporters:
       max_query_length: 100000
 ```
 
-All fields support environment variable expansion:
+The endpoint, service name, and certificate-path string fields support
+environment variable expansion:
 ```yaml
 exporters:
   otel:

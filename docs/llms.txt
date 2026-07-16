@@ -18,7 +18,7 @@ Important notes:
 
 ## Product Docs
 
-- [Documentation](https://click-dog.com/docs/): task-oriented entry point for
+- [Documentation](https://click-dog.com/overview/): task-oriented entry point for
   public user docs.
 - [Getting Started](https://click-dog.com/getting-started/): Fast path from
   install to verification and first value.

@@ -864,9 +864,10 @@ echo ""
 echo "=== download_release_asset: asset API URL + token NOT in argv (#229) ==="
 
 # Stub curl to capture its argv. download_release_asset resolves the id from the
-# JSON, then must GET the asset API URL with Accept: application/octet-stream —
-# never the public browser /releases/download URL (which 404s on a private repo)
-# — and the token must NEVER appear in the captured argv (it rides the --config FD).
+# JSON, then must GET the asset API URL with Accept: application/octet-stream
+# rather than relying on a browser redirect URL, because only the API path
+# supports tokens. The token must NEVER appear in the captured argv (it rides
+# the --config FD).
 _sv_dl_tok="${GITHUB_TOKEN:-}"
 CURL_ARGS=(-fsSL)
 DL_ARGS=""
@@ -1209,7 +1210,9 @@ echo "=== generate_user_setup_xml (issue #181) ==="
 xml_out=$(generate_user_setup_xml "click_dog_monitor" "0badc0de")
 assert_contains "XML names the user element"   "<click_dog_monitor>"                          "$xml_out"
 assert_contains "XML sets the password hash"   "<password_sha256_hex>0badc0de</password_sha256_hex>" "$xml_out"
-assert_contains "XML uses readonly profile"    "<profile>readonly</profile>"                  "$xml_out"
+assert_contains "XML defines readonly=2 profile" "<readonly>2</readonly>"                      "$xml_out"
+assert_contains "XML uses click-dog profile"     "<profile>click_dog_readonly</profile>"       "$xml_out"
+assert_not_contains "XML does not use built-in readonly=1 profile" "<profile>readonly</profile>" "$xml_out"
 assert_contains "XML grants span log"          "GRANT SELECT ON system.opentelemetry_span_log TO click_dog_monitor" "$xml_out"
 assert_contains "XML grants query log"         "GRANT SELECT ON system.query_log TO click_dog_monitor"              "$xml_out"
 

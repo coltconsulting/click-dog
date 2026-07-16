@@ -7,7 +7,7 @@
 #       database=system, table=opentelemetry_span_log,
 #       flush_interval_milliseconds=7500).
 #   2. A read-only monitoring user with SELECT on system.opentelemetry_span_log
-#      and system.query_log ONLY (readonly profile, no broader privileges).
+#      and system.query_log ONLY (explicit readonly=2 profile, no broader privileges).
 # Set these up with deploy/kubernetes/clickhouse-operator-spanlog.yaml (or
 # clickhouse-setup-job.yaml). Full walkthrough + verification commands:
 # docs/kubernetes-clickhouse.md.

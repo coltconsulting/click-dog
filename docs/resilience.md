@@ -4,13 +4,16 @@ Click-Dog includes built-in resilience features to protect both ClickHouse and i
 
 ## Health Checks
 
-Before each polling cycle, click-dog performs a non-blocking health check on the ClickHouse connection:
+Before each polling cycle, click-dog performs a synchronous ClickHouse ping
+bounded by a 5-second timeout:
 
 ```
 [WARN] ClickHouse connection health check failed: ...
 ```
 
-Health checks use a 5-second timeout and prevent stale connections from triggering the circuit breaker. If the health check fails, the cycle is skipped and an error is recorded for backoff purposes.
+If the ping fails, the cycle stops before the span queries run. The failure is
+recorded by both adaptive backoff and the circuit breaker; after
+`failure_threshold` consecutive failures, the breaker opens normally.
 
 ---
 
@@ -99,8 +102,8 @@ On success, if the interval has been backed off, it immediately resets to the ba
 ### Log Output
 
 ```
-[WARN] Backoff increased to 1m0s after 1 consecutive failures
-[WARN] Backoff increased to 2m0s after 2 consecutive failures
+[WARN] Backoff increased: 30s → 1m0s (failures=1, factor=2.0)
+[WARN] Backoff increased: 1m0s → 2m0s (failures=2, factor=2.0)
 [INFO] Backoff reset to base interval: 30s
 ```
 
@@ -173,7 +176,7 @@ monitor:
   export_timeout_s: 30         # Fail stuck exporter calls into retry/backoff (0 disables)
 ```
 
-If an export call times out, Click-Dog treats that batch as failed and retries it in full on the next cycle through the lookback overlap. Any spans an exporter accepted before the timeout may appear again. OTEL collectors and trace backends can deduplicate by trace/span identity; Splunk HEC receives stable IDs for downstream dedup/search.
+If an export call times out, Click-Dog treats that batch as failed and retries it in full on the next cycle through the lookback overlap. Any spans an exporter accepted before the timeout may appear again. Click-Dog preserves trace/span identity so repeats are discoverable, but downstream duplicate handling is backend-specific.
 
 See [Filtering](filtering.md) for duration-based and content-based filtering options.
 

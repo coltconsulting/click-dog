@@ -704,8 +704,9 @@ func runBackfillMode(
 	// operator-invoked historical export on a chosen host, and runs no election
 	// (it returns before runScheduledMode), so there is no leadership to consult.
 	// Any overlap with what a cluster leader already exported for the window is
-	// absorbed by downstream (trace_id, span_id) dedup — consistent with the
-	// best-effort contract. The leader gate applies only to the scheduled loop.
+	// a possible repeat delivery with stable (trace_id, span_id); downstream
+	// collapse is backend-specific. The leader gate applies only to the scheduled
+	// loop.
 
 	// Fetch queries in range
 	queries, err := chReader.FetchSlowQueriesInRange(
@@ -775,10 +776,10 @@ func runScheduledMode(
 	//
 	// The LRU cache is in-memory only — it is NOT persisted across restarts.
 	// After a restart the cache is empty, so spans still inside the lookback
-	// window will be re-exported once.  This is acceptable because:
-	//   1. OTEL collectors / backends dedup by (trace_id, span_id).
-	//   2. The alternative (disk persistence) adds crash-recovery complexity
-	//      that is not justified for a best-effort monitoring sidecar.
+	// window can be re-exported once. Stable IDs make repeats identifiable, but
+	// OTLP does not guarantee that collectors or backends collapse them. Disk
+	// persistence would add crash-recovery complexity that is not justified for
+	// this best-effort monitoring sidecar.
 	seenSpans, err := lru.New[model.SpanKey, bool](cfg.Monitor.DedupCacheSize)
 	if err != nil {
 		clicklog.Fatal("Failed to create LRU cache: %v", err)
@@ -806,12 +807,14 @@ func runScheduledMode(
 
 	// Initialize leader election if HA is enabled.
 	// NOTE: During Keeper partitions, multiple instances may briefly act as
-	// leader, producing duplicate exports. This is safe because OTEL collectors
-	// and backends dedup by (trace_id, span_id). See leader.LeaderElection docs.
+	// leader, producing duplicate exports. That bounded duplicate window is the
+	// documented availability trade-off; downstream collapse is not guaranteed.
+	// See leader.LeaderElection docs.
 	//
 	// Hoisted to function scope so the cluster-mode export gate (built below)
-	// can consult it. Stays nil when HA is off, or when Keeper is unreachable at
-	// startup (standalone fallback) — both leave a cluster reader exporting.
+	// can consult it. Stays nil when HA is off, or when election construction
+	// fails (for example host resolution or initial auth); both leave a cluster
+	// reader exporting.
 	var election *leader.LeaderElection
 	if cfg.HA.Active() {
 		clicklog.Info("Keeper hosts configured — joining leader election: %v", cfg.HA.Keeper.Hosts)
@@ -852,7 +855,7 @@ func runScheduledMode(
 	// Cluster-mode export gate. In cluster mode (use_cluster_queries) the
 	// fetch/export cycle runs only on the election leader; sidecar / single
 	// readers get a nil gate and always export. election is nil for a
-	// Keeper-less cluster or when Keeper was unreachable at startup, which the
+	// Keeper-less cluster or after an election-constructor failure, which the
 	// gate treats as "always export" (Option A / standalone fallback).
 	var leaderHandle leadership
 	if election != nil {

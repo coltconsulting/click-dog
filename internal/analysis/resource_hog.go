@@ -122,6 +122,10 @@ func (a *resourceHogAnalyzer) Analyze(_ context.Context, input AnalysisInput) ([
 		if strongest == nil {
 			continue
 		}
+		metricLabel := "metrics"
+		if tripped == 1 {
+			metricLabel = "metric"
+		}
 
 		findings = append(findings, Finding{
 			ID:                    FindingID(a.Name(), "family", family.FamilyID, input.Window.Start, family.MemberHashesSorted),
@@ -129,7 +133,7 @@ func (a *resourceHogAnalyzer) Analyze(_ context.Context, input AnalysisInput) ([
 			Severity:              severity,
 			Confidence:            1.0,
 			Title:                 fmt.Sprintf("Query family %s is %.1fx peer median", strongest.metric.label, strongest.ratio),
-			Summary:               fmt.Sprintf("%s is %.1fx the peer-family median in this window (%d metrics above threshold).", strongest.metric.label, strongest.ratio, tripped),
+			Summary:               fmt.Sprintf("%s is %.1fx the peer-family median in this window (%d %s above threshold).", strongest.metric.label, strongest.ratio, tripped, metricLabel),
 			FamilyID:              family.FamilyID,
 			NormalizedQueryHashes: hashStrings(family.MemberHashesSorted),
 			RepresentativeQuery:   family.RepresentativeQuery,

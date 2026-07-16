@@ -26,16 +26,19 @@ different traces that collide on the 64-bit ID. The cache size is
 
 The cache is **not persisted across restarts** (`main.go`, the LRU setup in
 `runScheduledMode`). On startup it is empty, so any span still inside the
-lookback window is **re-exported once**. This is safe by design:
+lookback window is **re-exported once**. Duplicate delivery is part of the
+published contract:
 
-- OTEL collectors and trace backends can deduplicate by `(trace_id, span_id)`.
-  Splunk HEC exports include those same stable IDs, but duplicate collapse
-  there depends on downstream Splunk searches or index-time posture.
+- Click-Dog preserves `(trace_id, span_id)`, so repeats are identifiable.
+  OTLP does not require a collector or backend to collapse them; depending on
+  the sink, a repeat may be stored, rejected, or deduplicated by optional
+  backend-specific processing.
 - The alternative — disk persistence — adds crash-recovery complexity not
   justified for a best-effort sidecar.
 
-The same property makes HA mode safe: during a Keeper partition two instances
-may briefly both act as leader and double-export; backends dedup it away.
+The same property applies to HA: during a Keeper partition two instances may
+briefly both act as leader and double-export. That bounded duplicate window is
+an explicit availability trade-off, not a downstream deduplication guarantee.
 
 ### The lookback window defines the loss boundary
 
@@ -57,8 +60,10 @@ are not missed.
     window**, the spans that aged out of that window are **never re-queried** —
     they are permanently lost from Click-Dog's perspective (the rows usually
     still exist in ClickHouse, but Click-Dog will not go back for them in
-    scheduled mode). To recover a known outage window, run a one-shot
-    [backfill](modes.md) over the affected time range.
+    scheduled mode). A one-shot [backfill](modes.md) can recover **query
+    visibility** for a known outage window from `system.query_log`, but it
+    creates one synthetic span per query. It cannot recreate the missing native
+    trace topology, child spans, or span-log-only attributes.
 
     Practical implication: set `lookback_s` to comfortably exceed your worst
     expected restart/redeploy gap. A rolling deploy that takes 90s per node
@@ -80,7 +85,8 @@ sequentially under the default **`PolicyAllRequired`** contract
 - Because nothing from a failed batch is marked seen, the next cycle
   **re-delivers the whole batch to every sink** — including sinks that already
   succeeded. They see the same `(trace_id, span_id)` again; this is the
-  intentional at-least-once trade-off, with stable IDs for downstream dedup.
+  intentional at-least-once trade-off. Stable IDs identify the repeat, while
+  duplicate handling remains backend-specific.
 
 Per-sink visibility comes from these counters (see [Observability](observability.md)):
 
@@ -135,7 +141,7 @@ The knobs interact; tune them as a set, not in isolation.
 | `monitor.check_interval_s` | `30` | Poll period. **Must be > 0** when `monitor.enabled` (rejected at config-load otherwise — it drives the ticker). |
 | `monitor.lookback_s` | `check_interval_s + lookback_buffer_s` | How far back each cycle queries. Defines the loss boundary (above). |
 | `monitor.lookback_buffer_s` | `10` | Overlap added to the default lookback to absorb skew / long cycles. |
-| `monitor.max_spans_per_cycle` | `1000` | SQL `LIMIT` on the spans query — caps **spans**, not traces, per cycle (post-#91). |
+| `monitor.max_spans_per_cycle` | `1000` | SQL `LIMIT` on the spans query — caps **spans**, not traces, per cycle. |
 | `monitor.dedup_cache_size` | `10000` | LRU entries for dedup. ~80–100 B/entry; 10k ≈ 1 MiB (see [Monitor](configuration.md#monitor)). |
 | `monitor.export_timeout_s` | `30` | Per-call deadline applied to **every** sink in the fan-out. `0` disables the deadline. |
 
@@ -230,7 +236,7 @@ Map that monthly span volume onto each backend's billing unit:
     against a single-node run first: read `click_dog_export_accepted_total` over
     an hour and extrapolate. Click-Dog's filters (`min_trace_duration_ms`,
     operation/query filters) are your primary volume lever — apply them before
-    paying to dedup or sample downstream.
+    paying to handle duplicates or sample downstream.
 
 ## Cluster topology and sidecar placement
 
@@ -254,27 +260,31 @@ leader). Consequences:
 - A single cluster reader with **no Keeper** always exports — no regression for
   existing `use_cluster_queries: true` deployments.
 - With Keeper, only the leader exports; standbys record skipped cycles (their
-  last-success gauge stays at zero by design). Failover promotes a standby within
-  ~one session TTL (≤10s) and re-reads `now - lookback`, so the boundary is a
-  **deduped overlap**, never a gap.
+  last-success gauge stays at zero by design). Promotion normally takes about
+  the configured Keeper session timeout (10s default; valid range 5-30s), plus
+  election overhead. The new leader re-reads `now - lookback`; this is a
+  **duplicate-prone overlap** when the lookback covers the failover interval,
+  but a shorter explicit lookback can let spans age out before promotion.
 - **Keeper disruptions fail open.** Once an instance has joined, any later
   disruption — session expiry, reconnect backoff, a partition, or a watch-path
   error — drops its candidate state so it keeps **exporting** (never stalls as a
   gated standby), and the election goroutine retries until it rejoins. The
   duplicate window is therefore **bounded** and recovers to a single exporter
   when Keeper returns. Click-Dog does **not** fail closed.
-- If Keeper is unreachable **at startup** (before any join), the instance runs
-  standalone and exports; it does not auto-join later, so restart it once Keeper
-  is reachable to enter the election. With 2–3 such instances the duplicate
-  exports are absorbed by downstream `(trace_id, span_id)` dedup. The guarantee
-  under a healthy Keeper is "no **steady-state** duplication," not "never
+- At startup, resolvable Keeper addresses with no digest authentication enter
+  the asynchronous fail-open retry path and auto-join when Keeper becomes
+  reachable. A constructor error instead leaves the process standalone until
+  restart. That includes host parsing/DNS errors and can include an unavailable
+  Keeper during synchronous `AddAuth` when `auth_user` is configured. Duplicate
+  exports during either window may remain visible downstream. The
+  healthy-Keeper guarantee is "no **steady-state** duplication," not "never
   duplicates."
-- A **manual flush on a standby** (`click-dog flush`, or `SIGUSR1`) runs through
-  the same leader-gated cycle, so on a non-leader it records a **skipped cycle**
-  and exports nothing — by design, not an error. Flush from the leader, or wait
-  for failover, to force an immediate export. (Backfill — `-backfill-start/-end`
-  — is the exception: it is an explicit one-shot historical export and is **not**
-  leader-gated.)
+- **`click-dog flush` with Keeper configured is cluster-wide:** the CLI writes a
+  request to Keeper and the elected coordination leader runs it. A local
+  `SIGUSR1` or HTTP `POST /flush` instead targets that process directly. On a
+  cluster-mode non-leader the local cycle is skipped; on a sidecar it runs
+  because sidecar collection is not leader-gated. Backfill is also not
+  leader-gated.
 
 !!! danger "Pick one topology per fleet — don't run per-node sidecars with `use_cluster_queries: true`"
     `clickhouse.use_cluster_queries` wraps the spans query in

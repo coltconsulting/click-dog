@@ -13,7 +13,9 @@ Unknown keys are rejected at load time, so a typo like `check_intervla_s` fails 
 
 ## Environment Variable Expansion
 
-Sensitive fields support `${VAR}` and `$VAR` syntax. Unset variables resolve to empty strings.
+Selected string fields support `${VAR}` and `$VAR` syntax. Unset variables
+resolve to empty strings and produce a startup warning when the braced form was
+used.
 
 ```yaml
 clickhouse:
@@ -24,16 +26,18 @@ clickhouse:
 exporters:
   otel:
     - collector_address: ${OTEL_COLLECTOR_ADDRESS}
+      service_name: ${OTEL_SERVICE_NAME}
       ca_cert: ${OTEL_CA_CERT}
       client_cert: ${OTEL_CLIENT_CERT}
       client_key: ${OTEL_CLIENT_KEY}
 ```
 
 The following fields support environment variable expansion:
-- `clickhouse.host`, `clickhouse.username`, `clickhouse.password`, `clickhouse.ca_cert`
-- `exporters.otel[].collector_address`, `exporters.otel[].ca_cert`, `exporters.otel[].client_cert`, `exporters.otel[].client_key`
-- `exporters.splunk_hec[].endpoint`, `exporters.splunk_hec[].token`
-- `ha.keeper.auth_user`, `ha.keeper.auth_password`
+- `clickhouse.host`, `clickhouse.username`, `clickhouse.password`, `clickhouse.password_file`, `clickhouse.ca_cert`
+- `exporters.otel[].collector_address`, `exporters.otel[].service_name`, `exporters.otel[].ca_cert`, `exporters.otel[].client_cert`, `exporters.otel[].client_key`
+- `exporters.splunk_hec[].endpoint`, `exporters.splunk_hec[].token`, `exporters.splunk_hec[].token_file`
+- `metrics.otlp.collector_address`, `metrics.otlp.host`, `metrics.otlp.service_name`
+- `ha.keeper.auth_user`, `ha.keeper.auth_password`, `ha.keeper.auth_password_file`
 - `webhook.url`
 
 The `*_file` secret-path fields (`clickhouse.password_file`, `exporters.splunk_hec[].token_file`, `ha.keeper.auth_password_file`) are also expanded, so the path can reference an environment variable — e.g. `password_file: ${SECRET_PATH}`.
@@ -125,20 +129,24 @@ election is active, or this instance is the leader** — so:
   no election starts, so it always exports (no regression for existing
   `use_cluster_queries: true` users).
 - With **Keeper** (2–3 instances), one is elected leader and exports; the rest
-  defer. On leader loss a standby promotes within ~one Keeper session TTL (≤10s)
-  and re-reads from `now - lookback`, so the only overlap at failover is a
-  deduped re-send — never a permanent gap.
+  defer. On leader loss, promotion normally takes about the configured Keeper
+  session timeout (10s default; valid range 5-30s), plus election overhead. The
+  new leader re-reads from `now - lookback`. When that lookback covers the full
+  failover interval, the boundary is duplicate-prone overlap; a shorter explicit
+  lookback can let spans age out before promotion.
 - Leader election is driven **solely by the presence of `ha.keeper.hosts`** —
   there is no separate enable flag. Configure Keeper hosts and instances
-  coordinate (only the leader exports); omit them and each instance runs
-  standalone. This is uniform across topologies: a cluster reader or a sidecar
-  fleet both opt into coordination the same way.
+  coordinate; omit them and each instance runs standalone. Only the
+  **cluster-query data path** is leader-gated. Sidecars always export their
+  disjoint node-local scopes; Keeper leadership on a sidecar is used only for
+  coordination duties such as `/clusterz` and shared flush requests.
 
-The delivery contract is **best-effort, deduplicated downstream by
-`(trace_id, span_id)`** → effectively-once at the backend. The guarantee is
-"**no steady-state duplication**," not "never duplicates": under a healthy
-Keeper exactly one leader exports. Every Keeper disruption after an instance has
-joined **fails open** — a session loss, reconnect, partition, or watch error
+The delivery contract is **best-effort with at-least-once retries, not
+exactly-once**. Click-Dog preserves `(trace_id, span_id)`, which lets operators
+identify repeat deliveries, but OTLP does not require collectors or backends to
+collapse them. Under a healthy Keeper, cluster mode guarantees **no steady-state
+duplication**, not "never duplicates." Every Keeper disruption after an
+instance has joined **fails open** — a session loss, reconnect, partition, or watch error
 drops candidate state so the instance keeps exporting (rather than stalling as a
 gated standby), and the election goroutine retries until it rejoins. The
 resulting duplicate window is therefore **bounded** and recovers to a single
@@ -229,14 +237,14 @@ exporters:
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `collector_address` | — | OTEL collector gRPC endpoint (e.g., `localhost:4317`) |
-| `service_name` | `click-dog-monitor` | Service name that appears in traces |
+| `collector_address` | — | OTEL collector gRPC endpoint (e.g., `localhost:4317`). Supports env expansion |
+| `service_name` | `click-dog-monitor` | Service name that appears in traces. Supports env expansion |
 | `max_query_length` | `100000` | Truncate SQL query text longer than this in exported spans. `0` or omitted is coerced to the `100000` default; the limit is not disabled at config load |
 | `secure` | `false` | Enable TLS for the gRPC connection |
 | `insecure_skip_verify` | `false` | Skip TLS cert verification. **Insecure** |
-| `ca_cert` | — | CA certificate path for TLS verification |
-| `client_cert` | — | Client certificate for mutual TLS (mTLS). Must be used with `client_key` |
-| `client_key` | — | Client key for mTLS. Must be used with `client_cert` |
+| `ca_cert` | — | CA certificate path for TLS verification. Supports env expansion |
+| `client_cert` | — | Client certificate for mutual TLS (mTLS). Supports env expansion and must be used with `client_key` |
+| `client_key` | — | Client key for mTLS. Supports env expansion and must be used with `client_cert` |
 
 !!! note "Authentication"
     Click-Dog supports TLS and mTLS for the gRPC connection. It does not currently support bearer tokens, API keys, or custom gRPC metadata headers. If your OTEL collector requires header-based auth, place an authenticating proxy in front of it or use mTLS for client authentication.
@@ -264,9 +272,21 @@ exporters:
 
 Each `exporters.splunk_hec[]` entry takes a Splunk HTTP Event Collector endpoint, a token (env-expandable), and optional `index`, `source`, `source_type`, `max_query_length`, and TLS fields. Use `https://` endpoints by default because the HEC token is sent in the `Authorization` header; `http://` endpoints are accepted only when `allow_insecure_http: true` is set explicitly for local, development, or test HEC receivers. The token can also be supplied via `token_file` (a path, itself `${VAR}`-expandable, read at load with one trailing newline — CRLF or LF — trimmed) to keep it out of the process environment; `token` and `token_file` are mutually exclusive.
 
+| Splunk HEC field | Default | Description |
+|------------------|---------|-------------|
+| `endpoint` | — | HEC URL. Must use `https://` unless `allow_insecure_http` is explicitly enabled |
+| `token` | — | Inline or env-expanded HEC token. Mutually exclusive with `token_file` |
+| `token_file` | — | Env-expandable path to the HEC token file. Mutually exclusive with `token` |
+| `index` | — | Optional target index |
+| `source` | `click-dog` | Event source |
+| `source_type` | `_json` | Event source type |
+| `allow_insecure_http` | `false` | Permit an `http://` endpoint for local development or tests |
+| `insecure_skip_verify` | `false` | Skip TLS certificate verification for an `https://` endpoint. **Insecure** |
+| `max_query_length` | `100000` | Truncate SQL in HEC events |
+
 When more than one exporter is configured, spans are sent to all backends sequentially under the default **`PolicyAllRequired`** contract: any backend failure — partial or total — is treated as a real export error. The cycle is marked an error (`click_dog_cycle_results_total{result="error"}`), feeds the circuit breaker and adaptive backoff, and shows up as the most recent error on `/status` and `/readyz`. The per-sink counters (`click_dog_export_{attempts,accepted,errors}_total{sink}`) plus warning log summaries surface exactly which backend failed, so a dead sink can't silently drop out of the fan-out.
 
-A span is marked as "seen" in the dedup cache only if **every** backend accepts it. If any backend fails, no span from that batch is marked seen, and the next cycle re-delivers the full batch to *every* sink. Backends that already accepted those spans will see the same `(trace_id, span_id)` pair again — accepted by design as an at-least-once delivery trade-off. OTEL collectors and trace backends can deduplicate by that identity; Splunk HEC receives the same stable IDs, but duplicate collapse depends on downstream Splunk searches or index-time posture. The same contract applies to backfill mode: a partial multi-sink failure counts the query as `Failed` in the run summary, the process exits non-zero, and re-running the window re-delivers to every sink.
+A span is marked as "seen" in the dedup cache only if **every** backend accepts it. If any backend fails, no span from that batch is marked seen, and the next cycle re-delivers the full batch to *every* sink. Backends that already accepted those spans will see the same `(trace_id, span_id)` pair again. Stable IDs make duplicates discoverable, but whether they are collapsed, stored, or rejected is backend-specific. The same contract applies to backfill mode: a partial multi-sink failure counts the query as `Failed` in the run summary, the process exits non-zero, and re-running the window re-delivers to every sink.
 
 An alternate `PolicyAnySuccess` policy exists in code — spans are marked seen as soon as one sink accepts them, while failed sinks remain visible through `ExportResult` and the per-sink metrics. It is not exposed via YAML today; production configs use the strict default policy. The per-call deadline applied to every backend in the fan-out is `monitor.export_timeout_s` (see [Monitor](#monitor) below).
 
@@ -309,7 +329,17 @@ When `keeper.auth_user` is omitted, election znodes use Keeper world ACLs; click
 !!! note "Leader gating depends on topology"
     In **cluster** mode (`use_cluster_queries: true`), leadership gates the data path: only the leader fetches and exports; standbys skip each cycle (recorded as a skipped cycle, no export) so the cluster's spans aren't duplicated. In **sidecar** mode each instance reads its own node's disjoint local scope and always exports regardless of leader status — there leadership only drives coordination duties (flush, `/clusterz`). Either way, configuring `ha.keeper.hosts` is what activates election.
 
-If Keeper is unreachable at startup, click-dog logs a warning and falls back to standalone mode — it continues exporting normally without leader election.
+Keeper startup behavior depends on how far initialization gets:
+
+- With resolvable Keeper addresses and no digest authentication, the pinned
+  ZooKeeper client starts network dialing asynchronously. The instance fails
+  open and keeps exporting while the election loop retries, then joins
+  automatically when Keeper becomes reachable.
+- If election construction returns an error, click-dog logs
+  `Failed to join leader election` and leaves that process standalone until
+  restart. Host parsing or DNS resolution can take this path. Initial `AddAuth` is
+  synchronous, so an authentication error or an unavailable Keeper while
+  `auth_user` is configured can take it too.
 
 ---
 
@@ -342,6 +372,11 @@ monitor:
 
   # Deduplication
   dedup_cache_size: 10000      # LRU cache entries (default: 10000)
+
+  # Degraded-mode canary
+  canary:
+    enabled: false
+    threshold_duration_ms: 60000
 ```
 
 ### Duration Filtering
@@ -378,9 +413,18 @@ All duration filtering happens in SQL for maximum efficiency.
 | `batch_size` | `0` | Process spans in batches of this size. `0` = process all at once |
 | `batch_delay_ms` | `0` | Milliseconds to wait between batches. `0` = no delay |
 | `export_timeout_s` | `30` | Per-call deadline for exporter calls. Applies to live span batches, backfill query exports, and degraded-mode canary span exports so a stuck collector fails into the normal retry, backoff, and circuit-breaker path. Set to `0` to disable the client-side export deadline |
-| `dedup_cache_size` | `10000` | Size of the LRU cache for span deduplication, keyed by the composite OTLP span identity `(trace_id, span_id)`. OTLP span IDs are only unique within a trace, so dedup must include the trace ID; a span-id-only cache would silently drop sibling spans in different traces that collide on the 64-bit ID. Each entry's `SpanKey` is 24 B (16 B trace_id + 8 B span_id), but the LRU container adds doubly-linked-list pointers and a map bucket, so the practical cost is ~80–100 B per entry on 64-bit. 10,000 entries ≈ 1 MiB. Memory scales linearly. Increase for high-throughput scenarios. The cache is in-memory only; after a restart, spans still inside `lookback_s` are re-exported once and deduped downstream by collectors |
+| `dedup_cache_size` | `10000` | Size of the LRU cache for span deduplication, keyed by the composite OTLP span identity `(trace_id, span_id)`. OTLP span IDs are only unique within a trace, so dedup must include the trace ID; a span-id-only cache would silently drop sibling spans in different traces that collide on the 64-bit ID. Each entry's `SpanKey` is 24 B (16 B trace_id + 8 B span_id), but the LRU container adds doubly-linked-list pointers and a map bucket, so the practical cost is ~80–100 B per entry on 64-bit. 10,000 entries is approximately 1 MiB. Memory scales linearly. The cache is in-memory only; a restart can resend spans still inside `lookback_s`, and downstream duplicate handling is backend-specific |
 | `extract_log_comment` | `true` | Extract `log_comment` from URI attributes and promote JSON keys as span attributes prefixed with `log_comment.`. See [Span Attributes](span-attributes.md#log_comment-extraction) |
 | `enrich_from_query_log` | `true` | Enrich spans with metadata from `system.query_log` (user, client, tables, query stats) by joining on `query_id` (from the `clickhouse.query_id` span attribute). **Note:** includes `query_log.user`, `query_log.client_address`, and `query_log.client_hostname` which may contain PII/internal network info — see [privacy note](span-attributes.md#query_log-enrichment). See [Span Attributes](span-attributes.md#query_log-enrichment) |
+
+### Degraded-mode canary
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `canary.enabled` | `false` | Run and export a lightweight canary query while the circuit breaker is open or adaptive backoff is elevated |
+| `canary.threshold_duration_ms` | `60000` | Count ClickHouse spans exceeding this duration when constructing the canary span. Must not be negative |
+
+See [Troubleshooting · Canary Queries in Degraded Mode](troubleshooting.md#canary-queries-in-degraded-mode) for emitted attributes and failure behavior.
 
 ---
 
@@ -424,7 +468,7 @@ monitor:
 |-------|---------|-------------|
 | `enabled` | `false` | Enable adaptive backoff. Note: the [install script](install.md) enables this by default in generated configs |
 | `max_interval_s` | `300` | Maximum polling interval in seconds (5 minutes) |
-| `backoff_factor` | `2.0` | Multiply the current interval by this factor on each failure |
+| `backoff_factor` | `2.0` | Multiply the current interval by this factor on each failure. Must be greater than `1`; values in `(0, 1]` are rejected at config load |
 
 See [Resilience](resilience.md) for details on backoff behavior.
 
@@ -533,10 +577,10 @@ metrics:
 | `admin_listen_address` | `127.0.0.1:9091` | Admin listener (`POST /flush`) — loopback by default; non-loopback binds emit a startup `WARN` |
 | `otlp.enabled` | `false` | Push click-dog self-metrics over OTLP. Additive to the `/metrics` scrape endpoint; it may run with `metrics.enabled: false` |
 | `otlp.inherit_otel_connection` | `true` when OTLP metrics are enabled and the key is omitted | Reuse `exporters.otel[0]` connection settings for the self-metrics exporter |
-| `otlp.collector_address` | — | Standalone OTLP metrics collector address, required when `inherit_otel_connection: false` |
+| `otlp.collector_address` | — | Standalone OTLP metrics collector address, required when `inherit_otel_connection: false`. Supports env expansion |
 | `otlp.secure` | `false` | Enable TLS for a standalone OTLP metrics connection. Use inheritance when CA or mTLS settings are needed |
-| `otlp.host` | OS hostname | Host identity used on pushed self-metrics |
-| `otlp.service_name` | `exporters.otel[0].service_name`, then `click-dog-monitor` | Service name used on pushed self-metrics |
+| `otlp.host` | OS hostname | Host identity used on pushed self-metrics. Supports env expansion |
+| `otlp.service_name` | `exporters.otel[0].service_name`, then `click-dog-monitor` | Service name used on pushed self-metrics. Supports env expansion |
 | `otlp.interval_seconds` | `10` | Push interval. Must be greater than 0 when `otlp.enabled` is true |
 | `otlp.rename` | `{}` | Optional map from canonical self-metric keys to emitted OTLP metric names. Keys are validated at load time |
 

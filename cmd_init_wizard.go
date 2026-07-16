@@ -523,8 +523,8 @@ func renderWizardYAML(a wizardAnswers) string {
 	fmt.Fprintf(&b, "  host: %s\n", yamlScalar(a.CHHost))
 	fmt.Fprintf(&b, "  port: %d\n", a.CHPort)
 	b.WriteString("  database: system\n")
-	// `minimal` deliberately omits `username:` in its example (defaults to
-	// "default") to keep the example bytes-minimal. Mirror that here ONLY
+	// `minimal` deliberately omits `username:` in its example; the ClickHouse
+	// driver uses its default user when the field is empty. Mirror that here ONLY
 	// when the caller didn't override -ch-user: if they explicitly asked
 	// for a non-default username, emit it regardless of profile so the
 	// rendered config authenticates as the user they asked for. Without

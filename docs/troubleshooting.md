@@ -179,7 +179,7 @@ Times must be RFC3339 format with timezone:
 
 ### Backoff Increasing Unexpectedly
 
-**Symptom:** `Backoff increased to Xs after N consecutive failures` in logs.
+**Symptom:** `Backoff increased: 30s → 1m0s (failures=1, factor=2.0)` in logs.
 
 - This means ClickHouse health checks or queries are failing repeatedly
 - Check ClickHouse connectivity: `clickhouse-client -q "SELECT 1"`
@@ -242,9 +242,11 @@ monitor:
 **Multiple instances exporting the same spans:**
 
 - With no `ha.keeper.hosts` configured, each instance operates independently — duplicates are expected
-- With Keeper hosts configured (leader election active), ensure all instances can reach the same Keeper cluster
-- If Keeper is unreachable at startup, the instance runs in standalone mode. If connectivity is lost while running, the election goroutine attempts to reconnect and rejoin automatically
-- OTEL collectors and backends handle duplicate `(trace_id, span_id)` pairs — this is by design
+- With Keeper hosts configured (leader election requested), ensure all instances can reach the same Keeper cluster
+- With resolvable addresses and no digest auth, an unreachable Keeper at startup enters a fail-open retry loop and auto-joins when connectivity returns
+- A `Failed to join leader election` startup warning means construction failed (for example, host/DNS resolution or initial authentication); that process remains standalone until restart
+- If connectivity is lost after joining, the election goroutine fails open and attempts to reconnect and rejoin automatically
+- Duplicate exports may remain visible downstream. Stable `(trace_id, span_id)` values identify repeats, but do not guarantee collector or backend deduplication
 
 ---
 

@@ -68,6 +68,9 @@ func TestResourceHogAnalyzer_PeerMedianMath(t *testing.T) {
 	if got := f.Evidence["p95_read_rows_ratio"]; got != 8.0 {
 		t.Errorf("evidence p95_read_rows_ratio = %v, want 8", got)
 	}
+	if want := "p95 read_rows is 8.0x the peer-family median in this window (1 metric above threshold)."; f.Summary != want {
+		t.Errorf("summary = %q, want %q", f.Summary, want)
+	}
 }
 
 func TestResourceHogAnalyzer_FloorPreventsTinyRelativeOutliers(t *testing.T) {
@@ -142,6 +145,9 @@ func TestResourceHogAnalyzer_OneFindingPerFamilyMultipleMetrics(t *testing.T) {
 	// Strongest signal (duration, 30x) drives severity and title.
 	if f.Severity != SeverityCritical {
 		t.Errorf("severity = %s, want critical", f.Severity)
+	}
+	if want := "p95 duration is 30.0x the peer-family median in this window (2 metrics above threshold)."; f.Summary != want {
+		t.Errorf("summary = %q, want %q", f.Summary, want)
 	}
 }
 

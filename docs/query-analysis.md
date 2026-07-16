@@ -9,7 +9,7 @@ slow-query traces with query-log context, and ships ready-made dashboards.
 | Capability | What it does |
 |---|---|
 | **Normalized query families** | Group thousands of statements into the handful of shapes that actually matter, keyed by ClickHouse's `normalized_query_hash`. |
-| **Slow-query traces** | Every exported span enriched with `system.query_log` context and `log_comment` metadata, so a slow trace carries the query that caused it. |
+| **Slow-query traces** | Query root spans carrying `clickhouse.query_id` are enriched with `system.query_log` context and `log_comment` metadata. Internal child spans without a query ID pass through unchanged. |
 | **Ready-made dashboards** | Datadog **Application Query Analysis** dashboard out of the box. |
 | **Per-sink export health** | Know exactly which backend is healthy and which is dropping spans. |
 
@@ -42,6 +42,11 @@ connections are opened.
 | `-format` | `table` | `table` or `json` |
 | `-output` | stdout | Write the report to a path instead of stdout |
 | `--redact-dimensions` | off | Redact user/client/host dimension values |
+| `-min-executions` | `3` | Minimum executions for exact query-family groups |
+| `-family-limit` | `200` | Exact normalized groups fetched before rollup |
+| `-span-sample-limit` | `0` | Maximum spans sampled for attribution and coverage (`0` = auto) |
+| `-query-preview-length` | `500` | Maximum normalized-query preview length in the report |
+| `-config` | auto | Configuration path. When omitted, tries `/etc/click-dog/click-dog.yaml`, then `./click-dog.yaml` |
 
 !!! note "Reports are operational artifacts"
     JSON reports contain normalized SQL and dimension values that can reveal

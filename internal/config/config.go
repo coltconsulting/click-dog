@@ -575,6 +575,7 @@ func LoadConfig(path string) (*Config, error) {
 	// Expand env vars in exporters config
 	for i := range config.Exporters.OTEL {
 		config.Exporters.OTEL[i].CollectorAddress = expandEnvVars(config.Exporters.OTEL[i].CollectorAddress)
+		config.Exporters.OTEL[i].ServiceName = expandEnvVars(config.Exporters.OTEL[i].ServiceName)
 		config.Exporters.OTEL[i].CACert = expandEnvVars(config.Exporters.OTEL[i].CACert)
 		config.Exporters.OTEL[i].ClientCert = expandEnvVars(config.Exporters.OTEL[i].ClientCert)
 		config.Exporters.OTEL[i].ClientKey = expandEnvVars(config.Exporters.OTEL[i].ClientKey)

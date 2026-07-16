@@ -15,10 +15,13 @@ so this page shows the same prerequisites expressed as a
 [ClickHouseInstallation](#1-enable-span-logging-on-every-pod) for the
 [Altinity clickhouse-operator](https://github.com/Altinity/clickhouse-operator).
 
-!!! warning "click-dog will run but export nothing until these are in place"
+!!! warning "click-dog cannot export until these are in place"
     A click-dog deployment against a ClickHouse cluster with no span-log config
-    starts cleanly, passes its own health checks, and exports zero spans — the
-    source table simply does not exist. Set up the ClickHouse side first.
+    may start and briefly pass `/readyz` because that endpoint pings ClickHouse
+    rather than querying the span table. Scheduled fetches then fail, feed
+    backoff and, when enabled, the circuit breaker; readiness becomes `503`
+    once that breaker opens. `/status.last_cycle.error` records the fetch error
+    regardless. Set up the ClickHouse side first.
 
 The two example manifests referenced below live next to the collector
 manifests:
@@ -52,9 +55,9 @@ The operator renders entries under `spec.configuration.files` into
 sidecar reading its local `system.opentelemetry_span_log` covers the whole
 cluster.
 
-These settings are **identical to what `install.sh` writes** on host installs —
-keep them byte-for-byte the same; click-dog's queries assume this exact
-engine / partition / order layout:
+These settings match what `install.sh` writes on host installs and are the
+recommended bounded layout. Click-Dog requires the standard span-log table and
+columns; it does not depend on this exact MergeTree partition or sort key.
 
 ```yaml
 apiVersion: "clickhouse.altinity.com/v1"
@@ -103,9 +106,10 @@ to `1` to trace every query while you validate the pipeline, then lower it).
 ## 2. Create the read-only monitoring user
 
 Two equivalent options. Both grant `SELECT` on **only** the two tables
-click-dog reads — no database-wide or system-wide privileges — and put the user
-on the built-in `readonly` profile (`readonly=2`: cannot write, cannot change
-persistent settings). This matches the host install exactly.
+click-dog reads — no database-wide or system-wide privileges. Click-Dog also
+sets `readonly=2` on every connection, which permits bounded per-query settings
+but prohibits writes. ClickHouse's built-in `readonly` profile is
+`readonly=1`, so the declarative option defines a matching profile explicitly.
 
 ### Option A — declare the user in the operator (recommended)
 
@@ -114,11 +118,13 @@ Add to the same `ClickHouseInstallation`:
 ```yaml
 spec:
   configuration:
+    profiles:
+      click_dog_readonly/readonly: 2
     users:
       click_dog_monitor/networks/ip:
         - "::/0"                       # tighten to your pod CIDR in production
       click_dog_monitor/password_sha256_hex: REPLACE_WITH_SHA256_HEX_OF_PASSWORD
-      click_dog_monitor/profile: readonly
+      click_dog_monitor/profile: click_dog_readonly
       click_dog_monitor/quota: default
       click_dog_monitor/grants/query:
         - "GRANT SELECT ON system.opentelemetry_span_log TO click_dog_monitor"
@@ -165,8 +171,9 @@ kubectl wait --for=condition=complete job/click-dog-ch-setup -n click-dog --time
 kubectl delete secret click-dog-ch-admin -n click-dog
 ```
 
-The admin credentials are needed only to *create* the user; the monitoring user
-itself can never create users or write data.
+The admin credentials are needed only to *create* the user; its two SELECT
+grants do not permit writes, and click-dog enforces `readonly=2` on the runtime
+connection.
 
 ---
 
@@ -196,15 +203,12 @@ clickhouse:
   host: clickhouse.clickhouse.svc.cluster.local
   port: 9000
   use_cluster_queries: true
-  cluster: main          # REQUIRED — without it, cluster_queries is a no-op
+  cluster: main          # REQUIRED — validation rejects an empty value
 ```
 
-`use_cluster_queries: true` only wraps reads in
-`cluster('<name>', system.opentelemetry_span_log)` when `cluster` is **also**
-set. Leave `cluster` empty and click-dog silently queries plain
-`system.opentelemetry_span_log` through the Service — reading only whichever
-single pod the Service routes to, not all shards. The monitoring user needs
-query reachability across the cluster. See
+`use_cluster_queries: true` requires a non-empty `cluster`. Configuration
+validation fails at startup rather than falling back to a single Service-routed
+pod. The monitoring user needs query reachability across the cluster. See
 [Configuration · Cluster Mode](configuration.md#cluster-mode).
 
 ### Same-pod sidecar (node-local, for very large clusters)

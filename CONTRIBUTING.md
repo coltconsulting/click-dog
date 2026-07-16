@@ -39,9 +39,27 @@ Maintainers check sign-off during review. There is no automated DCO bot yet — 
 - `make test`, `make lint`, and `make fmt-check` must pass locally before opening the PR.
 - For substantial changes, open an issue first to align on direction.
 
+## How Your PR Lands
+
+Click-Dog is developed in a private tree and published to this repository
+release by release — `master` here only advances when a release ships.
+Contributor PRs are therefore imported rather than merged:
+
+1. Open your PR against `master` here as usual; review happens on the PR.
+2. Once accepted, a maintainer imports your commits into the development
+   tree with `git am`, preserving you as the commit author.
+3. Your change ships in the next release, and the PR is closed with a
+   comment naming the release version.
+
+Your PR will show as "closed" rather than "merged" — that is expected. Your
+authorship is preserved in the development history, and contributions are
+credited in the release's changelog entry.
+
 ## Development Workflow
 
-See [docs/development/contributing.md](docs/development/contributing.md) for build, test, and release tooling.
+Build and test with the Makefile: `make build`, `make test`, `make lint`,
+`make fmt` (see `make help` for the full list). Integration tests
+(`make integration`) need Docker.
 
 ## Documentation
 
@@ -53,9 +71,9 @@ pip install -r requirements-docs.txt
 mkdocs serve
 ```
 
-`mkdocs build --strict` runs in CI on every docs PR. For how the site is
-published — and why merging to `master` alone does not push it live — see
-[docs/development/docs-publishing.md](docs/development/docs-publishing.md).
+`mkdocs build --strict` runs in CI on every docs PR. The site publishes on
+release tags, not on merges to `master`, so docs changes go live with the
+next release.
 
 ## License
 

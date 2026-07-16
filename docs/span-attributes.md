@@ -29,13 +29,16 @@ In scheduled mode, click-dog reads from `system.opentelemetry_span_log` and re-e
 
 | Attribute | Type | Description |
 |---|---|---|
-| `hostname` | string | ClickHouse server hostname |
+| `click_dog.source` | string | Always `span_log` in scheduled mode; distinguishes live spans from backfill's `query_log` spans |
+| `hostname` | string | ClickHouse server hostname, added from the span log's `hostname` column |
 | `duration_ms` | int64 | Computed duration in milliseconds (added by click-dog) |
 | `db.statement` | string | SQL query text (from ClickHouse span attributes) |
 | `client.address` | string | Client IP address (from ClickHouse span attributes) |
 | `log_comment.*` | string | Extracted from `log_comment` query parameter in URI attributes (see below) |
 | `log_comment` | string | Raw `log_comment` value when it is not valid JSON |
 | *additional* | string | All other attributes from the ClickHouse `attribute` map are passed through as-is |
+
+Synthetic spans from `click-dog test-span` carry `click_dog.source: test-span` (and `click_dog.test: "true"`).
 
 The `attribute` map in ClickHouse's span log may contain various keys depending on the operation type and ClickHouse version. Click-dog forwards all of them.
 
@@ -111,7 +114,10 @@ To disable, set `monitor.enrich_from_query_log: false` in the config.
 
 ## Trace Context Propagation
 
-ClickHouse supports [W3C Trace Context](https://www.w3.org/TR/trace-context/) propagation over its HTTP interface. When a client sends the `traceparent` header with queries, ClickHouse continues the upstream trace ID for all internal spans it generates.
+ClickHouse supports [W3C Trace Context](https://www.w3.org/TR/trace-context/)
+propagation. HTTP clients send `traceparent`; native clients attach the
+equivalent span context through their query protocol. ClickHouse then continues
+the upstream trace ID for the internal spans it generates.
 
 Click-dog preserves trace IDs from `system.opentelemetry_span_log` as-is — so if your application propagates `traceparent`, the ClickHouse spans exported by click-dog will share the same trace ID as your application spans. **Trace linking works automatically** with no click-dog configuration needed.
 
@@ -126,23 +132,39 @@ Click-dog preserves trace IDs from `system.opentelemetry_span_log` as-is — so 
 **Python (clickhouse-connect):**
 ```python
 import clickhouse_connect
-from opentelemetry import trace
+from opentelemetry import propagate, trace
 
 tracer = trace.get_tracer(__name__)
 with tracer.start_as_current_span("my-query"):
-    # clickhouse-connect automatically propagates trace context
-    # when opentelemetry-api is installed
-    client.query("SELECT count() FROM events")
+    headers = {}
+    propagate.inject(headers)
+    client.query(
+        "SELECT count() FROM events",
+        transport_settings=headers,
+    )
 ```
+
+`clickhouse-connect` accepts per-query HTTP headers through
+`transport_settings`; installing `opentelemetry-api` alone does not make the
+driver inject them automatically. See the
+[`clickhouse-connect` client API](https://github.com/ClickHouse/clickhouse-connect/blob/main/clickhouse_connect/driver/client.py).
 
 **Go (clickhouse-go):**
 ```go
-// Pass a context with an active span — clickhouse-go propagates
-// the trace context via the native protocol.
 ctx, span := tracer.Start(ctx, "my-query")
 defer span.End()
-rows, err := conn.Query(ctx, "SELECT count() FROM events")
+
+queryCtx := clickhouse.Context(
+    ctx,
+    clickhouse.WithSpan(span.SpanContext()),
+)
+rows, err := conn.Query(queryCtx, "SELECT count() FROM events")
 ```
+
+For the native protocol, `clickhouse-go` requires the explicit `WithSpan`
+query option; an active OpenTelemetry span in the Go context is not sufficient
+by itself. See the
+[official OpenTelemetry example](https://github.com/ClickHouse/clickhouse-go/blob/main/examples/clickhouse_api/open_telemetry.go).
 
 **HTTP (any language):**
 ```
@@ -181,6 +203,7 @@ Trace and span IDs are deterministic for each query-log row (`query_id`, `event_
 
 | Attribute | Type | Description |
 |---|---|---|
+| `click_dog.source` | string | Always `query_log` in backfill mode; distinguishes backfill spans from scheduled mode's `span_log` spans |
 | `db.system` | string | Always `clickhouse` |
 | `db.statement` | string | SQL query text (truncated per `exporters.otel[].max_query_length`) |
 | `db.query_id` | string | ClickHouse query ID |
@@ -265,7 +288,10 @@ Dashboard/export limitation: the shipped Datadog query dashboard consumes span a
 
 ## Semantic Conventions
 
-Click-Dog follows [OpenTelemetry Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/) where applicable:
+Click-Dog uses OpenTelemetry attributes where applicable. The database keys
+below are the legacy semantic-convention names retained for backend and
+dashboard compatibility; current semantic conventions use names such as
+`db.system.name` and `db.query.text`.
 
 - `db.system` — identifies the database system
 - `db.statement` — the database statement being executed

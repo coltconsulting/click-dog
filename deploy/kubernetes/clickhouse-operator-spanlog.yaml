@@ -8,8 +8,8 @@
 #      (rendered into config.d/ via spec.configuration.files — cluster-wide).
 #   2. A read-only monitoring user with SELECT on exactly two system tables.
 #
-# These settings mirror deploy/install.sh exactly (engine, partition, order,
-# flush interval, the two SELECT grants, the readonly profile). Adapt the
+# These settings mirror deploy/install.sh (span-log layout, the two SELECT
+# grants, and an explicit readonly=2 profile). Adapt the
 # cluster name, shard/replica layout, and image tag to your environment.
 #
 # Full walkthrough: docs/kubernetes-clickhouse.md
@@ -30,9 +30,9 @@ spec:
     # ── 1. Span-log config — applied to every ClickHouse pod ──────────────
     # The operator renders entries under `files` into
     # /etc/clickhouse-server/config.d/ on each pod, so every replica in
-    # every shard emits spans into system.opentelemetry_span_log. Keep these
-    # values identical to deploy/install.sh; click-dog's queries assume this
-    # exact engine/partition/order layout.
+    # every shard emits spans into system.opentelemetry_span_log. These values
+    # match deploy/install.sh and are the recommended bounded layout; click-dog
+    # requires the standard table columns, not this exact sort key.
     files:
       config.d/opentelemetry.xml: |
         <clickhouse>
@@ -49,17 +49,19 @@ spec:
         </clickhouse>
 
     # ── 2. Read-only monitoring user + SELECT-only grants ─────────────────
-    # `click_dog_monitor` is the user click-dog connects as (a dedicated,
-    # namespaced name matching the host installer, so it won't collide with an
-    # operator-managed `monitoring` account). It uses the built-in
-    # `readonly` profile (readonly=2: no writes, no settings changes) and is
-    # granted SELECT on ONLY the two tables click-dog reads. No other
-    # privileges are granted.
+    # `click_dog_monitor` is the user click-dog connects as. The built-in
+    # ClickHouse `readonly` profile is readonly=1; click-dog uses readonly=2 so
+    # it can apply bounded per-query settings while remaining unable to write.
+    # Define that profile explicitly and grant SELECT on ONLY the two tables
+    # click-dog reads. No other privileges are granted.
     #
     # Replace the password hash below. Generate one with:
     #   printf '%s' 'YOUR_PASSWORD' | sha256sum | awk '{print $1}'
     # then uncomment CLICKHOUSE_PASSWORD in deploy/kubernetes/secret.yaml and
     # set it to the same plaintext so click-dog can authenticate.
+    profiles:
+      click_dog_readonly/readonly: 2
+
     users:
       # Network ACL — tighten to the click-dog namespace's pod CIDR in
       # production rather than allowing all sources.
@@ -67,8 +69,7 @@ spec:
         - "::/0"
       # SHA256 hex of the monitoring password (NOT the plaintext).
       click_dog_monitor/password_sha256_hex: REPLACE_WITH_SHA256_HEX_OF_PASSWORD
-      # Built-in read-only profile (readonly=2).
-      click_dog_monitor/profile: readonly
+      click_dog_monitor/profile: click_dog_readonly
       click_dog_monitor/quota: default
       # SELECT-only on exactly the two tables click-dog reads. Nothing else.
       click_dog_monitor/grants/query:

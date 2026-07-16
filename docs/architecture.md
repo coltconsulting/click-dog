@@ -34,8 +34,10 @@ unqualifying data never leaves ClickHouse, deduplicates against an in-memory LRU
 cache, batches, and exports. The pipeline is protected by a **circuit breaker**
 (blocks cycles after repeated failures) layered with **adaptive backoff**
 (stretches the poll interval under sustained failure), so a struggling source or
-collector can't be hammered. In HA deployments, **Keeper-backed leader election**
-gates collection so only one instance exports at a time.
+collector can't be hammered. In cluster-query HA deployments,
+**Keeper-backed leader election** gates the shared whole-cluster read so only
+one instance exports it at a time. Sidecars always export their disjoint
+node-local scopes; Keeper leadership there is coordination-only.
 
 ### Sinks
 
@@ -52,7 +54,7 @@ healthy and which is dropping spans. See the integration guides for
 | Read-only, non-invasive | `readonly=2` connections, zero DDL, bounded poll volume |
 | Low source impact | SQL-level filtering, batching, capped spans per cycle, small connection pool |
 | Self-protecting | Circuit breaker + adaptive backoff (see [Resilience](resilience.md)) |
-| Safe to run HA | Keeper-backed leader election, leader-gated collection |
+| Safe to run HA | Cluster reads are leader-gated; sidecars keep independent local read scopes |
 | Observable | `/healthz`, `/readyz`, `/status`, Prometheus `/metrics` (see [Observability](observability.md)) |
 
 ## Topology
@@ -62,9 +64,3 @@ local node) or as a **centralized deployment** that reads the whole cluster via
 `cluster()` queries. See [Kubernetes — ClickHouse Setup](kubernetes-clickhouse.md)
 for the topology trade-offs and the [Operating Contract](operating.md) for
 cluster/sidecar placement guidance.
-
-## Going deeper
-
-The exporter interface, multi-sink fan-out internals, and processor pipeline are
-documented for contributors in
-[`docs/development/architecture.md`](https://github.com/coltconsulting/click-dog/blob/master/docs/development/architecture.md).

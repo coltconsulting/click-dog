@@ -15,8 +15,8 @@ type leadership interface {
 //
 //   - clusterMode is cfg.ClickHouse.UseClusterQueries. Off → nil gate.
 //   - el is nil when no election was started: a Keeper-less cluster reader
-//     (Option A, backward-compat) or Keeper unreachable at startup (standalone
-//     fallback). Either way the lone reader always exports.
+//     (Option A, backward-compat) or an election-constructor failure
+//     (standalone fallback). Either way the reader always exports.
 //   - electionActive is el.Joined(): false during the Keeper dial/join window
 //     and during a session-expiry reconnect, so the instance exports then too
 //     (fail-open, no startup dead zone). Keying on Joined() rather than a bare
@@ -25,8 +25,8 @@ type leadership interface {
 //   - Once joined, only the leader exports; followers stand by.
 //
 // The guarantee is "no steady-state duplication," not "never duplicates":
-// partitions and the standalone fallback leave bounded duplicate windows that
-// downstream (trace_id, span_id) dedup absorbs.
+// partitions and the standalone fallback leave bounded duplicate windows.
+// Stable IDs identify repeats, but downstream collapse is backend-specific.
 func newLeaderGate(clusterMode bool, el leadership) func() bool {
 	if !clusterMode {
 		return nil

@@ -36,16 +36,18 @@
       "analyzer": "coverage",
       "severity": "warning",
       "confidence": 1,
-      "title": "Span query_id coverage is partial",
-      "summary": "61.0% of sampled spans carried clickhouse.query_id in this window.",
+      "title": "Low clickhouse.query_id span coverage",
+      "summary": "Only 61.0% of 1000 sampled spans carry clickhouse.query_id, limiting query_log enrichment and attribution analysis.",
       "window_start": "2026-06-15T23:00:00Z",
       "window_end": "2026-06-16T23:00:00Z",
       "evidence": {
         "span_sample_size": 1000,
         "spans_with_query_id": 610,
-        "query_id_ratio": 0.61
+        "query_id_ratio": 0.61,
+        "threshold": 0.8,
+        "lookback": "24h0m0s"
       },
-      "recommendation": "Check ClickHouse trace propagation and client settings before relying on query-log enrichment coverage."
+      "recommendation": "Run `click-dog check` and verify OpenTelemetry trace propagation so ClickHouse records query_id on query spans."
     },
     {
       "schema_version": "analysis.finding.v1",
@@ -53,20 +55,20 @@
       "analyzer": "resource_hog",
       "severity": "warning",
       "confidence": 1,
-      "title": "Query family reads unusually many rows",
-      "summary": "p95 read_rows is 8.4x higher than peer families in this window.",
+      "title": "Query family p95 read_rows is 8.4x peer median",
+      "summary": "p95 read_rows is 8.4x the peer-family median in this window (1 metric above threshold).",
       "family_id": "family_17",
       "normalized_query_hashes": ["123456789"],
       "representative_query": "SELECT count() FROM events WHERE timestamp >= ?",
       "window_start": "2026-06-15T23:00:00Z",
       "window_end": "2026-06-16T23:00:00Z",
       "evidence": {
+        "execution_count": 120,
         "p95_read_rows": 84000000,
         "peer_median_p95_read_rows": 10000000,
-        "ratio": 8.4,
-        "execution_count": 120
+        "p95_read_rows_ratio": 8.4
       },
-      "recommendation": "Inspect predicates, partition pruning, and table access pattern for this query family."
+      "recommendation": "Inspect predicates, partition pruning, joins, and table access pattern for this family, and check whether it is expected batch/reporting workload."
     }
   ],
   "analyzer_runs": [

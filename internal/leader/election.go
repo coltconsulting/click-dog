@@ -67,9 +67,10 @@ func jitterDuration(d time.Duration) time.Duration {
 //
 // Split-brain safety: during a Keeper partition, multiple instances may briefly
 // believe they are leader. This means duplicate span exports are possible.
-// Downstream systems (OTEL collectors, Splunk) MUST handle duplicate span_ids
-// idempotently. This is by design — availability is preferred over strict
-// single-leader guarantees during transient network events.
+// Stable span identities make repeat delivery observable, but downstream
+// systems are not assumed to collapse it. This is by design — availability is
+// preferred over strict single-leader guarantees during transient network
+// events.
 type LeaderElection struct {
 	config config.LeaderElectionConfig
 

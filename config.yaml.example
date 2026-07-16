@@ -165,7 +165,8 @@ log_level: info                     # debug, info, warn, error
 #                                     # — increase for high throughput. The cache is in-memory
 #                                     # only and not persisted across restarts; spans still
 #                                     # within lookback are re-exported once after restart and
-#                                     # deduped downstream by collectors.
+#                                     # may remain visible downstream; stable
+#                                     # trace/span IDs identify repeat delivery.
 #
 #   # Span enrichment
 #   extract_log_comment: true        # Promote JSON keys from ClickHouse `log_comment` to
@@ -234,9 +235,10 @@ log_level: info                     # debug, info, warn, error
 # znodes under base_path that auto-delete when the session closes.
 # No ClickHouse tables are ever written to.
 #
-# Election is driven solely by the presence of keeper.hosts below — set them
-# and instances coordinate so only the leader exports; omit the ha block
-# entirely and each instance runs standalone. There is no separate enable flag.
+# Election is driven solely by the presence of keeper.hosts below. In cluster
+# query mode only the leader exports; sidecars keep exporting their disjoint
+# local scopes and use election only for coordination duties. Omit the ha block
+# entirely to run without Keeper coordination. There is no separate enable flag.
 #
 # ha:
 #   keeper:
@@ -313,7 +315,8 @@ log_level: info                     # debug, info, warn, error
 #
 # Sends HTTP POST to a webhook URL on critical events.
 # Compatible with Slack incoming webhooks (sends {"text": "..."}).
-# Also works with PagerDuty, Discord, or any JSON webhook endpoint.
+# Discord requires its Slack-compatible /slack endpoint. PagerDuty Events API
+# v2 requires an adapter because its payload contract is different.
 #
 # webhook:
 #   enabled: false

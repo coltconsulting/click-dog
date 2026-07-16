@@ -2,10 +2,10 @@
 
 Click-Dog supports two long-running modes — **scheduled** (continuous
 monitoring) and **backfill** (one-shot historical export) — plus short-lived
-inspection modes (**validate**, **dry-run**, and `click-dog analyze`) and a
-separate `click-dog deploy` subcommand family for emitting Kubernetes /
-Docker manifests. Scheduled and backfill can run simultaneously as two
-separate processes.
+inspection modes (**validate**, **dry-run**, and `click-dog analyze`),
+operational commands (`test-span` and `flush`), and a separate `click-dog
+deploy` subcommand family for emitting Kubernetes / Docker manifests.
+Scheduled and backfill can run simultaneously as two separate processes.
 
 ## Scheduled Mode
 
@@ -46,7 +46,7 @@ monitor:
 - **Runs on startup** — the first poll happens immediately, then repeats at `check_interval_s`
 - **Deduplication** — an LRU cache (default 10,000 entries) keyed by the composite OTLP span identity `(trace_id, span_id)` prevents re-exporting the same spans across polling cycles. Span IDs are only unique within a trace, so the trace ID is part of the key
 - **Lookback overlap** — set `lookback_s` slightly larger than `check_interval_s` (the default adds 10 seconds) to avoid gaps between polls
-- **Graceful shutdown** — responds to SIGINT and SIGTERM. If a polling cycle is in progress, it completes before shutdown. Exporter connections are closed with a 5-second timeout. The in-memory dedup cache is not persisted — after restart, spans still within the lookback window will be re-exported once. OTEL collectors and trace backends can deduplicate by `(trace_id, span_id)`; Splunk HEC receives the same stable IDs for downstream dedup/search.
+- **Graceful shutdown** — responds to SIGINT and SIGTERM. If a polling cycle is in progress, it completes before shutdown. Exporter connections are closed with a 5-second timeout. The in-memory dedup cache is not persisted — after restart, spans still within the lookback window can be re-exported once. Stable `(trace_id, span_id)` values make repeats identifiable, but downstream duplicate handling is backend-specific.
 - **Resilience** — supports circuit breaker and adaptive backoff to protect ClickHouse during failures
 
 ### Data Source
@@ -99,6 +99,7 @@ monitor:
 - **No deduplication cache** — since it's a one-time run, there's no need for the LRU cache
 - **Rate controllable** — use `max_spans_per_cycle`, `batch_size`, and `batch_delay_ms` to control the export rate
 - **Different data source** — reads from `system.query_log` (not `system.opentelemetry_span_log`), which provides richer query metadata
+- **Different trace shape** — creates one synthetic span per query-log row. It does not recreate native ClickHouse trace topology, child spans, or span-log-only attributes
 - **Filters applied** — IP whitelist, operation whitelist, query blacklist, user filters, and query redaction use `query_log` fields. Because `query_log` entries have no operation name, a configured `whitelist_operations` rejects every backfill query. Leave `whitelist_operations` empty when using backfill
 - **Exit code reflects export outcome** — backfill exits 0 only when every (non-filtered) query exported successfully. Any export failure exits non-zero. The final log line and the `backfill_failed` webhook (if enabled) include `queries=N exported=N filtered=N failed=N` so an operator can tell whether the failure was partial (some data landed) or total (none did) and decide how to recover
 
@@ -158,11 +159,13 @@ Validates the configuration file and prints parsed settings without connecting t
 ### Output
 
 Prints parsed settings including:
+- Any deprecation, environment, and validation warnings from config load
 - ClickHouse connection details
-- Configured exporters (count and types)
-- Monitor settings (durations, intervals, batching)
-- HA status
-- Filter summary
+- Configured exporters (count, plus one line per OTEL or Splunk HEC sink)
+- Monitor settings (minimum trace duration and check interval)
+- HA leader-election status when configured
+- Self-metrics (OTLP push) state, whether enabled or disabled, plus the
+  metrics, health, and webhook listeners when enabled
 
 Exits with code 0 if valid, non-zero if there are errors.
 
@@ -236,6 +239,37 @@ artifact boundary.
 
 ---
 
+## Operational commands
+
+### Send a test span
+
+`test-span` sends one synthetic span to every configured exporter without
+querying ClickHouse. Use it to verify exporter credentials, TLS, routing, and
+backend ingestion independently of the ClickHouse data plane.
+
+```bash
+click-dog test-span -config /etc/click-dog/click-dog.yaml
+```
+
+The span is named `click-dog.test-span` and carries
+`click_dog.test=true`, making it easy to find or exclude in the backend.
+
+### Trigger an immediate cycle
+
+```bash
+click-dog flush -config /etc/click-dog/click-dog.yaml
+```
+
+Without Keeper, the command sends `SIGUSR1` to the local systemd process. With
+`ha.keeper.hosts`, it writes a shared request that the elected coordination
+leader consumes. A local `SIGUSR1` or HTTP `POST /flush` always targets that
+specific process: a cluster-mode non-leader records a skipped cycle, while a
+sidecar runs its local cycle because sidecar collection is not leader-gated.
+
+Flush is best-effort. A lost request does not change the next scheduled cycle.
+
+---
+
 ## `click-dog deploy` (manifest generators)
 
 `click-dog deploy` is a separate subcommand family that **emits** rather
@@ -272,4 +306,4 @@ See [Install](install.md) for the equivalent `install.sh kubernetes` /
 | **Deduplication** | LRU cache prevents re-exports | Not needed (one-time run) | N/A | Active during the single cycle | N/A | N/A |
 | **Resilience** | Circuit breaker + adaptive backoff | None (single run) | N/A | Single-cycle — no loop to back off | N/A | N/A |
 | **Exports anything?** | Yes | Yes | No | **No** — discards via `DryRunExporter` | No | No |
-| **Use case** | Real-time monitoring | Historical analysis, outage recovery | Config verification | Preview / smoke-test without sending | Local query triage and report artifacts | Generate manifests, check installed state |
+| **Use case** | Real-time monitoring | Historical query visibility and query-log-based outage recovery | Config verification | Preview / smoke-test without sending | Local query triage and report artifacts | Generate manifests, check installed state |

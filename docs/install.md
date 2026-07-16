@@ -136,13 +136,9 @@ and Fulcio (`fulcio.sigstore.dev`) — open egress for these or pre-verify
 on a host that can, then deploy with `-b /path/to/click-dog` (see
 [Air-gapped environments](#air-gapped-environments)).
 
-**Private repository:** while `coltconsulting/click-dog` is private, the
-auto-download path needs a GitHub token with read access — export
-`GITHUB_TOKEN` (or `GH_TOKEN`) before running `install.sh`, or skip the
-download entirely with `-b /path/to/click-dog`. Without a token the GitHub
-API version probe and the release assets both return `404`. `install.sh`
-downloads each asset through the authenticated release-asset API, so the
-token works the same way `self-update` documents.
+`coltconsulting/click-dog` and its release assets are public; no GitHub token is
+required. `GITHUB_TOKEN` or `GH_TOKEN` is optional and can be useful on hosts
+that share GitHub's unauthenticated API rate limit.
 
 ---
 
@@ -320,8 +316,8 @@ Verify the release on an internet-connected host, then transfer the **verified**
 #    documented in "Verifying releases manually" below. Don't extract or
 #    use the binary until both commands exit zero.
 
-# 2. Once verified, extract the binary from the verified archive:
-VERSION=26.04.9
+# 2. Once verified, extract the binary from the verified archive. Keep the
+#    VERSION value used by the download/verification step below:
 tar -xzf "click-dog_${VERSION}_linux_amd64.tar.gz"
 
 # 3. Transfer the verified binary into the air-gapped network and deploy:
@@ -350,7 +346,9 @@ section is for operators who download binaries directly.
 You'll need the [cosign CLI](https://docs.sigstore.dev/cosign/installation/).
 
 ```bash
-VERSION=26.04.9
+LATEST_URL="$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+  https://github.com/coltconsulting/click-dog/releases/latest)" || exit 1
+VERSION="${LATEST_URL##*/v}"
 BASE="https://github.com/coltconsulting/click-dog/releases/download/v${VERSION}"
 
 # Fetch the archive, checksums, signature, and certificate.
@@ -438,7 +436,10 @@ The generated ConfigMap enables the dedicated health listener on `:8686`, and th
 ### Updating
 
 ```bash
-./deploy/install.sh kubernetes update -v 26.03.2
+LATEST_URL="$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+  https://github.com/coltconsulting/click-dog/releases/latest)" || exit 1
+VERSION="${LATEST_URL##*/v}"
+./deploy/install.sh kubernetes update -v "$VERSION"
 kubectl apply -k click-dog-k8s/
 ```
 
@@ -462,7 +463,7 @@ If ClickHouse runs as a StatefulSet, add click-dog as a container in the pod spe
   # Pin an exact release tag in production; replace this example with the
   # current release tag and avoid :latest so rollouts and rollbacks stay
   # reproducible.
-  image: ghcr.io/coltconsulting/click-dog:26.04.6
+  image: ghcr.io/coltconsulting/click-dog:26.07.2
   args: ["-config", "/etc/click-dog/click-dog.yaml"]
   env:
     - name: CLICKHOUSE_USERNAME
@@ -513,7 +514,10 @@ cd click-dog-docker && docker compose up -d
 ### Updating
 
 ```bash
-./deploy/install.sh docker update -v 26.03.2
+LATEST_URL="$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+  https://github.com/coltconsulting/click-dog/releases/latest)" || exit 1
+VERSION="${LATEST_URL##*/v}"
+./deploy/install.sh docker update -v "$VERSION"
 cd click-dog-docker && docker compose up -d
 ```
 
@@ -542,8 +546,11 @@ After install, each node has:
 # Single node: verified binary swap + config validation
 sudo ./deploy/install.sh update
 
-# Pin a specific version
-sudo ./deploy/install.sh update -v 26.03.2
+# Resolve the current stable release once, then pin that value for the rollout
+LATEST_URL="$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+  https://github.com/coltconsulting/click-dog/releases/latest)" || exit 1
+VERSION="${LATEST_URL##*/v}"
+sudo ./deploy/install.sh update -v "$VERSION"
 
 # Backward-compatible no-op; update-time config merging was removed
 sudo ./deploy/install.sh update --no-merge
@@ -552,7 +559,7 @@ sudo ./deploy/install.sh update --no-merge
 # concurrency. For batched rollouts that finish a wave before
 # starting the next, add `serial: 10` to the play in playbook.yaml.
 ansible-playbook -i deploy/ansible/inventory.ini deploy/ansible/playbook.yaml \
-  --extra-vars "clickhouse_password=YOUR_PASSWORD click_dog_version=26.03.2" \
+  --extra-vars "clickhouse_password=YOUR_PASSWORD click_dog_version=${VERSION}" \
   -f 10
 ```
 
@@ -580,8 +587,9 @@ click-dog self-update -check -prerelease   # see the newest build incl. prerelea
 click-dog self-update -prerelease          # update onto it
 ```
 
-While the repository is private, `self-update` requires `GITHUB_TOKEN` to be set
-(a fine-grained token with read access to releases is sufficient).
+The public stable channel requires no GitHub token. If `GITHUB_TOKEN` is set,
+self-update uses it for GitHub API and asset requests, which can help on hosts
+that share an unauthenticated rate limit.
 
 ---
 
@@ -717,11 +725,17 @@ The shared downstream (OTEL collector) is likely overwhelmed or down. Check coll
 
 1. Verify Keeper is reachable: `echo ruok | nc keeper-01 9181` should return `imok`.
 2. Check `ha.keeper.hosts` in config matches your Keeper ensemble.
-3. Click-dog falls back to standalone mode if Keeper is unreachable — it logs a warning but continues exporting.
+3. Check the startup log. A resolvable unauthenticated endpoint retries and
+   auto-joins while exporting fail-open. `Failed to join leader election`
+   means construction failed (for example, DNS or initial authentication), so
+   that process remains standalone until restart. See
+   [Configuration · High Availability](configuration.md#high-availability).
 
 ### High Memory on a Node
 
-The default `dedup_cache_size: 10000` uses ~160 KiB. Only increase if you see duplicate exports in your observability backend.
+The default `dedup_cache_size: 10000` uses approximately 1 MiB on a 64-bit
+process once the key, map, and LRU-list overhead are included. Memory scales
+linearly with the configured entry count.
 
 ---
 

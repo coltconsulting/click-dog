@@ -1,6 +1,9 @@
 # Observability
 
-Click-Dog includes three opt-in features for monitoring its own health: structured logging, a Prometheus metrics endpoint, and webhook notifications. All three are disabled by default and add zero external dependencies.
+Click-Dog always logs in human-readable text. JSON formatting, metrics
+endpoints, OTLP self-metric push, and webhook notifications are opt-in. The
+scrape and webhook paths use only the standard library; OTLP self-metrics reuse
+the project's existing OTLP transport dependencies.
 
 ---
 
@@ -131,8 +134,8 @@ it from elsewhere without changing the bind:
 |--------|-------------|
 | `click_dog_circuit_breaker_state` | Circuit breaker: 0=closed, 1=half_open, 2=open |
 | `click_dog_backoff_interval_seconds` | Current polling interval in seconds |
-| `click_dog_last_success_timestamp_seconds` | Unix timestamp of last successful cycle. The bare series is retained for compatibility with existing scrapes and custom alerts; the same metric is also emitted with `role="active"` or `role="standby"` so HA dashboards can exclude leader-gated standbys from fleet stale-export calculations |
-| `click_dog_leader` | `1` when this instance is the active exporter/leader, `0` when it is a leader-gated standby |
+| `click_dog_last_success_timestamp_seconds` | Unix timestamp of last successful cycle. The bare series is retained for compatibility; the role-labeled variant distinguishes active exporters from cluster-query standbys. Sidecars are always `role="active"` because their local collection is not leader-gated |
+| `click_dog_leader` | Data-path activity gauge: `1` for an active exporter and `0` for a leader-gated cluster-query standby. Sidecars report `1` regardless of Keeper coordination leadership |
 | `click_dog_uptime_seconds` | Seconds since process start |
 | `click_dog_last_cycle_duration_seconds` | Duration of the most recent processing cycle in seconds |
 | `click_dog_last_cycle_exported_spans` | Spans exported in the most recent cycle |
@@ -144,18 +147,21 @@ it from elsewhere without changing the bind:
 | `click_dog_query_log_enrichment_match_ratio` | Last cycle's matched / requested query_id ratio; persists across failed attempts (`0` before first success) |
 | `click_dog_spans_with_query_id_ratio` | Last cycle's ratio of fetched spans carrying `clickhouse.query_id`; empty cycles preserve the previous value |
 | `click_dog_normalized_query_supported` | `1` if `system.query_log.normalized_query_hash` is available and in use, `0` otherwise. In cluster query mode, `1` means every replica passed the startup compatibility probe. Set once at startup |
+| `click_dog_topology_warning{reason}` | `1` when the topology self-audit detects duplicate whole-cluster readers for the labeled reason; `0` otherwise |
 
-> **ClickHouse data-plane health (#183):** the six gauges and three counters
+> **ClickHouse data-plane health:** the six gauges and three counters
 > (`click_dog_query_log_enrichment_{attempts,successes,failures}_total`) named
 > above are independent of "is click-dog exporting" — they answer "is
 > ClickHouse producing the data click-dog needs?" Absence of the entire
 > metric family means click-dog is down; presence with a high
 > `newest_row_age_seconds`, a non-zero failures rate, or
-> `spans_with_query_id_ratio < 1.0` means click-dog is fine but the data
-> source is degraded. All values are derived from data each cycle already
+> an unexpected drop in `spans_with_query_id_ratio` from that deployment's
+> baseline can indicate degraded trace propagation. A value below `1.0` is not
+> inherently unhealthy because ClickHouse child/internal spans commonly lack a
+> query ID. All values are derived from data each cycle already
 > fetches — no extra ClickHouse queries are issued.
 
-**Counters (data-plane health, #183):**
+**Counters (data-plane health):**
 
 | Metric | Description |
 |--------|-------------|
@@ -247,7 +253,7 @@ exposing it outside the cluster.
 
 ```json
 {
-  "version": "v26.04.6",
+  "version": "v26.07.2",
   "uptime_s": 3600,
   "clickhouse_healthy": true,
   "circuit_breaker": "closed",
@@ -348,12 +354,9 @@ Two mitigations:
 
 click-dog is primarily a sidecar that pushes spans to a collector; it
 serves no user traffic, so a 503 during recovery is purely a metadata
-signal for the orchestrator. The strict behavior was chosen so that
-readiness stays a reliable "CB is closed and a cycle succeeded" signal;
-if you prefer a more lenient contract, track [#18][phase2] for a
-follow-up `health.readyz_half_open_ready` config knob.
-
-[phase2]: https://github.com/coltconsulting/click-dog/issues/18
+signal for the orchestrator. Readiness means the live ClickHouse ping succeeded
+and the breaker is closed; it does not require a prior successful processing
+cycle. `/status.clickhouse_healthy` is the stricter cycle-evidence signal.
 
 ### Cluster health
 
@@ -362,8 +365,8 @@ out `/readyz` to every configured peer. Operators get one URL for
 monitoring dashboards, on-call paging, or load-balancer health targets
 instead of scraping every node individually.
 
-This is phase 1 of [#19][cluster19] — peers are configured statically.
-Keeper-based peer discovery is a deferred follow-up.
+Peers are configured statically in the current implementation. Keeper-based
+peer discovery is not implemented.
 
 ```yaml
 health:
@@ -473,21 +476,33 @@ cluster (e.g. through an ingress) you're publishing the internal
 topology of any unreachable peer. Restrict network access to the health
 port the same way you would for `/status`.
 
-[cluster19]: https://github.com/coltconsulting/click-dog/issues/19
+### Scrape and OTLP self-metric paths
 
-### Why Prometheus Format, Not OpenTelemetry Metrics?
+Click-Dog supports two independent, additive paths:
 
-Click-Dog is an OpenTelemetry *trace exporter* — so why does it expose its own health metrics in Prometheus format rather than pushing them as OTEL metrics?
+- **Prometheus scrape:** set `metrics.enabled: true` to serve `/metrics`. This
+  remains reachable when the OTLP collector is unavailable, preserving failure
+  domain separation. An OpenTelemetry Collector can ingest it with the
+  [Prometheus receiver](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/receiver/prometheusreceiver).
+- **OTLP push:** set `metrics.otlp.enabled: true`. By default it reuses
+  `exporters.otel[0]`; set `inherit_otel_connection: false` plus
+  `collector_address` for a separate metrics destination. This path can run
+  even when `metrics.enabled` is false.
 
-**Failure domain separation.** If the OTEL collector goes down, click-dog can't report "I can't reach the OTEL collector" via the OTEL collector. A pull-based `/metrics` endpoint stays available independently, so your monitoring of click-dog doesn't depend on the same pipeline click-dog feeds into.
+```yaml
+metrics:
+  enabled: true                 # optional independent scrape path
+  listen_address: ":9090"
+  otlp:
+    enabled: true
+    inherit_otel_connection: true
+    interval_seconds: 10
+```
 
-**It's already OTEL-compatible.** The OTEL Collector has a built-in [Prometheus receiver](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/receiver/prometheusreceiver) that scrapes `/metrics` endpoints and converts them into OTEL metrics. If you want click-dog's health data in your OTEL pipeline, point the collector's Prometheus receiver at click-dog's metrics port. Zero code changes needed.
-
-**Zero dependencies.** The metrics endpoint emits Prometheus text exposition format with `fmt.Fprintf` — no `prometheus/client_golang`, no OTEL metrics SDK. This keeps the binary small and the attack surface minimal.
-
-**Universal compatibility.** Every monitoring stack scrapes Prometheus natively: Datadog Agent, Grafana Agent, OTEL Collector, Victoria Metrics, Thanos, and plain Prometheus. By speaking this format, click-dog is compatible with everything out of the box.
-
-In short: Prometheus text format is the *lingua franca* of operational metrics. The OTEL Collector translates it into OTEL metrics for you. Separate failure domains, zero dependencies, universal compatibility.
+Using both gives the backend native OTLP metrics while retaining a locally
+scrapable diagnostic path during collector outages. See
+[Configuration · Metrics](configuration.md#metrics) for standalone connection,
+host identity, service name, and rename settings.
 
 ---
 
@@ -532,9 +547,12 @@ If the `events` list is empty or omitted, all events fire.
 This format works directly with:
 
 - **Slack** incoming webhooks
-- **Discord** webhooks (via Slack-compatible endpoint)
-- **PagerDuty** (via Events API v2 integration)
+- **Discord** webhooks through Discord's Slack-compatible `/slack` endpoint
 - Any custom endpoint that accepts JSON POST
+
+It does **not** work directly with PagerDuty Events API v2, which requires
+`routing_key`, `event_action`, and a structured `payload`. Route click-dog's
+Slack-shaped message through an adapter/automation endpoint before PagerDuty.
 
 ### Behavior
 

@@ -130,7 +130,7 @@ see [Operation Modes](docs/modes.md#click-dog-deploy-manifest-generators).
 - [Operating Contract](docs/operating.md) — beta delivery guarantees & loss windows, compatibility matrix, performance tuning, cost estimation, cluster/sidecar topology, config-at-scale
 - [Span Attributes](docs/span-attributes.md) — live spans, backfill query attributes, normalized query family
 - [Datadog](docs/integrations/datadog.md) / [Honeycomb](docs/integrations/honeycomb.md) / [Generic OTLP](docs/integrations/generic-otlp.md) — backend integration guides
-- [Architecture (contributors)](docs/development/architecture.md) — exporter interface, multi-sink fan-out, processor pipeline
+- [Architecture](docs/architecture.md) — source, processing pipeline, sinks, and deployment topology
 
 ## Building
 

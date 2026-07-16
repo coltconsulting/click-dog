@@ -92,6 +92,16 @@ query-log enrichment and user filters work), and that `normalized_query_hash`
 is available (so the query-family widgets populate). Warn/fail lines print the
 exact fix.
 
+To verify the exporter, credentials, routing, and Datadog ingestion end to end
+without querying ClickHouse, send a synthetic span:
+
+```bash
+click-dog test-span -config /etc/click-dog/click-dog.yaml
+```
+
+It is sent to every configured exporter and carries `click_dog.test=true`, so
+it is easy to find or exclude in the backend.
+
 Then, in Datadog, navigate to **APM > Traces** and search for:
 - Service: `click-dog-monitor`
 - Look for spans with `db.statement`, `duration_ms`, and `hostname` attributes
@@ -396,7 +406,7 @@ instances:
       - click_dog_last_cycle_exported_spans: last_cycle.exported_spans
       - click_dog_last_cycle_filtered_spans: last_cycle.filtered_spans
       - click_dog_last_cycle_duplicate_spans: last_cycle.duplicate_spans
-      # ClickHouse data-plane health (#183) — span_log freshness, enrichment
+      # ClickHouse data-plane health — span_log freshness, enrichment
       # health, and query_id coverage. Lets an operator distinguish
       # "click-dog is down" from "ClickHouse is not emitting useful data".
       - click_dog_span_log_last_poll_timestamp_seconds: span_log.last_poll_timestamp.seconds
@@ -443,7 +453,7 @@ instances:
 | `click_dog_normalized_query_supported`        | gauge   | `click_dog.normalized_query_supported`    |
 | `click_dog_topology_warning`                  | gauge   | `click_dog.topology_warning` (tag: `reason`) |
 
-### ClickHouse data-plane health signals (#183)
+### ClickHouse data-plane health signals
 
 The metrics in the bottom block of the table above carry **ClickHouse
 data-plane health** — orthogonal to "is click-dog exporting" and answering
@@ -622,9 +632,10 @@ signal that click-dog is doing its job.
 6. **(Optional) push-side webhook events** — if the `webhook` block is
    configured (see [Observability — Webhook Notifications](../observability.md#webhook-notifications)),
    click-dog itself fires `circuit_breaker_opened`,
-   `circuit_breaker_closed`, `backfill_failed`, `error_spike`, `startup`,
-   and `shutdown` straight to Slack / PagerDuty / a Datadog webhook
-   integration without waiting on a scrape window.
+   `circuit_breaker_closed`, `backfill_complete`, `backfill_failed`,
+   `error_spike`, `startup`, and `shutdown` straight to Slack or a Datadog webhook integration without
+   waiting on a scrape window. PagerDuty Events API v2 requires an adapter for
+   click-dog's Slack-shaped payload.
 
 ### Tier 2: Query analytics (from traces)
 
@@ -648,11 +659,11 @@ level rather than prescribing thresholds.
    `query_log`; scheduled-mode spans from `opentelemetry_span_log` always
    have status OK.
 
-3. **Memory hog queries** (backfill mode only) — `db.memory_usage` exceeds
-   threshold.
+3. **Memory hog queries** — use `@query_log.memory_usage` on enriched live
+   query-root spans or `@db.memory_usage` on backfill spans.
 
-4. **Read amplification** (backfill mode only) — P95 of `db.read_bytes`
-   spikes.
+4. **Read amplification** — watch P95 of `@query_log.read_bytes` on enriched
+   live query-root spans or `@db.read_bytes` on backfill spans.
 
 5. **Unusual query volume** — anomaly detection on span count; catches both
    traffic spikes and unexpected drops.

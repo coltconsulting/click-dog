@@ -109,6 +109,18 @@ docs/development/specs/   Internal specs for in-flight work
 - **Backfill**: One-time historical export between timestamps, then exit
 - **Validate**: Load config, print parsed settings, exit
 
+## Repository Split & Publishing
+
+- Development happens on `coltconsulting/click-dog-internal`: all branches and
+  internal PRs belong there, whichever repo a session was started from.
+- `coltconsulting/click-dog` is the public release target. Its `master`
+  advances ONLY via `make update-public PUSH=1` release commits — never push
+  branches, merge, or open internal PRs there.
+- External contributor PRs arrive on the public repo and are reviewed there,
+  then imported into the development tree with `scripts/import-public-pr.sh`
+  (`git am`, authorship preserved) and ship in the next release. Full flow:
+  `docs/development/contributing-flow.md`.
+
 ## Git Workflow
 
 - Main branch: `master`
@@ -120,7 +132,7 @@ docs/development/specs/   Internal specs for in-flight work
 ## Key Architectural Decisions
 
 - **readonly=2**: All ClickHouse connections enforce read-only mode
-- **In-memory dedup**: LRU cache (not persisted); OTEL collectors handle duplicate span_ids
+- **In-memory dedup**: LRU cache (not persisted); restarts and retries can resend stable span identities, and downstream duplicate handling is backend-specific
 - **SQL-level filtering**: Duration filters applied in ClickHouse query to minimize data transfer
 - **Live span selection**: First find qualifying trace_ids, then fetch spans for those traces
 - **Circuit breaker + adaptive backoff**: Layered protection — breaker blocks cycles, backoff increases intervals

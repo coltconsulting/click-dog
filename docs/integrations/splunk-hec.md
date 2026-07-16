@@ -38,6 +38,15 @@ Run the connectivity and data-plane checks:
 click-dog check -config /etc/click-dog/click-dog.yaml
 ```
 
+To verify HEC credentials, routing, and Splunk ingestion end to end without
+querying ClickHouse, send a synthetic span to every configured sink:
+
+```bash
+click-dog test-span -config /etc/click-dog/click-dog.yaml
+```
+
+The event carries `click_dog.test=true`, so it is easy to find or exclude.
+
 Then search the configured Splunk index for events with:
 
 ```text

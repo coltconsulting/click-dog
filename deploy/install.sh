@@ -45,11 +45,11 @@
 #                         unset, the script prompts (TTY) — preferred over any
 #                         flag, which would expose the secret in process
 #                         listings and shell history.
-#   GITHUB_TOKEN          GitHub token (or GH_TOKEN) with read access, used to
-#                         authenticate the release version probe and the binary
-#                         download. Required while the repository is private —
-#                         without it the API and asset endpoints return 404.
-#                         Use -b /path/to/click-dog to skip the download entirely.
+#   GITHUB_TOKEN          Optional GitHub token (or GH_TOKEN), used to
+#                         authenticate the release version probe and asset
+#                         download. Useful when a host shares GitHub's
+#                         unauthenticated API rate limit. Use -b
+#                         /path/to/click-dog to skip the download entirely.
 #
 set -euo pipefail
 
@@ -610,9 +610,8 @@ verify_archive_signed_checksums() {
 }
 
 # ── GitHub auth (env only, never in any process's argv) ─────────
-# Resolve a token from the standard env vars (empty if none). Required for the
-# auto-download path while the repo is private (the API + asset endpoints 404
-# unauthenticated); self-update documents the same requirement.
+# Resolve an optional token from the standard env vars (empty if none). Public
+# releases work without one; authentication raises the GitHub API rate limit.
 github_token() {
     printf '%s' "${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 }
@@ -692,8 +691,7 @@ resolve_version() {
     # Auth via --config <(...) keeps the token out of curl's argv (see curl_auth_config).
     local -a probe_args=(-sSL --proto '=https' -w $'\n%{http_code}')
     [[ -n "$HTTPS_PROXY_FLAG" ]] && probe_args+=(--proxy "$HTTPS_PROXY_FLAG")
-    local resp http_code token
-    token=$(github_token)
+    local resp http_code
     if ! resp=$(curl "${probe_args[@]}" --config <(curl_auth_config) "$endpoint" 2>/dev/null); then
         echo "Error: could not reach the GitHub releases API (network or proxy failure)." >&2
         echo "If behind a proxy, use -x http://proxy:3128 or export HTTPS_PROXY" >&2
@@ -707,18 +705,13 @@ resolve_version() {
     fi
     if [[ "$http_code" == "401" || "$http_code" == "403" ]]; then
         echo "Error: GitHub rejected the release request (HTTP ${http_code})." >&2
-        echo "  The GITHUB_TOKEN/GH_TOKEN is missing, expired, or lacks read access to" >&2
-        echo "  coltconsulting/click-dog. Export a valid token, or use -b /path/to/click-dog." >&2
+        echo "  The request may be rate-limited, or GITHUB_TOKEN/GH_TOKEN may be invalid." >&2
+        echo "  Retry with a valid token, or use -b /path/to/click-dog." >&2
         exit 1
     fi
     if [[ "$http_code" == "404" ]]; then
         echo "Error: no published click-dog ${kind} found (HTTP 404)." >&2
-        if [[ -z "$token" ]]; then
-            echo "  The repository is private, so an unauthenticated probe always 404s." >&2
-            echo "  Export GITHUB_TOKEN (or GH_TOKEN) with read access, then retry." >&2
-        else
-            echo "  The release and its binaries may not be published yet." >&2
-        fi
+        echo "  The release and its binaries may not be published yet." >&2
         echo "  To install from a locally built binary instead:" >&2
         echo "    sudo $0 -b /path/to/click-dog" >&2
         exit 1
@@ -735,7 +728,7 @@ resolve_version() {
     echo "Latest ${kind}: v${VERSION}"
 }
 
-# ── Release asset download (works on a private repo) ────────────
+# ── Release asset download (optional GitHub authentication) ─────
 # Extract the numeric GitHub asset id for a given asset name from a release JSON
 # document supplied on stdin. Within an asset object the API lists "id" before
 # "name", so we remember the most recent "id" and emit it when the matching
@@ -778,8 +771,9 @@ extract_first_prerelease_tag() {
 # signed URL (which carries its own query-string auth); --proto-redir '=https'
 # (in CURL_ARGS) keeps that redirect https-only. Auth is supplied via
 # --config <(curl_auth_config) so the token stays out of curl's argv. This is the
-# path that works on a private repo with a token; the public browser download URL
-# needs a web session and 404s with a token alone. $1=JSON, $2=asset, $3=output.
+# path supports the same optional authentication as metadata requests and keeps
+# one download flow for authenticated and anonymous installs. $1=JSON,
+# $2=asset, $3=output.
 download_release_asset() {
     local release_json="$1" asset_name="$2" out="$3"
     local id
@@ -885,16 +879,16 @@ resolve_binary() {
     local archive_name="click-dog_${VERSION}_linux_${arch}.tar.gz"
 
     # Fetch the tagged release's metadata once (authenticated via the config FD
-    # when a token is set) so every asset can be pulled through its API URL — the
-    # only download path that works while the repo is private. CURL_ARGS carries
-    # the proxy + https-only flags (set by resolve_version on every path).
+    # when a token is set) so every asset can be pulled through its API URL.
+    # CURL_ARGS carries the proxy + https-only flags (set by resolve_version on
+    # every path).
     local release_json
     if ! release_json=$(curl "${CURL_ARGS[@]}" --config <(curl_auth_config) -H "Accept: application/vnd.github+json" \
         "https://api.github.com/repos/coltconsulting/click-dog/releases/tags/v${VERSION}" 2>/dev/null); then
         echo "Error: could not fetch release metadata for v${VERSION}." >&2
         if [[ -z "$(github_token)" ]]; then
-            echo "  The repository is private; export GITHUB_TOKEN (or GH_TOKEN) with read access," >&2
-            echo "  or pass a pre-downloaded binary with -b /path/to/click-dog." >&2
+            echo "  Check network access, GitHub API rate limits, and that the tag exists." >&2
+            echo "  You may set GITHUB_TOKEN/GH_TOKEN or pass -b /path/to/click-dog." >&2
         else
             echo "  Check the token has read access and that the tag v${VERSION} exists." >&2
         fi
@@ -1599,16 +1593,22 @@ EOSQL
 # generate_user_setup_xml USER HASH
 #
 # Emit the users.d XML overlay on stdout. ClickHouse treats users.d entries
-# declaratively; this defines the user with a readonly profile and the two
-# required grants. Safe to drop in alongside an existing users.xml.
+# declaratively; this defines an explicit readonly=2 profile, assigns it to the
+# user, and grants only the two required tables. The built-in `readonly` profile
+# is readonly=1 and does not match click-dog's session contract.
 generate_user_setup_xml() {
     local user="$1" hash="$2"
     cat <<USERXML
 <clickhouse>
+    <profiles>
+        <click_dog_readonly>
+            <readonly>2</readonly>
+        </click_dog_readonly>
+    </profiles>
     <users>
         <${user}>
             <password_sha256_hex>${hash}</password_sha256_hex>
-            <profile>readonly</profile>
+            <profile>click_dog_readonly</profile>
             <quota>default</quota>
             <grants>
                 <query>GRANT SELECT ON system.opentelemetry_span_log TO ${user}</query>

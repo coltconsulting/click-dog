@@ -34,7 +34,8 @@ spec:
       # Brief gap during rollouts — fine for a span exporter (spans persist in
       # ClickHouse's log; click-dog resumes via lookback_s). For zero-downtime
       # set maxUnavailable: 0 + maxSurge: 1, but note two instances then briefly
-      # overlap and double-export (the collector dedups by span_id).
+      # overlap and can double-export. Stable trace/span identity makes repeats
+      # identifiable, but downstream duplicate handling is backend-specific.
       maxUnavailable: 1
   template:
     metadata:
