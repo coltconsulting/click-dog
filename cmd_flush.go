@@ -48,12 +48,7 @@ Flags:
 		return 2
 	}
 
-	resolvedPath, err := config.ResolveConfigPath(*configPath)
-	if err != nil {
-		_, _ = fmt.Fprintf(out, "Config: FAIL (%v)\n", err)
-		return 1
-	}
-	cfg, err := config.LoadConfig(resolvedPath)
+	cfg, _, err := loadConfig(*configPath)
 	if err != nil {
 		_, _ = fmt.Fprintf(out, "Config: FAIL (%v)\n", err)
 		return 1

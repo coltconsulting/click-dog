@@ -1,0 +1,13 @@
+# Keeps GitHub Actions references fresh — including the SHA-pinned
+# signing-critical steps in release.yml, which would otherwise rot silently.
+# Grouped so updates arrive as at most one weekly PR.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"

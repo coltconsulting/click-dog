@@ -118,6 +118,17 @@ pw2=$(generate_password)
 assert_eq "two calls produce different passwords" "true" "$([[ "$pw" != "$pw2" ]] && echo true || echo false)"
 
 echo ""
+echo "=== guided quickstart requires a TTY (issue #386) ==="
+
+quickstart_tty_status=0
+quickstart_tty_out=$(require_quickstart_tty </dev/null 2>&1) || quickstart_tty_status="$?"
+assert_eq "non-TTY quickstart preflight exits 1" "1" "$quickstart_tty_status"
+assert_contains "non-TTY error explains the terminal requirement" \
+    "Guided install requires an interactive terminal" "$quickstart_tty_out"
+assert_contains "non-TTY error points to the supported install command" \
+    "install -c collector:4317 --systemd" "$quickstart_tty_out"
+
+echo ""
 echo "=== render_click_dog_config args ==="
 
 # Replace the binary with a stub that just echoes the args it received.
@@ -149,6 +160,16 @@ saved_USER="$CLICKHOUSE_USER"
 BINARY="$STUB_BIN"
 COLLECTOR_ADDRESS="localhost:4317"
 CLICKHOUSE_USER="monitoring"
+
+# The non-guided install default is TLS on ClickHouse's standard secure
+# native-protocol port. install.sh conveys that contract by passing
+# -ch-secure without -ch-port; click-dog init then auto-selects 9440 (covered
+# end-to-end by TestRunInit_CHSecureAutoFlipsPort in cmd_init_test.go).
+assert_eq "installer defaults ClickHouse TLS on" "true" "$CLICKHOUSE_TLS"
+assert_eq "installer leaves TLS port to init's 9440 default" "" "${CLICKHOUSE_PORT:-}"
+default_secure=$(render_click_dog_config /etc/click-dog/click-dog.yaml)
+assert_contains "default render enables ClickHouse TLS" "-ch-secure" "$default_secure"
+assert_not_contains "default render delegates port to init's TLS default" "-ch-port" "$default_secure"
 
 CLICKHOUSE_TLS="false"
 KEEPER_HOSTS=""
@@ -187,6 +208,53 @@ COLLECTOR_ADDRESS="$saved_COLLECTOR"
 CLICKHOUSE_USER="$saved_USER"
 
 echo ""
+echo "=== uninstall without systemctl (issue #383) ==="
+
+# Run the real function under a private PATH containing an rm recorder but no
+# systemctl. The child shell keeps errexit enabled, so an unguarded
+# `systemctl daemon-reload` exits before the later removal calls are logged.
+uninstall_sandbox=$(make_temp_dir)
+TEST_TEMP_DIRS+=("$uninstall_sandbox")
+uninstall_removal_log="$uninstall_sandbox/removals.log"
+cat > "$uninstall_sandbox/rm" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" >> "$UNINSTALL_REMOVAL_LOG"
+STUB
+chmod +x "$uninstall_sandbox/rm"
+
+cat > "$uninstall_sandbox/run-uninstall.sh" <<'HARNESS'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! grep -q '^# ── Dispatch' "$INSTALL_SCRIPT"; then
+    echo "installer dispatch marker not found" >&2
+    exit 1
+fi
+installer_source=$(sed -n '1,/^# ── Dispatch/p' "$INSTALL_SCRIPT" \
+    | grep -v '^set -euo pipefail')
+eval "$installer_source"
+
+# Deliberately exclude systemctl and every other external command. The rm
+# recorder proves execution continues beyond daemon-reload without touching
+# the host filesystem; userdel/groupdel are already best-effort operations.
+PATH="$UNINSTALL_BIN"
+do_uninstall
+HARNESS
+chmod +x "$uninstall_sandbox/run-uninstall.sh"
+
+uninstall_status=0
+uninstall_out=$(INSTALL_SCRIPT="$SCRIPT_DIR/install.sh" \
+    UNINSTALL_BIN="$uninstall_sandbox" \
+    UNINSTALL_REMOVAL_LOG="$uninstall_removal_log" \
+    bash "$uninstall_sandbox/run-uninstall.sh" <<<"y" 2>&1) || uninstall_status="$?"
+assert_eq "uninstall exits 0 without systemctl" "0" "$uninstall_status"
+assert_contains "uninstall reaches completion without systemctl" "Uninstall complete." "$uninstall_out"
+removal_calls="$(<"$uninstall_removal_log")"
+assert_contains "uninstall reaches binary removal" "/usr/local/bin/click-dog" "$removal_calls"
+assert_contains "uninstall reaches config removal" "/etc/click-dog" "$removal_calls"
+assert_contains "uninstall reaches log removal" "/var/log/click-dog" "$removal_calls"
+
+echo ""
 echo "=== install -f flag (bring your own YAML) ==="
 
 # When -f PATH is set, do_install should skip the require-collector check
@@ -213,6 +281,129 @@ install_body=$(awk '/^do_install\(\)/,/^}/' deploy/install.sh)
 assert_contains "do_install copies CONFIG_FROM_FILE when set" 'cp "$CONFIG_FROM_FILE" "$CONFIG_TMPFILE"' "$install_body"
 assert_contains "do_install keeps the render path for the no-flag case" "render_click_dog_config" "$install_body"
 assert_contains "do_install validates -f path exists" "Error: -f file not found" "$install_body"
+
+echo ""
+echo "=== successful install/update exit status (issue #382) ==="
+
+# Drive the real do_install/do_update functions to completion without root
+# access. The command shims redirect staging work into a private temp directory
+# and no-op only the writes to system paths. This catches failures that occur
+# after the completion message — specifically EXIT traps that dereference
+# function-local variables after the command function has returned.
+install_sandbox=$(make_temp_dir)
+TEST_TEMP_DIRS+=("$install_sandbox")
+printf 'monitor:\n  enabled: true\n' > "$install_sandbox/input.yaml"
+printf '[Unit]\nDescription=click-dog test unit\n' > "$install_sandbox/click-dog.service"
+cat > "$install_sandbox/click-dog" <<'STUB'
+#!/bin/sh
+case "$1" in
+    -version|-validate) exit 0 ;;
+    *) exit 1 ;;
+esac
+STUB
+chmod +x "$install_sandbox/click-dog"
+
+cat > "$install_sandbox/run-install.sh" <<'HARNESS'
+#!/usr/bin/env bash
+set -euo pipefail
+
+sandbox="$INSTALL_SANDBOX"
+
+# Load the real installer prelude and functions without its dispatch block.
+# Fail closed if the extraction boundary changes: sed would otherwise print
+# the whole script and eval its live command dispatch.
+if ! grep -q '^# ── Dispatch' "$INSTALL_SCRIPT"; then
+    echo "installer dispatch marker not found" >&2
+    exit 1
+fi
+# do_update's systemd-unit existence guard is the only direct filesystem test
+# that command shims cannot intercept. Point that guard at the fake unit while
+# leaving the production function otherwise unchanged.
+installer_source=$(sed -n '1,/^# ── Dispatch/p' "$INSTALL_SCRIPT" \
+    | grep -v '^set -euo pipefail' \
+    | sed "s|/etc/systemd/system/click-dog.service|$sandbox/click-dog.service|g")
+eval "$installer_source"
+
+CONFIG_FROM_FILE="$sandbox/input.yaml"
+CLICKHOUSE_PASSWORD="testpass123"
+COLLECTOR_ADDRESS=""
+SYSTEMD="false"
+BINARY="$sandbox/click-dog"
+BINARY_AUTO_DOWNLOADED="false"
+BINARY_AUTO_DOWNLOAD_DIR=""
+
+uname() { echo "Linux"; }
+file() { echo "ELF 64-bit LSB executable"; }
+id() { return 0; }
+useradd() { return 0; }
+chown() { return 0; }
+systemctl() { return 0; }
+sleep() { return 0; }
+
+mkdir() {
+    if [[ "$*" == *"/etc/click-dog"* || "$*" == *"/usr/local/bin"* ]]; then
+        return 0
+    fi
+    command mkdir "$@"
+}
+chmod() {
+    local target="${!#}"
+    if [[ "$target" == "$sandbox/"* ]]; then
+        command chmod "$@"
+    fi
+}
+mktemp() {
+    if [[ "${1:-}" == "-d" ]]; then
+        case "${2:-}" in
+            /usr/local/bin/.click-dog-install.XXXXXX)
+                command mktemp -d "$sandbox/install-stage.XXXXXX"
+                return
+                ;;
+            /usr/local/bin/.click-dog-update.XXXXXX)
+                command mktemp -d "$sandbox/update-stage.XXXXXX"
+                return
+                ;;
+        esac
+    fi
+    command mktemp "$@"
+}
+cp() {
+    local target="${!#}"
+    if [[ "$target" == /etc/* || "$target" == /usr/local/bin/* ]]; then
+        return 0
+    fi
+    command cp "$@"
+}
+mv() {
+    if [[ "${2:-}" == "/usr/local/bin/click-dog" ]]; then
+        command rm -f "$1"
+        return 0
+    fi
+    command mv "$@"
+}
+
+case "$HARNESS_ACTION" in
+    install) do_install ;;
+    update)  do_update ;;
+    *) echo "unknown harness action: $HARNESS_ACTION" >&2; exit 1 ;;
+esac
+HARNESS
+
+install_status=0
+install_out=$(INSTALL_SCRIPT="$SCRIPT_DIR/install.sh" INSTALL_SANDBOX="$install_sandbox" \
+    HARNESS_ACTION=install \
+    bash "$install_sandbox/run-install.sh" 2>&1) || install_status="$?"
+assert_eq "successful do_install exits 0" "0" "$install_status"
+assert_contains "successful do_install reaches completion" "Install complete." "$install_out"
+assert_not_contains "successful do_install has no unbound trap variable" "unbound variable" "$install_out"
+
+update_status=0
+update_out=$(INSTALL_SCRIPT="$SCRIPT_DIR/install.sh" INSTALL_SANDBOX="$install_sandbox" \
+    HARNESS_ACTION=update \
+    bash "$install_sandbox/run-install.sh" 2>&1) || update_status="$?"
+assert_eq "successful do_update exits 0" "0" "$update_status"
+assert_contains "successful do_update reaches completion" "Update complete." "$update_out"
+assert_not_contains "successful do_update has no unbound trap variable" "unbound variable" "$update_out"
 
 echo ""
 echo "=== require_unified_init_binary ==="

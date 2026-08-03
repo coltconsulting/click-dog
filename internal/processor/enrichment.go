@@ -205,6 +205,10 @@ func EnrichSpanFromQueryLog(span *model.OpenTelemetrySpan, ql model.QueryLog, ma
 	newAttrs["query_log.result_rows"] = strconv.FormatUint(ql.ResultRows, 10)
 	newAttrs["query_log.result_bytes"] = strconv.FormatUint(ql.ResultBytes, 10)
 	newAttrs["query_log.memory_usage"] = strconv.FormatUint(ql.MemoryUsage, 10)
+	if operation := normalizeQueryOperation(ql.QueryOperation); operation != "" {
+		newAttrs["query_log.operation"] = operation
+		newAttrs["query_log.access_type"] = classifyQueryAccess(operation)
+	}
 
 	if ql.NormalizedQueryHash != 0 {
 		newAttrs["query_log.normalized_query_hash"] = strconv.FormatUint(ql.NormalizedQueryHash, 10)
@@ -238,6 +242,32 @@ func EnrichSpanFromQueryLog(span *model.OpenTelemetrySpan, ql model.QueryLog, ma
 
 	span.Attributes = newAttrs
 	span.StringSliceAttributes = newStringSliceAttrs
+}
+
+func normalizeQueryOperation(operation string) string {
+	return strings.ToLower(strings.TrimSpace(operation))
+}
+
+func classifyQueryAccess(operation string) string {
+	// Current ClickHouse folds TRUNCATE/DETACH into Drop, ATTACH into Create,
+	// and KILL MUTATION into KillQuery. Retain their direct spellings as
+	// defensive compatibility aliases for older or vendor-modified emitters.
+	switch normalizeQueryOperation(operation) {
+	case "select", "show", "describe", "exists", "explain", "check":
+		return "read"
+	case "insert", "asyncinsertflush", "delete", "update", "optimize":
+		return "write"
+	case "create", "alter", "drop", "undrop", "rename", "externalddl",
+		"truncate", "attach", "detach":
+		return "ddl"
+	case "system", "killquery", "killmutation", "grant", "revoke", "move", "set", "use",
+		"backup", "restore", "begin", "commit", "rollback", "settransactionsnapshot", "snapshot":
+		return "admin"
+	default:
+		// None/empty, ParallelWithQuery, and Copy intentionally remain other:
+		// the wrapper or COPY direction does not identify one stable access type.
+		return "other"
+	}
 }
 
 func copyStringSliceAttributes(attrs map[string][]string) map[string][]string {

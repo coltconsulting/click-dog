@@ -17,4 +17,20 @@ openspec/** export-ignore
 # import tool is its counterpart — it pulls accepted public PRs back into this
 # tree and is equally meaningless in the published one.
 scripts/publish-to-public.sh export-ignore
+scripts/publish-to-public_test.sh export-ignore
 scripts/import-public-pr.sh export-ignore
+
+# The docs site (click-dog.com) is internal-only: it publishes from this
+# private repo via .github/workflows/site.yml (see
+# docs/development/docs-publishing.md). The site is NOT open source —
+# nothing site-related ships in the public archive. docs/CNAME and
+# docs/assets/social-card.* are covered by docs/**. The site.yml pattern
+# intentionally pre-dates the file (it lands in a sibling PR).
+docs export-ignore
+docs/** export-ignore
+overrides export-ignore
+overrides/** export-ignore
+mkdocs.yml export-ignore
+requirements-docs.txt export-ignore
+.github/workflows/docs.yml export-ignore
+.github/workflows/site.yml export-ignore

@@ -1,0 +1,440 @@
+{
+  "title": "Click-Dog: Exported User Activity",
+  "description": "Live-span-only review of ClickHouse user activity exported by click-dog from system.opentelemetry_span_log. Searchable tables relate users to databases, tables, statement operations, and access types using automatic query_log enrichment. Counts cover only the qualified/exported stream selected by monitor.min_trace_duration_ms and configured filters; this is an operational view, not a complete audit log. Backfill spans from system.query_log use the separate clickhouse.query/db.* contract and are intentionally outside this dashboard.",
+  "layout_type": "ordered",
+  "template_variables": [
+    {
+      "name": "service",
+      "prefix": "service",
+      "default": "click-dog-monitor"
+    },
+    {
+      "name": "env",
+      "prefix": "env",
+      "default": "*"
+    },
+    {
+      "name": "user",
+      "prefix": "@query_log.user",
+      "default": "*"
+    },
+    {
+      "name": "database",
+      "prefix": "@query_log.databases",
+      "default": "*"
+    },
+    {
+      "name": "table",
+      "prefix": "@query_log.tables",
+      "default": "*"
+    },
+    {
+      "name": "operation",
+      "prefix": "@query_log.operation",
+      "default": "*"
+    },
+    {
+      "name": "access_type",
+      "prefix": "@query_log.access_type",
+      "default": "*"
+    },
+    {
+      "name": "host",
+      "prefix": "@hostname",
+      "default": "*"
+    }
+  ],
+  "widgets": [
+    {
+      "id": 1,
+      "definition": {
+        "type": "note",
+        "content": "# Click-Dog — Exported User Activity\n\n**Live-span dashboard.** Reviews root query spans from `system.opentelemetry_span_log` using `resource_name:query @click_dog.source:span_log`, with user/database/table/operation metadata from automatic `query_log.*` enrichment.\n\n**Scope.** Counts are exported activity, not total ClickHouse traffic, and this is not a complete audit record. `monitor.min_trace_duration_ms` and query/operation/IP/user filters determine which activity appears.\n\nUse the dashboard filters to narrow every widget. Each relationship table also has a search bar for its visible user, database, table, operation, and access-type values. If operation/access-type widgets are empty while other activity is present, check `click_dog.query_operation_supported`; `0` means the startup `query_kind` capability probe disabled those dimensions.",
+        "background_color": "blue",
+        "font_size": "14",
+        "text_align": "left",
+        "vertical_align": "top",
+        "show_tick": false,
+        "has_padding": true
+      },
+      "layout": {"x": 0, "y": 0, "width": 12, "height": 2}
+    },
+    {
+      "id": 10,
+      "definition": {
+        "type": "note",
+        "content": "## Exported Activity Summary\nUsers and statement classes in the qualified live-span stream.",
+        "background_color": "green",
+        "font_size": "14",
+        "text_align": "left",
+        "vertical_align": "center",
+        "show_tick": false,
+        "has_padding": true
+      },
+      "layout": {"x": 0, "y": 2, "width": 12, "height": 1}
+    },
+    {
+      "id": 11,
+      "definition": {
+        "title": "Exported activity (1h)",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "query_value",
+        "autoscale": true,
+        "precision": 0,
+        "time": {"live_span": "1h"},
+        "requests": [
+          {
+            "formulas": [{"formula": "query1"}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log @query_log.user:* $env $user $database $table $operation $access_type $host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": []
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 3, "width": 2, "height": 2}
+    },
+    {
+      "id": 12,
+      "definition": {
+        "title": "Active users (1h)",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "query_value",
+        "autoscale": true,
+        "precision": 0,
+        "time": {"live_span": "1h"},
+        "requests": [
+          {
+            "formulas": [{"formula": "query1"}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log @query_log.user:* $env $user $database $table $operation $access_type $host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "cardinality", "metric": "@query_log.user"},
+                "group_by": []
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 2, "y": 3, "width": 2, "height": 2}
+    },
+    {
+      "id": 13,
+      "definition": {
+        "title": "Exported reads",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "query_value",
+        "autoscale": true,
+        "precision": 0,
+        "requests": [
+          {
+            "formulas": [{"formula": "query1"}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log @query_log.user:* @query_log.access_type:read $env $user $database $table $operation $access_type $host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": []
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 4, "y": 3, "width": 2, "height": 2}
+    },
+    {
+      "id": 14,
+      "definition": {
+        "title": "Exported writes",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "query_value",
+        "autoscale": true,
+        "precision": 0,
+        "requests": [
+          {
+            "formulas": [{"formula": "query1"}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log @query_log.user:* @query_log.access_type:write $env $user $database $table $operation $access_type $host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": []
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 6, "y": 3, "width": 2, "height": 2}
+    },
+    {
+      "id": 15,
+      "definition": {
+        "title": "Exported DDL",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "query_value",
+        "autoscale": true,
+        "precision": 0,
+        "requests": [
+          {
+            "formulas": [{"formula": "query1"}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log @query_log.user:* @query_log.access_type:ddl $env $user $database $table $operation $access_type $host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": []
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 8, "y": 3, "width": 2, "height": 2}
+    },
+    {
+      "id": 16,
+      "definition": {
+        "title": "Failed exported activity",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "query_value",
+        "autoscale": true,
+        "precision": 0,
+        "requests": [
+          {
+            "formulas": [{"formula": "query1"}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log @query_log.user:* @query_log.exception_code:>0 $env $user $database $table $operation $access_type $host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": []
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 10, "y": 3, "width": 2, "height": 2}
+    },
+    {
+      "id": 20,
+      "definition": {
+        "type": "note",
+        "content": "## Activity Over Time\nStatement access classes are derived from `system.query_log.query_kind`, not from read/write row counters.",
+        "background_color": "green",
+        "font_size": "14",
+        "text_align": "left",
+        "vertical_align": "center",
+        "show_tick": false,
+        "has_padding": true
+      },
+      "layout": {"x": 0, "y": 5, "width": 12, "height": 1}
+    },
+    {
+      "id": 21,
+      "definition": {
+        "title": "Exported activity by access type",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "timeseries",
+        "show_legend": true,
+        "legend_layout": "horizontal",
+        "legend_columns": ["sum"],
+        "requests": [
+          {
+            "formulas": [{"formula": "query1"}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log @query_log.user:* @query_log.access_type:* $env $user $database $table $operation $access_type $host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": [
+                  {
+                    "facet": "@query_log.access_type",
+                    "limit": 10,
+                    "sort": {"aggregation": "count", "order": "desc"}
+                  }
+                ]
+              }
+            ],
+            "response_format": "timeseries",
+            "style": {"palette": "semantic"},
+            "display_type": "bars"
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 6, "width": 12, "height": 4}
+    },
+    {
+      "id": 30,
+      "definition": {
+        "type": "note",
+        "content": "## Searchable Relationship Lists\nSearch inside each table, or use the dashboard filters to constrain every list together. Multi-value database/table attributes fan out to individual facet values.",
+        "background_color": "green",
+        "font_size": "14",
+        "text_align": "left",
+        "vertical_align": "center",
+        "show_tick": false,
+        "has_padding": true
+      },
+      "layout": {"x": 0, "y": 10, "width": 12, "height": 1}
+    },
+    {
+      "id": 31,
+      "definition": {
+        "title": "Users and access types — exported activity",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "query_table",
+        "has_search_bar": "always",
+        "requests": [
+          {
+            "formulas": [
+              {"formula": "query1", "alias": "exported activity", "limit": {"count": 100, "order": "desc"}}
+            ],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log @query_log.user:* $env $user $database $table $operation $access_type $host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": {
+                  "fields": ["@query_log.user", "@query_log.access_type"],
+                  "sort": {"aggregation": "count", "order": "desc"}
+                }
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 11, "width": 12, "height": 5}
+    },
+    {
+      "id": 32,
+      "definition": {
+        "title": "User → database — exported activity",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "query_table",
+        "has_search_bar": "always",
+        "requests": [
+          {
+            "formulas": [
+              {"formula": "query1", "alias": "exported activity", "limit": {"count": 100, "order": "desc"}}
+            ],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log @query_log.user:* @query_log.databases:* $env $user $database $table $operation $access_type $host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": {
+                  "fields": ["@query_log.user", "@query_log.databases", "@query_log.access_type"],
+                  "sort": {"aggregation": "count", "order": "desc"}
+                }
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 16, "width": 12, "height": 5}
+    },
+    {
+      "id": 33,
+      "definition": {
+        "title": "User → table — exported activity",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "query_table",
+        "has_search_bar": "always",
+        "requests": [
+          {
+            "formulas": [
+              {"formula": "query1", "alias": "exported activity", "limit": {"count": 100, "order": "desc"}}
+            ],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log @query_log.user:* @query_log.tables:* $env $user $database $table $operation $access_type $host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": {
+                  "fields": ["@query_log.user", "@query_log.tables", "@query_log.operation"],
+                  "sort": {"aggregation": "count", "order": "desc"}
+                }
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 21, "width": 12, "height": 5}
+    },
+    {
+      "id": 34,
+      "definition": {
+        "title": "User → operation — exported activity",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "query_table",
+        "has_search_bar": "always",
+        "requests": [
+          {
+            "formulas": [
+              {"formula": "query1", "alias": "exported activity", "limit": {"count": 100, "order": "desc"}}
+            ],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log @query_log.user:* @query_log.operation:* $env $user $database $table $operation $access_type $host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "count"},
+                "group_by": {
+                  "fields": ["@query_log.user", "@query_log.operation", "@query_log.access_type"],
+                  "sort": {"aggregation": "count", "order": "desc"}
+                }
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 26, "width": 12, "height": 5}
+    }
+  ]
+}

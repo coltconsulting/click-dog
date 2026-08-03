@@ -7,6 +7,7 @@ Pre-built dashboard templates for Datadog.
 | File | Dashboard | Data source |
 |------|-----------|-------------|
 | `datadog-query-analysis.json` | **Click-Dog: Application Query Analysis** | Live APM spans from `system.opentelemetry_span_log` |
+| `datadog-user-activity.json` | **Click-Dog: Exported User Activity** | Enriched live root-query spans |
 | `datadog-clickdog-health.json` | **Click-Dog: Health** | OTLP self-metrics |
 
 ## Import
@@ -17,7 +18,8 @@ Pre-built dashboard templates for Datadog.
 DD_API_KEY=... DD_APP_KEY=... click-dog create-dashboards
 ```
 
-Creates both dashboards. Use `--dashboard query` or `--dashboard health` for just one.
+Creates all three dashboards. Use `--dashboard query`, `--dashboard activity`,
+or `--dashboard health` for just one.
 
 **Re-running is safe.** Each dashboard is stamped with a version marker (the
 click-dog version + a content hash) appended to its description — it shows as a
@@ -46,17 +48,25 @@ DD_API_KEY=... DD_APP_KEY=... click-dog create-dashboards \
 
 ### Option 2: Datadog API
 
+From the repository root, import each shipped JSON definition:
+
 ```bash
-curl -X POST "https://api.datadoghq.com/api/v1/dashboard" \
-  -H "Content-Type: application/json" \
-  -H "DD-API-KEY: ${DD_API_KEY}" \
-  -H "DD-APPLICATION-KEY: ${DD_APP_KEY}" \
-  -d @dashboards/datadog-query-analysis.json
+for dashboard in \
+  datadog-query-analysis.json \
+  datadog-user-activity.json \
+  datadog-clickdog-health.json
+do
+  curl -X POST "https://api.datadoghq.com/api/v1/dashboard" \
+    -H "Content-Type: application/json" \
+    -H "DD-API-KEY: ${DD_API_KEY}" \
+    -H "DD-APPLICATION-KEY: ${DD_APP_KEY}" \
+    -d "@dashboards/${dashboard}"
+done
 ```
 
 > [!WARNING]
-> The Application Query Analysis dashboard filters on
-> `@click_dog.source:span_log`. Importing it with click-dog older than
+> The Application Query Analysis and Exported User Activity dashboards filter on
+> `@click_dog.source:span_log`. Importing either with click-dog older than
 > `v26.03.1` will show no live-span data until click-dog is upgraded. If you
 > cannot upgrade immediately, remove `@click_dog.source:span_log` from widget
 > queries after import to restore the previous `resource_name:query`-only
@@ -140,6 +150,36 @@ Paste it into the `requests[0]` object of the p95/p99 tile (alongside
 `"response_format": "scalar"`), in the dashboard JSON or via **Edit** on the
 widget in Datadog, and adjust the second/third values to your target.
 
+## Exported User Activity
+
+This live-span dashboard uses automatic `query_log.*` enrichment to answer four
+related questions without displaying raw SQL:
+
+| Searchable list | Facets |
+|---|---|
+| **Users and access types** | `query_log.user`, `query_log.access_type` |
+| **User → database** | `query_log.user`, `query_log.databases`, `query_log.access_type` |
+| **User → table** | `query_log.user`, `query_log.tables`, `query_log.operation` |
+| **User → operation** | `query_log.user`, `query_log.operation`, `query_log.access_type` |
+
+Each relationship table keeps its search bar visible. Dashboard template
+variables provide searchable filters for user, database, table, operation,
+access type, service, environment, and host; a selection applies across the
+whole dashboard.
+
+`query_log.operation` comes from ClickHouse's `system.query_log.query_kind`.
+Click-dog normalizes it to lowercase and derives `query_log.access_type` as
+`read`, `write`, `ddl`, `admin`, or `other`. In cluster query mode the operation
+column is enabled only when every replica passes the startup capability probe.
+Use `click_dog.query_operation_supported` to distinguish an unsupported
+`query_kind` capability from a time range with no exported activity.
+
+> [!WARNING]
+> This is an **exported activity** view, not an audit log. Scheduled mode only
+> exports traces selected by `monitor.min_trace_duration_ms` and the configured
+> query/operation/IP/user filters. Use a dedicated, retention-controlled
+> `system.query_log` pipeline when complete activity history is required.
+
 ## Health
 
 OTLP self-monitoring for the click-dog exporter. Enable
@@ -213,6 +253,7 @@ instances:
       - click_dog_query_log_enrichment_match_ratio: query_log.enrichment.match_ratio
       - click_dog_spans_with_query_id_ratio: spans_with_query_id_ratio
       - click_dog_normalized_query_supported: normalized_query_supported
+      - click_dog_query_operation_supported: query_operation_supported
       # Topology self-audit — detects the sidecar + use_cluster_queries anti-pattern.
       - click_dog_topology_warning: topology_warning
 ```
@@ -248,6 +289,7 @@ default names directly; Datadog appends `.count` to OTLP monotonic sums.
 | `click_dog_query_log_enrichment_match_ratio`  | gauge   | `click_dog.query_log.enrichment.match_ratio` |
 | `click_dog_spans_with_query_id_ratio`         | gauge   | `click_dog.spans_with_query_id_ratio`     |
 | `click_dog_normalized_query_supported`        | gauge   | `click_dog.normalized_query_supported`    |
+| `click_dog_query_operation_supported`         | gauge   | `click_dog.query_operation_supported`     |
 | `click_dog_topology_warning`                  | gauge   | `click_dog.topology_warning` (tag: `reason`) |
 
 The bottom block carries ClickHouse data-plane health signals (#183) — see

@@ -983,7 +983,10 @@ do_install() {
     UNIT_TMPFILE=$(mktemp)
     local install_stage=""
     local staged_binary=""
-    trap 'rm -f "$CONFIG_TMPFILE" "$ENV_TMPFILE" "$UNIT_TMPFILE"; [[ -n "$install_stage" ]] && rm -rf "$install_stage"; cleanup_auto_downloaded_binary' EXIT
+    # The EXIT trap also runs after do_install returns successfully, when its
+    # locals are out of scope. Default expansion keeps nounset from turning a
+    # completed install into exit 1; failure paths still see the live value.
+    trap 'rm -f "$CONFIG_TMPFILE" "$ENV_TMPFILE" "$UNIT_TMPFILE"; [[ -n "${install_stage:-}" ]] && rm -rf "$install_stage"; cleanup_auto_downloaded_binary' EXIT
 
     if [[ -n "$CONFIG_FROM_FILE" ]]; then
         cp "$CONFIG_FROM_FILE" "$CONFIG_TMPFILE"
@@ -1076,7 +1079,9 @@ do_update() {
 
     local update_stage=""
     local staged_binary=""
-    trap '[[ -n "$update_stage" ]] && rm -rf "$update_stage"; cleanup_auto_downloaded_binary' EXIT
+    # As with do_install, this trap can outlive the function-local staging
+    # variable on a successful return.
+    trap '[[ -n "${update_stage:-}" ]] && rm -rf "$update_stage"; cleanup_auto_downloaded_binary' EXIT
 
     echo "click-dog update: local (binary swap only — config unchanged)"
 
@@ -1177,7 +1182,7 @@ do_uninstall() {
     systemctl stop click-dog 2>/dev/null || true
     systemctl disable click-dog 2>/dev/null || true
     rm -f /etc/systemd/system/click-dog.service
-    systemctl daemon-reload
+    systemctl daemon-reload 2>/dev/null || true
     rm -f /usr/local/bin/click-dog
     rm -rf /etc/click-dog
     rm -rf /var/log/click-dog
@@ -1639,6 +1644,17 @@ user_auth_mismatch_decision() {
     fi
 }
 
+require_quickstart_tty() {
+    if [[ -t 0 ]]; then
+        return 0
+    fi
+
+    echo "Error: Guided install requires an interactive terminal." >&2
+    echo "For non-interactive install, use:" >&2
+    echo "  ./deploy/install.sh install -c collector:4317 --systemd" >&2
+    return 1
+}
+
 do_quickstart() {
     local clickhouse_setup_tempfiles=()
 
@@ -1673,10 +1689,7 @@ do_quickstart() {
         exit 1
     fi
 
-    if [[ ! -t 0 ]]; then
-        echo "Error: Guided install requires an interactive terminal." >&2
-        echo "For non-interactive install, use:" >&2
-        echo "  ./deploy/install.sh install -c collector:4317 --systemd" >&2
+    if ! require_quickstart_tty; then
         exit 1
     fi
 
@@ -2482,7 +2495,8 @@ OTELXML
         echo "  Next steps:"
         echo ""
         echo "  1. Create click-dog dashboards in Datadog"
-        echo "     (creates two: Application Query Analysis + Health)"
+        echo "     (creates three: Application Query Analysis,"
+        echo "      Exported User Activity, and Health)"
         echo ""
         echo "     DD_API_KEY=... DD_APP_KEY=... click-dog create-dashboards"
         echo ""

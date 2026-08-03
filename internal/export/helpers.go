@@ -6,6 +6,42 @@ import (
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 )
 
+const (
+	liveSpanSourceKey     = "click_dog.source"
+	liveSpanDefaultSource = "span_log"
+	liveSpanQueryKey      = "db.statement"
+)
+
+func liveSpanSource(attributes map[string]string) string {
+	if source, ok := attributes[liveSpanSourceKey]; ok {
+		return source
+	}
+	return liveSpanDefaultSource
+}
+
+// liveSpanAttributesForHEC returns the nested attributes serialized by Splunk
+// HEC. The effective source is promoted to click_dog_source on the event, so it
+// is omitted here to avoid two representations that can disagree. Copying also
+// lets the exporter truncate SQL without mutating the span shared by other
+// exporters in a MultiExporter fan-out.
+func liveSpanAttributesForHEC(attributes map[string]string, maxQueryLength int) map[string]string {
+	if attributes == nil {
+		return nil
+	}
+
+	exported := make(map[string]string, len(attributes))
+	for key, value := range attributes {
+		if key == liveSpanSourceKey {
+			continue
+		}
+		if key == liveSpanQueryKey {
+			value = TruncateQuery(value, maxQueryLength)
+		}
+		exported[key] = value
+	}
+	return exported
+}
+
 // TruncateQuery trims whitespace and truncates the query to maxLen characters.
 // If maxLen <= 0, no truncation is applied.
 func TruncateQuery(query string, maxLen int) string {

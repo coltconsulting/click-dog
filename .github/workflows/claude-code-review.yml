@@ -14,7 +14,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  authorize:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      authorized: ${{ steps.check.outputs.authorized }}
+    steps:
+      # Check permission before checkout so pull-request content cannot
+      # influence the authorization decision.
+      - name: Check repository admin permission
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          is_admin="$(
+            gh api \
+              "repos/${REPOSITORY}/collaborators/${ACTOR}/permission" \
+              --jq '.user.permissions.admin' 2>/dev/null || true
+          )"
+
+          if [[ "${is_admin}" == "true" ]]; then
+            echo "authorized=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "authorized=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice::Ignoring Claude review trigger from non-admin actor ${ACTOR}."
+          fi
+
   claude-review:
+    needs: authorize
+    if: needs.authorize.outputs.authorized == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -24,7 +55,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
 

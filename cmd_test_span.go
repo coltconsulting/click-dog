@@ -13,7 +13,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/coltconsulting/click-dog/internal/config"
-	"github.com/coltconsulting/click-dog/internal/export"
 	"github.com/coltconsulting/click-dog/internal/model"
 	"github.com/coltconsulting/click-dog/internal/processor"
 )
@@ -45,12 +44,7 @@ Flags:
 		return 2
 	}
 
-	resolvedPath, err := config.ResolveConfigPath(*configPath)
-	if err != nil {
-		_, _ = fmt.Fprintf(out, "Config: FAIL (%v)\n", err)
-		return 1
-	}
-	cfg, err := config.LoadConfig(resolvedPath)
+	cfg, _, err := loadConfig(*configPath)
 	if err != nil {
 		_, _ = fmt.Fprintf(out, "Config: FAIL (%v)\n", err)
 		return 1
@@ -81,55 +75,28 @@ Flags:
 	spans := []model.OpenTelemetrySpan{testSpan}
 	allOK := true
 
-	for i, otelCfg := range cfg.Exporters.OTEL {
-		exp, otelErr := export.NewOTELExporter(otelCfg)
-		if otelErr != nil {
-			_, _ = fmt.Fprintf(out, "OTEL[%d]: FAIL (init: %v)\n", i, otelErr)
+	for _, b := range buildExporters(cfg) {
+		if b.InitErr != nil {
+			_, _ = fmt.Fprintf(out, "%s: FAIL (init: %v)\n", b.Label, b.InitErr)
 			allOK = false
 			continue
 		}
 
 		// Use the same export deadline policy as scheduled/backfill paths;
 		// monitor.export_timeout_s: 0 disables the client-side deadline here too.
-		result, exportErr := processor.ExportSpansWithDeadline(context.Background(), cfg, exp, spans)
+		result, exportErr := processor.ExportSpansWithDeadline(context.Background(), cfg, b.Exporter, spans)
 
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = exp.Close(closeCtx)
+		_ = b.Exporter.Close(closeCtx)
 		closeCancel()
 
 		if exportErr != nil {
-			_, _ = fmt.Fprintf(out, "OTEL[%d]: FAIL (%s: %v)\n", i, otelCfg.CollectorAddress, exportErr)
+			_, _ = fmt.Fprintf(out, "%s: FAIL (%s: %v)\n", b.Label, b.Endpoint, exportErr)
 			allOK = false
 		} else if len(result.Accepted) > 0 {
-			_, _ = fmt.Fprintf(out, "OTEL[%d]: ok — sent test span to %s (trace_id=%s span_id=%d)\n", i, otelCfg.CollectorAddress, result.Accepted[0].TraceID, result.Accepted[0].SpanID)
+			_, _ = fmt.Fprintf(out, "%s: ok — sent test span to %s (trace_id=%s span_id=%d)\n", b.Label, b.Endpoint, result.Accepted[0].TraceID, result.Accepted[0].SpanID)
 		} else {
-			_, _ = fmt.Fprintf(out, "OTEL[%d]: ok — sent test span to %s\n", i, otelCfg.CollectorAddress)
-		}
-	}
-
-	for i, splunkCfg := range cfg.Exporters.SplunkHEC {
-		exp, splunkErr := export.NewSplunkHECExporter(splunkCfg)
-		if splunkErr != nil {
-			_, _ = fmt.Fprintf(out, "SplunkHEC[%d]: FAIL (init: %v)\n", i, splunkErr)
-			allOK = false
-			continue
-		}
-
-		// Use the same export deadline policy as scheduled/backfill paths;
-		// monitor.export_timeout_s: 0 disables the client-side deadline here too.
-		result, exportErr := processor.ExportSpansWithDeadline(context.Background(), cfg, exp, spans)
-
-		closeCtx, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = exp.Close(closeCtx)
-		closeCancel()
-
-		if exportErr != nil {
-			_, _ = fmt.Fprintf(out, "SplunkHEC[%d]: FAIL (%s: %v)\n", i, splunkCfg.Endpoint, exportErr)
-			allOK = false
-		} else if len(result.Accepted) > 0 {
-			_, _ = fmt.Fprintf(out, "SplunkHEC[%d]: ok — sent test span to %s (trace_id=%s span_id=%d)\n", i, splunkCfg.Endpoint, result.Accepted[0].TraceID, result.Accepted[0].SpanID)
-		} else {
-			_, _ = fmt.Fprintf(out, "SplunkHEC[%d]: ok — sent test span to %s\n", i, splunkCfg.Endpoint)
+			_, _ = fmt.Fprintf(out, "%s: ok — sent test span to %s\n", b.Label, b.Endpoint)
 		}
 	}
 

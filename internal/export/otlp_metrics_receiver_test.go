@@ -65,6 +65,7 @@ func TestOTLPMetricsExporter_ExportsCanonicalMetrics(t *testing.T) {
 			m.RecordQueryLogEnrichmentCycle(3, 6, nil)
 			m.RecordSpansWithQueryIDRatio(4, 8)
 			m.SetNormalizedQuerySupported(true)
+			m.SetQueryOperationSupported(true)
 
 			exp, err := NewOTLPMetricsExporter(context.Background(), OTLPMetricsOptions{
 				Metrics:        m,

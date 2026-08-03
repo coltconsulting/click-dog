@@ -72,6 +72,24 @@ func TestCreateDashboards_QueryChecklistMentionsTraces(t *testing.T) {
 	}
 }
 
+func TestCreateDashboards_ActivityChecklistMentionsEnrichmentAndScope(t *testing.T) {
+	var buf bytes.Buffer
+	printDashboardChecklist(dashboardByName(t, "activity"), &buf)
+	out := buf.String()
+
+	for _, want := range []string{
+		"monitor.enrich_from_query_log: true",
+		"system.query_log",
+		"service",
+		"qualified/exported",
+		"not total ClickHouse traffic",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("activity post-import checklist missing %q; got:\n%s", want, out)
+		}
+	}
+}
+
 // TestCreateDashboards_EveryDashboardHasChecklist forces a post-import
 // checklist on every shipped dashboard, so adding a third dashboard without
 // import-time guidance fails loudly rather than shipping silent "No data"
@@ -816,6 +834,131 @@ func TestQueryDashboard_VolumeLabelsDisambiguated(t *testing.T) {
 	}
 }
 
+func TestActivityDashboard_FilterAndScopeContract(t *testing.T) {
+	dash := loadActivityDashboard(t)
+
+	description, ok := dash["description"].(string)
+	if !ok {
+		t.Fatal("activity dashboard missing string description")
+	}
+	for _, want := range []string{"Live-span-only", "qualified/exported", "not a complete audit log"} {
+		if !strings.Contains(description, want) {
+			t.Errorf("activity dashboard description missing %q", want)
+		}
+	}
+
+	wantVariables := map[string]string{
+		"service":     "service",
+		"env":         "env",
+		"user":        "@query_log.user",
+		"database":    "@query_log.databases",
+		"table":       "@query_log.tables",
+		"operation":   "@query_log.operation",
+		"access_type": "@query_log.access_type",
+		"host":        "@hostname",
+	}
+	tvs, ok := dash["template_variables"].([]interface{})
+	if !ok {
+		t.Fatal("activity dashboard template_variables missing or wrong type")
+	}
+	for _, raw := range tvs {
+		tv, ok := raw.(map[string]interface{})
+		if !ok {
+			t.Fatalf("activity template variable has type %T, want object", raw)
+		}
+		name, _ := tv["name"].(string)
+		prefix, _ := tv["prefix"].(string)
+		want, exists := wantVariables[name]
+		if !exists {
+			t.Errorf("unexpected activity template variable %q", name)
+			continue
+		}
+		if prefix != want {
+			t.Errorf("activity template variable %q prefix = %q, want %q", name, prefix, want)
+		}
+		delete(wantVariables, name)
+	}
+	if len(wantVariables) > 0 {
+		t.Errorf("activity dashboard missing template variables: %v", wantVariables)
+	}
+
+	queries := queryDashboardSpanSearchQueries(t, dash)
+	for _, query := range queries {
+		for _, want := range []string{
+			"$service",
+			"resource_name:query",
+			"@click_dog.source:span_log",
+			"@query_log.user:*",
+			"$env",
+			"$user",
+			"$database",
+			"$table",
+			"$operation",
+			"$access_type",
+			"$host",
+		} {
+			if !strings.Contains(query, want) {
+				t.Errorf("activity widget query missing %q: %q", want, query)
+			}
+		}
+		for _, notWant := range []string{"@click_dog.source:query_log", "resource_name:clickhouse.query", "@db."} {
+			if strings.Contains(query, notWant) {
+				t.Errorf("activity widget query uses backfill-only filter %q: %q", notWant, query)
+			}
+		}
+	}
+
+	note := queryDashboardNoteContent(t, dash, "# Click-Dog — Exported User Activity")
+	for _, want := range []string{"min_trace_duration_ms", "not total ClickHouse traffic", "not a complete audit record"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("activity scope note missing %q", want)
+		}
+	}
+}
+
+func TestActivityDashboard_SearchableRelationshipTables(t *testing.T) {
+	dash := loadActivityDashboard(t)
+	want := map[string][]string{
+		"Users and access types — exported activity": {"@query_log.user", "@query_log.access_type"},
+		"User → database — exported activity":        {"@query_log.user", "@query_log.databases", "@query_log.access_type"},
+		"User → table — exported activity":           {"@query_log.user", "@query_log.tables", "@query_log.operation"},
+		"User → operation — exported activity":       {"@query_log.user", "@query_log.operation", "@query_log.access_type"},
+	}
+
+	for title, wantFields := range want {
+		def := findWidgetDefinitionByTitle(t, dash, title)
+		if got := def["type"]; got != "query_table" {
+			t.Errorf("activity relationship widget %q type = %v, want query_table", title, got)
+		}
+		if got := def["has_search_bar"]; got != "always" {
+			t.Errorf("activity relationship widget %q has_search_bar = %v, want always", title, got)
+		}
+		queries := widgetQueries(t, def)
+		if len(queries) != 1 {
+			t.Fatalf("activity relationship widget %q has %d queries, want 1", title, len(queries))
+		}
+		groupBy, ok := queries[0]["group_by"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("activity relationship widget %q group_by has type %T, want flat object", title, queries[0]["group_by"])
+		}
+		rawFields, ok := groupBy["fields"].([]interface{})
+		if !ok {
+			t.Fatalf("activity relationship widget %q group_by.fields has type %T, want array", title, groupBy["fields"])
+		}
+		gotFields := make([]string, 0, len(rawFields))
+		for _, raw := range rawFields {
+			field, ok := raw.(string)
+			if !ok {
+				t.Fatalf("activity relationship widget %q field has type %T, want string", title, raw)
+			}
+			gotFields = append(gotFields, field)
+		}
+		if !slices.Equal(gotFields, wantFields) {
+			t.Errorf("activity relationship widget %q fields = %v, want %v", title, gotFields, wantFields)
+		}
+	}
+}
+
 // queryDashboardWidgetTitles returns the title of every widget that has one
 // (note widgets carry content, not a title, and are skipped).
 func queryDashboardWidgetTitles(t *testing.T, dash map[string]interface{}) []string {
@@ -1176,6 +1319,7 @@ var healthDashboardMapping = []healthDashboardMetric{
 	{prom: "click_dog_query_log_enrichment_match_ratio", rename: "query_log.enrichment.match_ratio"},
 	{prom: "click_dog_spans_with_query_id_ratio", rename: "spans_with_query_id_ratio"},
 	{prom: "click_dog_normalized_query_supported", rename: "normalized_query_supported"},
+	{prom: "click_dog_query_operation_supported", rename: "query_operation_supported"},
 	// Topology self-audit (sidecar + use_cluster_queries anti-pattern). Same
 	// four-way lockstep as above — note widget YAML, README table, datadog.md
 	// table, and this slice.
@@ -1377,6 +1521,19 @@ func loadQueryDashboard(t *testing.T) map[string]interface{} {
 	var dash map[string]interface{}
 	if err := json.Unmarshal(data, &dash); err != nil {
 		t.Fatalf("query dashboard is not valid JSON: %v", err)
+	}
+	return dash
+}
+
+func loadActivityDashboard(t *testing.T) map[string]interface{} {
+	t.Helper()
+	data, err := embeddedDashboards.ReadFile("dashboards/datadog-user-activity.json")
+	if err != nil {
+		t.Fatalf("reading activity dashboard: %v", err)
+	}
+	var dash map[string]interface{}
+	if err := json.Unmarshal(data, &dash); err != nil {
+		t.Fatalf("activity dashboard is not valid JSON: %v", err)
 	}
 	return dash
 }

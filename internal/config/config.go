@@ -185,7 +185,7 @@ type Config struct {
 	LogLevel    string            `yaml:"log_level"`    // debug, info, warn, error (default: info)
 	LogFile     string            `yaml:"log_file"`     // Optional log file path (if empty, logs to stderr only)
 	LogFormat   string            `yaml:"log_format"`   // text or json (default: text)
-	LogRotation LogRotationConfig `yaml:"log_rotation"` // Log rotation settings (only when log_file is set)
+	LogRotation LogRotationConfig `yaml:"log_rotation"` // Log rotation settings; validated even when log_file is empty
 	Metrics     MetricsConfig     `yaml:"metrics"`      // Prometheus metrics endpoint
 	Health      HealthConfig      `yaml:"health"`       // HTTP health endpoints (/healthz, /readyz, /status)
 	Webhook     WebhookConfig     `yaml:"webhook"`      // Webhook notifications for critical events
@@ -344,7 +344,7 @@ type MonitorConfig struct {
 	MinSpanDurationMs  int  `yaml:"min_span_duration_ms"`  // Only export spans >= this duration from those traces (0 = export all)
 	MaxTraceDurationMs int  `yaml:"max_trace_duration_ms"` // Skip traces/queries with spans > this duration (0 = no limit)
 	MaxSpanDurationMs  int  `yaml:"max_span_duration_ms"`  // Skip individual spans > this duration (0 = no limit)
-	MaxQueryLength     int  `yaml:"max_query_length"`      // Skip queries with SQL text > this many characters (0 = no limit, default: 100000)
+	MaxQueryLength     int  `yaml:"max_query_length"`      // Skip queries with SQL text > this many characters (0/omitted loads as default 100000)
 	CheckIntervalS     int  `yaml:"check_interval_s"`      // Scheduled poll interval in seconds (default: 30; must be > 0 when enabled)
 	LookbackS          int  `yaml:"lookback_s"`            // How far back to look for queries (default: check_interval_s + lookback_buffer_s)
 	LookbackBufferS    int  `yaml:"lookback_buffer_s"`     // Extra seconds added to check_interval when computing default lookback (default: 10)
@@ -813,6 +813,9 @@ func LoadConfig(path string) (*Config, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
+	if err := config.validateTLSFiles(); err != nil {
+		return nil, err
+	}
 
 	return &config, nil
 }
@@ -850,7 +853,65 @@ func (c *Config) validationWarnings() []string {
 	var warnings []string
 	warnings = append(warnings, c.topologyAuditWarnings()...)
 	warnings = append(warnings, c.keeperSecurityWarnings()...)
+	warnings = append(warnings, c.tlsMaterialWarnings()...)
 	return warnings
+}
+
+// tlsMaterialWarnings reports certificate settings that are accepted but have
+// no effect because TLS is disabled. An incomplete OTEL client certificate
+// pair is deliberately omitted here because Validate reports that incoherent
+// configuration as a hard error instead.
+func (c *Config) tlsMaterialWarnings() []string {
+	var warnings []string
+	if !c.ClickHouse.Secure && c.ClickHouse.CACert != "" {
+		warnings = append(warnings, "clickhouse.ca_cert is configured but clickhouse.secure is false; the CA certificate will be ignored. Set clickhouse.secure: true to use it, or remove clickhouse.ca_cert")
+	}
+	for i, o := range c.Exporters.OTEL {
+		if o.Secure {
+			continue
+		}
+		if o.CACert != "" {
+			warnings = append(warnings, fmt.Sprintf("exporters.otel[%d].ca_cert is configured but exporters.otel[%d].secure is false; the CA certificate will be ignored. Set secure: true for this exporter to use it, or remove ca_cert", i, i))
+		}
+		if o.ClientCert != "" && o.ClientKey != "" {
+			warnings = append(warnings, fmt.Sprintf("exporters.otel[%d].client_cert and client_key are configured but exporters.otel[%d].secure is false; the mTLS client certificate will be ignored. Set secure: true for this exporter to use it, or remove client_cert and client_key", i, i))
+		}
+	}
+	return warnings
+}
+
+// validateTLSFiles verifies that active TLS file references can be read during
+// config loading, including offline -validate mode. Keep this separate from
+// Validate so callers can validate an in-memory Config without depending on
+// the local filesystem. Certificate parsing remains the responsibility of the
+// TLS constructors, which already provide format-specific errors.
+func (c *Config) validateTLSFiles() error {
+	var errs []string
+	check := func(label, path string) {
+		if path == "" {
+			return
+		}
+		if _, err := os.ReadFile(path); err != nil {
+			errs = append(errs, fmt.Sprintf("%s %q cannot be read: %v; fix the path or file permissions", label, path, err))
+		}
+	}
+
+	if c.ClickHouse.Secure {
+		check("clickhouse.ca_cert", c.ClickHouse.CACert)
+	}
+	for i, o := range c.Exporters.OTEL {
+		if !o.Secure {
+			continue
+		}
+		check(fmt.Sprintf("exporters.otel[%d].ca_cert", i), o.CACert)
+		check(fmt.Sprintf("exporters.otel[%d].client_cert", i), o.ClientCert)
+		check(fmt.Sprintf("exporters.otel[%d].client_key", i), o.ClientKey)
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("configuration TLS file validation failed:\n  - %s", strings.Join(errs, "\n  - "))
+	}
+	return nil
 }
 
 func (c *Config) keeperSecurityWarnings() []string {
@@ -1046,6 +1107,9 @@ func (c *Config) Validate() error {
 		if o.InsecureSkipVerify && !o.Secure {
 			errs = append(errs, fmt.Sprintf("exporters.otel[%d].insecure_skip_verify requires secure: true", i))
 		}
+		if (o.ClientCert != "") != (o.ClientKey != "") {
+			errs = append(errs, fmt.Sprintf("exporters.otel[%d].client_cert and exporters.otel[%d].client_key must be provided together for mTLS; set both fields or remove the configured one", i, i))
+		}
 		if o.MaxQueryLength < 0 {
 			errs = append(errs, fmt.Sprintf("exporters.otel[%d].max_query_length cannot be negative, got %d", i, o.MaxQueryLength))
 		}
@@ -1053,7 +1117,7 @@ func (c *Config) Validate() error {
 
 	// Exporters validation: at least one exporter must be configured
 	if len(c.Exporters.OTEL) == 0 && len(c.Exporters.SplunkHEC) == 0 {
-		errs = append(errs, "at least one exporter must be configured (otel or exporters.otel/exporters.splunk_hec)")
+		errs = append(errs, "at least one exporter must be configured under exporters.otel or exporters.splunk_hec")
 	}
 
 	// Every OTEL exporter needs a destination. A list entry with an empty

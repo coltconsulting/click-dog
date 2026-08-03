@@ -29,8 +29,14 @@ const (
 // Downstream consumers can distinguish backfill spans via the click_dog.source
 // span attribute: "query_log" vs "span_log".
 type QueryLog struct {
-	QueryID         string
-	QueryKind       string
+	QueryID   string
+	QueryKind string
+	// QueryOperation is ClickHouse's statement classification from
+	// system.query_log.query_kind (for example Select, Insert, or Alter).
+	// QueryKind above intentionally remains the query-log lifecycle event
+	// (QueryFinish / ExceptionWhileProcessing) for compatibility with the
+	// existing backfill identity and exported db.query_kind contract.
+	QueryOperation  string
 	EventTime       time.Time
 	QueryDurationMs uint64
 	// ElapsedMs is the wall-clock runtime so far of a still-running query, in
@@ -230,6 +236,19 @@ type SpanExporter interface {
 
 	// Close shuts down the exporter, flushing any pending data.
 	Close(ctx context.Context) error
+}
+
+// ConnectivityChecker is the optional companion to SpanExporter for backends
+// that can actively verify reachability without exporting anything.
+// `click-dog check` type-asserts each constructed exporter to this interface
+// and probes the ones that implement it; exporters with no meaningful probe
+// simply don't implement it and pass construction only. It is deliberately
+// separate from SpanExporter so non-network exporters (e.g. the dry-run sink)
+// need no stub implementation.
+type ConnectivityChecker interface {
+	// CheckConnectivity verifies the backend is reachable, honoring ctx for
+	// cancellation and deadline. It must not export data.
+	CheckConnectivity(ctx context.Context) error
 }
 
 // CanaryQuerier is the interface for running lightweight canary queries.

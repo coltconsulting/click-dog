@@ -15,7 +15,7 @@ click-dog-darwin-*
 *.prof
 coverage.html
 
-# Release/build artefacts
+# Release/build artifacts
 dist/
 *.oci.tar
 
@@ -45,3 +45,8 @@ site/
 
 # AI
 .claude/
+# ai/ orchestration workspace: only ai/prompts/ (and ai/README.md) are
+# committed; per-session decision/finding/context files stay local.
+ai/decisions/
+ai/findings/
+ai/extended-context/

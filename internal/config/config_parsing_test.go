@@ -176,12 +176,37 @@ log_level: debug
 log_file: /var/log/click-dog.log
 `
 
+// validFullYAMLWithTLSFiles gives the full load-path fixture readable TLS
+// files. LoadConfig validates active certificate paths before returning, while
+// certificate syntax remains covered by the connection constructors.
+func validFullYAMLWithTLSFiles(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	paths := map[string]string{
+		"/etc/ssl/ca.pem":         filepath.Join(dir, "clickhouse-ca.pem"),
+		"/etc/ssl/otel-ca.pem":    filepath.Join(dir, "otel-ca.pem"),
+		"/etc/ssl/client.pem":     filepath.Join(dir, "client.pem"),
+		"/etc/ssl/client-key.pem": filepath.Join(dir, "client-key.pem"),
+	}
+	for _, path := range paths {
+		if err := os.WriteFile(path, []byte("test TLS material\n"), 0o600); err != nil {
+			t.Fatalf("writing TLS fixture %s: %v", path, err)
+		}
+	}
+	return strings.NewReplacer(
+		"/etc/ssl/ca.pem", paths["/etc/ssl/ca.pem"],
+		"/etc/ssl/otel-ca.pem", paths["/etc/ssl/otel-ca.pem"],
+		"/etc/ssl/client.pem", paths["/etc/ssl/client.pem"],
+		"/etc/ssl/client-key.pem", paths["/etc/ssl/client-key.pem"],
+	).Replace(validFullYAML)
+}
+
 // ---------------------------------------------------------------------------
 // LoadConfig: valid configs (full config parsing)
 // ---------------------------------------------------------------------------
 
 func TestLoadConfig_ValidFull(t *testing.T) {
-	cfg, err := LoadConfig(writeConfigFile(t, validFullYAML))
+	cfg, err := LoadConfig(writeConfigFile(t, validFullYAMLWithTLSFiles(t)))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

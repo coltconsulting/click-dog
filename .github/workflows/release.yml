@@ -48,14 +48,14 @@ jobs:
       # which exchanges this token for a Fulcio-issued signing certificate.
       id-token: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.26.4'
+          go-version: '1.26.5'
           cache: false
 
       - name: Log in to GHCR
@@ -71,17 +71,18 @@ jobs:
       - name: Check GoReleaser config
         # Keep this separate from the release step so schema/config errors
         # fail before any publish/signing work starts.
-        uses: goreleaser/goreleaser-action@1a80836c5c9d9e5755a25cb59ec6f45a3b5f41a8 # v7.2.1
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: '~> v2'
           args: check
 
       - name: Install cosign
-        # Pinned to commit SHA (v3.9.2) rather than the @v3 tag: this PR's
-        # whole point is closing the supply-chain gap, and a compromised
-        # cosign-installer tag could substitute a malicious cosign binary
-        # that would silently pass our verify-blob calls. Bump deliberately.
-        uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+        # Pin the action SHA to prevent tag drift. Keep the installed binary
+        # on Cosign 2.6.1 while GoReleaser and release verification consume
+        # detached .sig/.pem files; Cosign 3 requires a bundle migration.
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: 'v2.6.1'
 
       - name: Run GoReleaser
         # SHA-pinned for the same reason as cosign-installer above: this
@@ -89,7 +90,7 @@ jobs:
         # produce unsigned (or wrongly-signed) artifacts. The other
         # actions in this workflow stay on floating tags by repo
         # convention — they don't affect the signed-artifact chain.
-        uses: goreleaser/goreleaser-action@1a80836c5c9d9e5755a25cb59ec6f45a3b5f41a8 # v7.2.1
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: '~> v2'
           args: release --clean

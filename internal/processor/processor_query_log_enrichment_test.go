@@ -15,6 +15,7 @@ func TestEnrichSpanFromQueryLog_Basic(t *testing.T) {
 	}
 	ql := model.QueryLog{
 		QueryID:          "qid-1",
+		QueryOperation:   "Select",
 		User:             "default",
 		ClientName:       "clickhouse-go",
 		ClientHostname:   "app-server-1",
@@ -35,6 +36,8 @@ func TestEnrichSpanFromQueryLog_Basic(t *testing.T) {
 
 	checks := map[string]string{
 		"query_log.query_id":          "qid-1",
+		"query_log.operation":         "select",
+		"query_log.access_type":       "read",
 		"query_log.user":              "default",
 		"query_log.client_name":       "clickhouse-go",
 		"query_log.client_hostname":   "app-server-1",
@@ -70,6 +73,64 @@ func TestEnrichSpanFromQueryLog_Basic(t *testing.T) {
 	// Original attribute preserved
 	if span.Attributes["db.statement"] != "SELECT 1" {
 		t.Errorf("db.statement lost after enrichment")
+	}
+}
+
+func TestClassifyQueryAccess(t *testing.T) {
+	tests := []struct {
+		operation string
+		want      string
+	}{
+		// Current ClickHouse IAST::QueryKind values plus compatibility aliases.
+		// Keep this exhaustive so new upstream kinds fall back to other until
+		// their semantics are reviewed.
+		{operation: "", want: "other"},
+		{operation: "Select", want: "read"},
+		{operation: "Insert", want: "write"},
+		{operation: "Delete", want: "write"},
+		{operation: "Update", want: "write"},
+		{operation: "Create", want: "ddl"},
+		{operation: "Drop", want: "ddl"},
+		{operation: "Undrop", want: "ddl"},
+		{operation: "Rename", want: "ddl"},
+		{operation: "Optimize", want: "write"},
+		{operation: "Check", want: "read"},
+		{operation: "Alter", want: "ddl"},
+		{operation: "Grant", want: "admin"},
+		{operation: "Revoke", want: "admin"},
+		{operation: "Move", want: "admin"},
+		{operation: "System", want: "admin"},
+		{operation: "Set", want: "admin"},
+		{operation: "Use", want: "admin"},
+		{operation: " SHOW ", want: "read"},
+		{operation: "Exists", want: "read"},
+		{operation: "Describe", want: "read"},
+		{operation: "Explain", want: "read"},
+		{operation: "Backup", want: "admin"},
+		{operation: "Restore", want: "admin"},
+		{operation: "KillQuery", want: "admin"},
+		{operation: "ExternalDDL", want: "ddl"},
+		{operation: "Truncate", want: "ddl"},
+		{operation: "Attach", want: "ddl"},
+		{operation: "Detach", want: "ddl"},
+		{operation: "Begin", want: "admin"},
+		{operation: "Commit", want: "admin"},
+		{operation: "Rollback", want: "admin"},
+		{operation: "SetTransactionSnapshot", want: "admin"},
+		{operation: "AsyncInsertFlush", want: "write"},
+		{operation: "ParallelWithQuery", want: "other"},
+		{operation: "Copy", want: "other"},
+		{operation: "Snapshot", want: "admin"},
+		{operation: "KillMutation", want: "admin"},
+		{operation: "FutureQueryKind", want: "other"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.operation, func(t *testing.T) {
+			if got := classifyQueryAccess(tt.operation); got != tt.want {
+				t.Errorf("classifyQueryAccess(%q) = %q, want %q", tt.operation, got, tt.want)
+			}
+		})
 	}
 }
 

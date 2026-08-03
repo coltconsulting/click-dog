@@ -87,6 +87,152 @@ func TestSplunkHEC_ExportSpans(t *testing.T) {
 	}
 }
 
+func TestSplunkHEC_ExportSpans_LiveSourceAttribute(t *testing.T) {
+	tests := []struct {
+		name       string
+		attributes map[string]string
+		wantSource string
+	}{
+		{
+			name: "supplied source is authoritative",
+			attributes: map[string]string{
+				liveSpanSourceKey: "test-span",
+				"custom":          "preserved",
+			},
+			wantSource: "test-span",
+		},
+		{
+			name:       "absent source defaults to span log",
+			attributes: map[string]string{"custom": "preserved"},
+			wantSource: liveSpanDefaultSource,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var receivedBody string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				buf, _ := io.ReadAll(r.Body)
+				receivedBody = string(buf)
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer server.Close()
+
+			exp, err := NewSplunkHECExporter(config.SplunkHECConfig{
+				Endpoint: server.URL,
+				Token:    "test",
+			})
+			if err != nil {
+				t.Fatalf("NewSplunkHECExporter returned err: %v", err)
+			}
+
+			span := model.OpenTelemetrySpan{
+				SpanID:      42,
+				TraceID:     testTraceID,
+				StartTimeUs: 1_000_000,
+				Attributes:  tt.attributes,
+			}
+			if _, err := exp.ExportSpans(context.Background(), []model.OpenTelemetrySpan{span}); err != nil {
+				t.Fatalf("ExportSpans returned err: %v", err)
+			}
+
+			var ev hecEvent
+			if err := json.Unmarshal([]byte(receivedBody), &ev); err != nil {
+				t.Fatalf("failed to parse HEC event: %v", err)
+			}
+			eventMap, ok := ev.Event.(map[string]interface{})
+			if !ok {
+				t.Fatalf("event is %T, want map", ev.Event)
+			}
+			if got := eventMap["click_dog_source"]; got != tt.wantSource {
+				t.Fatalf("click_dog_source = %v, want %q", got, tt.wantSource)
+			}
+			attributes, ok := eventMap["attributes"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("attributes is %T, want map", eventMap["attributes"])
+			}
+			if _, ok := attributes[liveSpanSourceKey]; ok {
+				t.Fatalf("nested attributes unexpectedly contain %q", liveSpanSourceKey)
+			}
+			if got := attributes["custom"]; got != "preserved" {
+				t.Fatalf("custom = %v, want preserved", got)
+			}
+		})
+	}
+}
+
+func TestSplunkHEC_ExportSpans_LiveDBStatementTruncation(t *testing.T) {
+	tests := []struct {
+		name           string
+		maxQueryLength int
+		query          string
+		want           string
+	}{
+		{name: "boundary", maxQueryLength: 8, query: "SELECT 1", want: "SELECT 1"},
+		{name: "over limit", maxQueryLength: 8, query: "SELECT 12", want: "SELECT 1..."},
+		{name: "no limit", maxQueryLength: 0, query: "SELECT 12", want: "SELECT 12"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var receivedBody string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				buf, _ := io.ReadAll(r.Body)
+				receivedBody = string(buf)
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer server.Close()
+
+			exp, err := NewSplunkHECExporter(config.SplunkHECConfig{
+				Endpoint:       server.URL,
+				Token:          "test",
+				MaxQueryLength: tt.maxQueryLength,
+			})
+			if err != nil {
+				t.Fatalf("NewSplunkHECExporter returned err: %v", err)
+			}
+			// Config loading supplies the production default. Setting the field here
+			// exercises the serializer's documented non-positive no-limit contract.
+			exp.maxQueryLength = tt.maxQueryLength
+
+			span := model.OpenTelemetrySpan{
+				SpanID:      42,
+				TraceID:     testTraceID,
+				StartTimeUs: 1_000_000,
+				Attributes: map[string]string{
+					liveSpanQueryKey: tt.query,
+					"custom":         "unchanged-long-value",
+				},
+			}
+			if _, err := exp.ExportSpans(context.Background(), []model.OpenTelemetrySpan{span}); err != nil {
+				t.Fatalf("ExportSpans returned err: %v", err)
+			}
+
+			var ev hecEvent
+			if err := json.Unmarshal([]byte(receivedBody), &ev); err != nil {
+				t.Fatalf("failed to parse HEC event: %v", err)
+			}
+			eventMap, ok := ev.Event.(map[string]interface{})
+			if !ok {
+				t.Fatalf("event is %T, want map", ev.Event)
+			}
+			attributes, ok := eventMap["attributes"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("attributes is %T, want map", eventMap["attributes"])
+			}
+			if got := attributes[liveSpanQueryKey]; got != tt.want {
+				t.Fatalf("%s = %v, want %q", liveSpanQueryKey, got, tt.want)
+			}
+			if got := attributes["custom"]; got != "unchanged-long-value" {
+				t.Fatalf("custom = %v, want unchanged-long-value", got)
+			}
+			if got := span.Attributes[liveSpanQueryKey]; got != tt.query {
+				t.Fatalf("input %s mutated to %q, want %q", liveSpanQueryKey, got, tt.query)
+			}
+		})
+	}
+}
+
 func TestSplunkHEC_ExportSpans_Empty(t *testing.T) {
 	exp, err := NewSplunkHECExporter(config.SplunkHECConfig{
 		Endpoint: "http://localhost:9999",

@@ -235,6 +235,16 @@ func attrByKey(attrs []*commonpb.KeyValue, key string) *commonpb.AnyValue {
 	return nil
 }
 
+func attrCount(attrs []*commonpb.KeyValue, key string) int {
+	count := 0
+	for _, attr := range attrs {
+		if attr.Key == key {
+			count++
+		}
+	}
+	return count
+}
+
 func stringAttrValue(t *testing.T, attrs []*commonpb.KeyValue, key string) string {
 	t.Helper()
 	value := attrByKey(attrs, key)
@@ -268,6 +278,93 @@ func stringSliceAttrValues(t *testing.T, attrs []*commonpb.KeyValue, key string)
 		out[i] = stringValue.StringValue
 	}
 	return out
+}
+
+func TestExportSpans_LiveSourceAttribute(t *testing.T) {
+	tests := []struct {
+		name       string
+		attributes map[string]string
+		wantSource string
+	}{
+		{
+			name: "supplied source is authoritative",
+			attributes: map[string]string{
+				liveSpanSourceKey: "test-span",
+				"custom":          "preserved",
+			},
+			wantSource: "test-span",
+		},
+		{
+			name:       "absent source defaults to span log",
+			attributes: map[string]string{"custom": "preserved"},
+			wantSource: liveSpanDefaultSource,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockTraceClient{}
+			exp := newTestExporter(mock)
+			span := makeModelSpans(1, 1)[0]
+			span.Attributes = tt.attributes
+
+			if _, err := exp.ExportSpans(context.Background(), []model.OpenTelemetrySpan{span}); err != nil {
+				t.Fatalf("ExportSpans returned err: %v", err)
+			}
+
+			attrs := firstExportedSpan(t, mock).Attributes
+			if got := attrCount(attrs, liveSpanSourceKey); got != 1 {
+				t.Fatalf("%s count = %d, want exactly 1", liveSpanSourceKey, got)
+			}
+			if got := stringAttrValue(t, attrs, liveSpanSourceKey); got != tt.wantSource {
+				t.Fatalf("%s = %q, want %q", liveSpanSourceKey, got, tt.wantSource)
+			}
+			if got := stringAttrValue(t, attrs, "custom"); got != "preserved" {
+				t.Fatalf("custom = %q, want preserved", got)
+			}
+		})
+	}
+}
+
+func TestExportSpans_LiveDBStatementTruncation(t *testing.T) {
+	tests := []struct {
+		name           string
+		maxQueryLength int
+		query          string
+		want           string
+	}{
+		{name: "boundary", maxQueryLength: 8, query: "SELECT 1", want: "SELECT 1"},
+		{name: "over limit", maxQueryLength: 8, query: "SELECT 12", want: "SELECT 1..."},
+		{name: "no limit", maxQueryLength: 0, query: "SELECT 12", want: "SELECT 12"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockTraceClient{}
+			exp := newTestExporter(mock)
+			exp.maxQueryLength = tt.maxQueryLength
+			span := makeModelSpans(1, 1)[0]
+			span.Attributes = map[string]string{
+				liveSpanQueryKey: tt.query,
+				"custom":         "unchanged-long-value",
+			}
+
+			if _, err := exp.ExportSpans(context.Background(), []model.OpenTelemetrySpan{span}); err != nil {
+				t.Fatalf("ExportSpans returned err: %v", err)
+			}
+
+			attrs := firstExportedSpan(t, mock).Attributes
+			if got := stringAttrValue(t, attrs, liveSpanQueryKey); got != tt.want {
+				t.Fatalf("%s = %q, want %q", liveSpanQueryKey, got, tt.want)
+			}
+			if got := stringAttrValue(t, attrs, "custom"); got != "unchanged-long-value" {
+				t.Fatalf("custom = %q, want unchanged-long-value", got)
+			}
+			if got := span.Attributes[liveSpanQueryKey]; got != tt.query {
+				t.Fatalf("input %s mutated to %q, want %q", liveSpanQueryKey, got, tt.query)
+			}
+		})
+	}
 }
 
 func TestExportSpans_LargeBatchChunks(t *testing.T) {
@@ -591,7 +688,7 @@ func TestDeterministicQueryIDs(t *testing.T) {
 	row := model.QueryLog{QueryID: "q-abc-123", EventTime: base, QueryKind: "Select"}
 
 	// Re-exporting the same row must yield identical, correctly-sized, non-zero
-	// IDs so the collector dedups the retry by (trace_id, span_id).
+	// IDs so the retry carries the same identifiable (trace_id, span_id).
 	tid1, sid1 := deterministicQueryIDs(row)
 	tid2, sid2 := deterministicQueryIDs(row)
 	if len(tid1) != 16 || len(sid1) != 8 {

@@ -56,6 +56,7 @@ const tblQueryLog = "{TABLE_QUERY_LOG}"
 const tblSpanLog = "{TABLE_SPAN_LOG}"
 const tblProcesses = "{TABLE_PROCESSES}"
 const queryLogNormalizedColumns = "{QUERY_LOG_NORMALIZED_COLUMNS}"
+const queryLogOperationColumn = "{QUERY_LOG_OPERATION_COLUMN}"
 const processesNormalizedColumn = "{PROCESSES_NORMALIZED_COLUMN}"
 
 // enrichSelectAnchor is a dedicated marker setUserFilter replaces with the
@@ -68,12 +69,23 @@ const queryLogNormalizedColumnsSQL = `
 				normalized_query_hash,
 				normalizeQuery(query) AS normalized_query,`
 
+const queryLogOperationColumnSQL = `
+				query_kind AS query_operation,`
+
 const normalizedQueryHashProbeSQL = `
 			SELECT count()
 			FROM system.columns
 			WHERE database = 'system'
 			  AND table = 'query_log'
 			  AND name = 'normalized_query_hash'
+		`
+
+const queryKindProbeSQL = `
+			SELECT count()
+			FROM system.columns
+			WHERE database = 'system'
+			  AND table = 'query_log'
+			  AND name = 'query_kind'
 		`
 
 // normalizedQueryHashClusterProbeSQL uses the same placeholder style as the
@@ -91,10 +103,24 @@ const normalizedQueryHashClusterProbeSQL = `
 			)
 		`
 
+const queryKindClusterProbeSQL = `
+			SELECT count() AS replicas, countIf(has_query_kind) AS supported
+			FROM (
+				SELECT
+					hostName() AS host,
+					countIf(name = 'query_kind') > 0 AS has_query_kind
+				FROM {TABLE_SYSTEM_COLUMNS}
+				WHERE database = 'system'
+				  AND table = 'query_log'
+				GROUP BY host
+			)
+		`
+
 const queryLogSelectSQL = `
 			SELECT
 				query_id,
 				type as query_kind,
+				` + queryLogOperationColumn + `
 				event_time,
 				query_duration_ms,
 				query,
@@ -181,6 +207,7 @@ const queryLogEnrichSelectSQL = `
 			SELECT
 				query_id,
 				type as query_kind,
+				` + queryLogOperationColumn + `
 				event_time,
 				query_duration_ms,
 				` + queryLogNormalizedColumns + `
@@ -214,11 +241,11 @@ var queryFamilyExactGroupsSQL = fmt.Sprintf(`
 				normalized_query_hash,
 				min(normalizeQuery(query)) AS normalized_query,
 				count() AS execution_count,
-				quantileTDigest(0.95)(query_duration_ms) AS p95_duration_ms,
-				quantileTDigest(0.99)(query_duration_ms) AS p99_duration_ms,
+				toFloat64(quantileTDigest(0.95)(query_duration_ms)) AS p95_duration_ms,
+				toFloat64(quantileTDigest(0.99)(query_duration_ms)) AS p99_duration_ms,
 				max(memory_usage) AS max_memory_usage,
-				quantileTDigest(0.95)(read_rows) AS p95_read_rows,
-				quantileTDigest(0.95)(read_bytes) AS p95_read_bytes,
+				toFloat64(quantileTDigest(0.95)(read_rows)) AS p95_read_rows,
+				toFloat64(quantileTDigest(0.95)(read_bytes)) AS p95_read_bytes,
 				topK(%[1]d)(user) AS top_users,
 				topK(%[1]d)(client_name) AS top_clients,
 				arrayReduce('topK(%[1]d)', arrayFlatten(groupArray(tables))) AS top_tables,
@@ -282,6 +309,7 @@ type ClickHouseReader struct {
 	queryFamilySelect  string
 	currentQuerySelect string
 	queryLogNormalized bool
+	queryLogOperation  bool
 
 	// Resolved table references (cluster-aware) reused by the readiness
 	// doctor to build its diagnostic SQL without re-deriving cluster mode.
@@ -340,14 +368,27 @@ func buildClusterNormalizedProbeSQL(cluster string) string {
 	return strings.ReplaceAll(normalizedQueryHashClusterProbeSQL, "{TABLE_SYSTEM_COLUMNS}", buildClusterAllReplicasRef("system.columns", cluster))
 }
 
+func buildClusterQueryKindProbeSQL(cluster string) string {
+	return strings.ReplaceAll(queryKindClusterProbeSQL, "{TABLE_SYSTEM_COLUMNS}", buildClusterAllReplicasRef("system.columns", cluster))
+}
+
 func buildQueryLogSQL(template, tableRef string, includeNormalized bool) string {
+	return buildQueryLogSQLWithCapabilities(template, tableRef, includeNormalized, false)
+}
+
+func buildQueryLogSQLWithCapabilities(template, tableRef string, includeNormalized, includeOperation bool) string {
 	normalizedColumns := ""
 	if includeNormalized {
 		normalizedColumns = queryLogNormalizedColumnsSQL
 	}
+	operationColumn := ""
+	if includeOperation {
+		operationColumn = queryLogOperationColumnSQL
+	}
 
 	query := strings.ReplaceAll(template, tblQueryLog, tableRef)
-	return strings.ReplaceAll(query, queryLogNormalizedColumns, normalizedColumns)
+	query = strings.ReplaceAll(query, queryLogNormalizedColumns, normalizedColumns)
+	return strings.ReplaceAll(query, queryLogOperationColumn, operationColumn)
 }
 
 // buildCurrentQuerySQL resolves the system.processes table reference and splices
@@ -394,11 +435,51 @@ func detectQueryLogNormalizedSupport(ctx context.Context, conn driver.Conn, clus
 	return count > 0
 }
 
+func detectQueryLogOperationSupport(ctx context.Context, conn driver.Conn, cluster string, useClusterQueries bool) bool {
+	if useClusterQueries {
+		if cluster == "" {
+			clicklog.Warn("Query operation enrichment disabled in cluster query mode: no cluster name configured")
+			return false
+		}
+		var replicas, supported uint64
+		if err := conn.QueryRow(ctx, buildClusterQueryKindProbeSQL(cluster)).Scan(&replicas, &supported); err != nil {
+			clicklog.Warn("Could not verify query_log.query_kind support across cluster replicas; query operation enrichment disabled: %v", err)
+			return false
+		}
+		if replicas == 0 {
+			clicklog.Warn("Could not verify any cluster replicas expose system.query_log; query operation enrichment disabled")
+			return false
+		}
+		if supported != replicas {
+			clicklog.Warn("Query operation enrichment disabled in cluster query mode: query_kind found on %d/%d replicas", supported, replicas)
+			return false
+		}
+		clicklog.Info("Query operation enrichment enabled in cluster query mode: query_kind found on all %d replicas", replicas)
+		return true
+	}
+
+	var count uint64
+	if err := conn.QueryRow(ctx, queryKindProbeSQL).Scan(&count); err != nil {
+		clicklog.Warn("Could not detect query_log.query_kind support; query operation enrichment disabled: %v", err)
+		return false
+	}
+	return count > 0
+}
+
 func capabilityProbeContext(timeoutS int) (context.Context, context.CancelFunc) {
 	if timeoutS > 0 {
 		return context.WithTimeout(context.Background(), time.Duration(timeoutS)*time.Second)
 	}
 	return context.WithCancel(context.Background())
+}
+
+// runCapabilityProbe gives each startup capability check its own complete
+// timeout budget. Keeping context creation and cancellation together prevents
+// a slow earlier probe from silently consuming the budget of later probes.
+func runCapabilityProbe(timeoutS int, probe func(context.Context) bool) bool {
+	ctx, cancel := capabilityProbeContext(timeoutS)
+	defer cancel()
+	return probe(ctx)
 }
 
 // NewClickHouseReader opens a connection, prepares the SQL templates, and
@@ -474,22 +555,26 @@ func NewClickHouseReader(cfg config.ClickHouseConfig, filters config.FiltersConf
 	processesRef := buildTableRef("system.processes", cfg.Cluster, cfg.UseClusterQueries)
 	useClusterQueryLog := cfg.UseClusterQueries
 
-	capabilityCtx, capabilityCancel := capabilityProbeContext(cfg.QueryTimeoutS)
-	queryLogNormalized := detectQueryLogNormalizedSupport(capabilityCtx, conn, cfg.Cluster, useClusterQueryLog)
-	capabilityCancel()
+	queryLogNormalized := runCapabilityProbe(cfg.QueryTimeoutS, func(ctx context.Context) bool {
+		return detectQueryLogNormalizedSupport(ctx, conn, cfg.Cluster, useClusterQueryLog)
+	})
+	queryLogOperation := runCapabilityProbe(cfg.QueryTimeoutS, func(ctx context.Context) bool {
+		return detectQueryLogOperationSupport(ctx, conn, cfg.Cluster, useClusterQueryLog)
+	})
 
 	r := &ClickHouseReader{
 		conn:               conn,
 		queryTimeout:       time.Duration(cfg.QueryTimeoutS) * time.Second,
-		queryLogSelect:     buildQueryLogSQL(queryLogSelectSQL, queryLogRef, queryLogNormalized),
+		queryLogSelect:     buildQueryLogSQLWithCapabilities(queryLogSelectSQL, queryLogRef, queryLogNormalized, queryLogOperation),
 		traceIDSelect:      strings.ReplaceAll(traceIDSelectSQL, tblSpanLog, spanLogRef),
 		traceIDByQueryID:   strings.ReplaceAll(traceIDByQueryIDSelectSQL, tblSpanLog, spanLogRef),
 		spanSelect:         strings.ReplaceAll(spanSelectSQL, tblSpanLog, spanLogRef),
 		canarySelect:       strings.ReplaceAll(canarySelectSQL, tblSpanLog, spanLogRef),
-		enrichSelect:       buildQueryLogSQL(queryLogEnrichSelectSQL, queryLogRef, queryLogNormalized),
+		enrichSelect:       buildQueryLogSQLWithCapabilities(queryLogEnrichSelectSQL, queryLogRef, queryLogNormalized, queryLogOperation),
 		queryFamilySelect:  strings.ReplaceAll(queryFamilyExactGroupsSQL, tblQueryLog, queryLogRef),
 		currentQuerySelect: buildCurrentQuerySQL(currentQueryCandidatesSelectSQL, processesRef, queryLogNormalized),
 		queryLogNormalized: queryLogNormalized,
+		queryLogOperation:  queryLogOperation,
 		spanLogRef:         spanLogRef,
 		queryLogRef:        queryLogRef,
 		useClusterQueries:  cfg.UseClusterQueries,
@@ -507,10 +592,18 @@ func (c *ClickHouseReader) Close() error {
 // exposes system.query_log.normalized_query_hash safely. In cluster-query
 // mode this requires every replica returned by clusterAllReplicas() to expose
 // the column, avoiding mixed-version SELECT failures. The probe runs once in
-// NewClickHouseReader; this accessor lets the processor mirror the result into
+// NewClickHouseReader; this accessor lets startup wiring mirror the result into
 // a metric without re-probing.
 func (c *ClickHouseReader) QueryLogNormalizedSupported() bool {
 	return c.queryLogNormalized
+}
+
+// QueryLogOperationSupported reports whether the connected ClickHouse exposes
+// system.query_log.query_kind safely. In cluster-query mode every replica must
+// expose the column. Startup wiring uses this result for the
+// query_operation_supported self-metric without issuing another probe.
+func (c *ClickHouseReader) QueryLogOperationSupported() bool {
+	return c.queryLogOperation
 }
 
 // setUserFilter records the configured user lists and splices the whitelist
@@ -730,10 +823,11 @@ func (c *ClickHouseReader) queryLogScanDest(log *model.QueryLog) []interface{} {
 	dest := []interface{}{
 		&log.QueryID,
 		&log.QueryKind,
-		&log.EventTime,
-		&log.QueryDurationMs,
-		&log.Query,
 	}
+	if c.queryLogOperation {
+		dest = append(dest, &log.QueryOperation)
+	}
+	dest = append(dest, &log.EventTime, &log.QueryDurationMs, &log.Query)
 	if c.queryLogNormalized {
 		dest = append(dest, &log.NormalizedQueryHash, &log.NormalizedQuery)
 	}
@@ -1145,9 +1239,11 @@ func (c *ClickHouseReader) queryLogEnrichScanDest(log *model.QueryLog) []interfa
 	dest := []interface{}{
 		&log.QueryID,
 		&log.QueryKind,
-		&log.EventTime,
-		&log.QueryDurationMs,
 	}
+	if c.queryLogOperation {
+		dest = append(dest, &log.QueryOperation)
+	}
+	dest = append(dest, &log.EventTime, &log.QueryDurationMs)
 	if c.queryLogNormalized {
 		dest = append(dest, &log.NormalizedQueryHash, &log.NormalizedQuery)
 	}

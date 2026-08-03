@@ -1,7 +1,7 @@
 click-dog is pre-1.0 beta software.
 
 Breaking changes to configuration, CLI flags, HTTP endpoints, metric names,
-exporter behaviour, and internal Go APIs can still land before v1.0 without a
+exporter behavior, and internal Go APIs can still land before v1.0 without a
 full deprecation cycle. Pin to a specific release tag (vYY.MM.idx) if you need
 stability across upgrades; read the changelog before bumping.
 
@@ -15,7 +15,7 @@ Specifically, the following are NOT yet stable:
   * Exported Go types and function signatures in internal/ packages
     (these are internal/ to begin with, but calling them from tests or
     forks means breakage is on you)
-  * CLI subcommand behaviour (flush, check, init, test-span,
+  * CLI subcommand behavior (flush, check, init, test-span,
     create-dashboards, self-update)
 
 What is relatively stable:

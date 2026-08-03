@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -86,7 +87,7 @@ func (w *WebhookNotifier) Notify(event, message string) {
 	case w.sem <- struct{}{}:
 		go func() {
 			defer func() { <-w.sem }()
-			w.send(event, message)
+			w.send(context.Background(), event, message)
 		}()
 	default:
 		total := w.dropped.Add(1)
@@ -94,8 +95,19 @@ func (w *WebhookNotifier) Notify(event, message string) {
 	}
 }
 
+// NotifySync sends a webhook notification and waits for the delivery attempt
+// to finish. The request remains bounded by both ctx and the client's configured
+// timeout. Unlike Notify, this path is not dropped when the asynchronous send
+// queue is full, so it is suitable for the final shutdown notification.
+func (w *WebhookNotifier) NotifySync(ctx context.Context, event, message string) {
+	if w == nil || !w.shouldFire(event) {
+		return
+	}
+	w.send(ctx, event, message)
+}
+
 // send performs the actual HTTP POST. Errors are logged, not returned.
-func (w *WebhookNotifier) send(event, message string) {
+func (w *WebhookNotifier) send(ctx context.Context, event, message string) {
 	payload := map[string]string{
 		"text": fmt.Sprintf("[click-dog] %s", message),
 	}
@@ -105,7 +117,14 @@ func (w *WebhookNotifier) send(event, message string) {
 		return
 	}
 
-	resp, err := w.client.Post(w.url, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.url, bytes.NewReader(body))
+	if err != nil {
+		clicklog.Error("Webhook: failed to create request for event %s: %v", event, err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := w.client.Do(req)
 	if err != nil {
 		clicklog.Error("Webhook: POST failed for event %s: %v", event, err)
 		return

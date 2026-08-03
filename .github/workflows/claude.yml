@@ -11,12 +11,43 @@ on:
     types: [submitted]
 
 jobs:
-  claude:
+  authorize:
     if: |
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      authorized: ${{ steps.check.outputs.authorized }}
+    steps:
+      # Check permission before checkout so event-controlled repository content
+      # cannot influence the authorization decision.
+      - name: Check repository admin permission
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          is_admin="$(
+            gh api \
+              "repos/${REPOSITORY}/collaborators/${ACTOR}/permission" \
+              --jq '.user.permissions.admin' 2>/dev/null || true
+          )"
+
+          if [[ "${is_admin}" == "true" ]]; then
+            echo "authorized=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "authorized=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice::Ignoring Claude trigger from non-admin actor ${ACTOR}."
+          fi
+
+  claude:
+    needs: authorize
+    if: needs.authorize.outputs.authorized == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -26,7 +57,7 @@ jobs:
       actions: read # Required for Claude to read CI results on PRs
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
@@ -47,4 +78,3 @@ jobs:
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
           # claude_args: '--allowed-tools Bash(gh pr:*)'
-

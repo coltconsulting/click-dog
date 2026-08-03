@@ -21,7 +21,7 @@ import (
 	"golang.org/x/term"
 )
 
-//go:embed dashboards/datadog-query-analysis.json dashboards/datadog-clickdog-health.json
+//go:embed dashboards/datadog-query-analysis.json dashboards/datadog-user-activity.json dashboards/datadog-clickdog-health.json
 var embeddedDashboards embed.FS
 
 // dashboardDef describes one of the shipped dashboards.
@@ -50,6 +50,20 @@ var shippedDashboards = []dashboardDef{
 		},
 	},
 	{
+		name:        "activity",
+		filename:    "datadog-user-activity.json",
+		description: "Exported user activity (span-based) — searchable user, database, table, and operation relationships",
+		prerequisites: []string{
+			"Reads exported root query spans (traces) with query_log enrichment.",
+			"Keep `monitor.enrich_from_query_log: true` and make sure click-dog can",
+			"read system.query_log; user/database/table/operation fields come from it.",
+			"Widgets filter on the `service` template variable (default",
+			"click-dog-monitor) — set it to your exporters.otel service_name.",
+			"Counts are the qualified/exported stream selected by duration and filters,",
+			"not total ClickHouse traffic or a complete audit log.",
+		},
+	},
+	{
 		name:        "health",
 		filename:    "datadog-clickdog-health.json",
 		description: "Click-dog self-monitoring (metrics-based) — cycles, exports, errors, backoff, circuit breaker",
@@ -73,21 +87,23 @@ func runCreateDashboards(args []string, out, errOut io.Writer) int {
 	fs := flag.NewFlagSet("create-dashboards", flag.ContinueOnError)
 	fs.SetOutput(errOut)
 	ddSite := fs.String("site", envOrDefault("DD_SITE", "datadoghq.com"), "Datadog site (e.g. datadoghq.com, datadoghq.eu)")
-	which := fs.String("dashboard", "all", "Which dashboard to create: query, health, or all")
+	which := fs.String("dashboard", "all", "Which dashboard to create: query, activity, health, or all")
 	onExists := fs.String("on-exists", "", "Action when a stock dashboard already exists: skip, overwrite, or new. Default: prompt on a terminal, else skip.")
 	dashID := fs.String("id", "", "Dashboard ID to act on when several dashboards share the same title")
 
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(errOut, `click-dog create-dashboards — create or update Click-Dog dashboards in Datadog
 
-Creates one or both of the Click-Dog dashboards via the Datadog API:
+Creates one or more of the Click-Dog dashboards via the Datadog API:
 
-  query   — Application query analysis (span-based)
-            Traces grouped by app and query_name via log_comment tagging
-  health  — Click-Dog self-monitoring (metrics-based)
-            Cycles, exports, errors, backoff, circuit breaker state
-            Needs metrics.otlp.enabled and an OTLP-capable collector;
-            a post-import checklist is printed after creation.
+  query    — Application query analysis (span-based)
+             Traces grouped by app and query_name via log_comment tagging
+  activity — Exported user activity (span-based)
+             Searchable user, database, table, and operation relationships
+  health   — Click-Dog self-monitoring (metrics-based)
+             Cycles, exports, errors, backoff, circuit breaker state
+             Needs metrics.otlp.enabled and an OTLP-capable collector;
+             a post-import checklist is printed after creation.
 
 Re-running is safe: each dashboard is stamped with a version marker, so a
 later run detects an already-imported dashboard. If it matches this build it

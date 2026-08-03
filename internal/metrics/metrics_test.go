@@ -243,6 +243,7 @@ func TestMetrics_RegisterObservers_ReadsState(t *testing.T) {
 	m.RecordQueryLogEnrichmentCycle(2, 4, nil)
 	m.RecordSpansWithQueryIDRatio(3, 4)
 	m.SetNormalizedQuerySupported(true)
+	m.SetQueryOperationSupported(true)
 
 	reader := sdkmetric.NewManualReader(sdkmetric.WithTemporalitySelector(sdkmetric.DeltaTemporalitySelector))
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
@@ -309,6 +310,9 @@ func TestMetrics_RegisterObservers_ReadsState(t *testing.T) {
 	}
 	if got := intDataPointValue(t, metricsByName, MetricNormalizedQuerySupported, nil); got != 1 {
 		t.Fatalf("normalized_query_supported = %d, want 1", got)
+	}
+	if got := intDataPointValue(t, metricsByName, MetricQueryOperationSupported, nil); got != 1 {
+		t.Fatalf("query_operation_supported = %d, want 1", got)
 	}
 }
 
@@ -1270,5 +1274,26 @@ func TestMetrics_SetNormalizedQuerySupported(t *testing.T) {
 	output = renderBody(t, m)
 	if !strings.Contains(output, "click_dog_normalized_query_supported 0\n") {
 		t.Errorf("after SetNormalizedQuerySupported(false), output:\n%s", output)
+	}
+}
+
+func TestMetrics_SetQueryOperationSupported(t *testing.T) {
+	m := NewMetrics()
+
+	output := renderBody(t, m)
+	if !strings.Contains(output, "click_dog_query_operation_supported 0\n") {
+		t.Errorf("default gauge missing, output:\n%s", output)
+	}
+
+	m.SetQueryOperationSupported(true)
+	output = renderBody(t, m)
+	if !strings.Contains(output, "click_dog_query_operation_supported 1\n") {
+		t.Errorf("after SetQueryOperationSupported(true), output:\n%s", output)
+	}
+
+	m.SetQueryOperationSupported(false)
+	output = renderBody(t, m)
+	if !strings.Contains(output, "click_dog_query_operation_supported 0\n") {
+		t.Errorf("after SetQueryOperationSupported(false), output:\n%s", output)
 	}
 }

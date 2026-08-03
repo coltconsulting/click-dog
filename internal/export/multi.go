@@ -53,10 +53,10 @@ func (p MultiExporterPolicy) valid() bool {
 // semantics for backfill correctness. The returned ExportResult still carries
 // per-sink counts and errors for observability. On retry the batch is
 // re-delivered to every sink, so sinks that previously succeeded will see the
-// same span keys again. That is accepted by design: OTEL collectors and trace
-// backends can deduplicate by trace_id/span_id, Splunk HEC receives stable IDs
-// for downstream dedup/search, and at-least-once delivery is preferred to
-// silently dropping data from a partially-down fan-out.
+// same span keys again. That is accepted by design: stable IDs make repeats
+// identifiable in OTEL and Splunk HEC, but downstream collapse is
+// backend-specific. At-least-once delivery is preferred to silently dropping
+// data from a partially-down fan-out.
 type MultiExporter struct {
 	exporters  []model.SpanExporter
 	names      []string

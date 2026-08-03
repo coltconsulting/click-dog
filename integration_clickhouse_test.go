@@ -3,12 +3,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/coltconsulting/click-dog/internal/analysis"
 	"github.com/coltconsulting/click-dog/internal/processor"
 )
 
@@ -74,6 +80,60 @@ func TestIntegration_FetchSlowQueriesInRange(t *testing.T) {
 		if q.QueryDurationMs < 1000 {
 			t.Errorf("Query duration %d should be >= 1000ms", q.QueryDurationMs)
 		}
+	}
+}
+
+// TestIntegration_AnalyzeQueriesHandlesTDigestFloat32 pins issue #381 against
+// the ClickHouse 24.1 image used by the integration suite. quantileTDigest()
+// returns Float32 on that version, while query-family report fields are
+// float64; the production SQL must cast at the source so the driver can scan
+// the complete report without a conversion error.
+func TestIntegration_AnalyzeQueriesHandlesTDigestFloat32(t *testing.T) {
+	conn := waitForClickHouse(t, 1, 30*time.Second)
+	defer conn.Close()
+
+	seedSlowQueries(t, conn, 3, 10)
+
+	configPath := filepath.Join(t.TempDir(), "click-dog.yaml")
+	configYAML := fmt.Sprintf(`clickhouse:
+  host: %s
+  port: %d
+  database: default
+  username: default
+
+exporters:
+  otel:
+    - collector_address: localhost:14317
+
+monitor:
+  enabled: true
+  min_trace_duration_ms: 1
+  check_interval_s: 30
+`, integrationCHHost(1), integrationCHPort(1))
+	if err := os.WriteFile(configPath, []byte(configYAML), 0600); err != nil {
+		t.Fatalf("write integration config: %v", err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := runAnalyzeQueries([]string{
+		"-config", configPath,
+		"-lookback", "10m",
+		"-timeout", "30s",
+		"-min-executions", "1",
+		"-format", "json",
+	}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("analyze queries exit code = %d, want 0; stderr:\n%s", code, errOut.String())
+	}
+	var report analysis.AnalysisReport
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("analyze queries returned invalid JSON: %v\n%s", err, out.String())
+	}
+	if !report.Coverage.QueryFamilyRollupsSupported {
+		t.Fatal("query-family rollups should be supported by the ClickHouse 24.1 integration image")
+	}
+	if report.Coverage.QueryFamilyCount == 0 {
+		t.Fatal("expected at least one scanned query family from the seeded queries")
 	}
 }
 

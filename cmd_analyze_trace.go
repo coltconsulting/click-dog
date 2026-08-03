@@ -262,12 +262,7 @@ Flags:
 		}
 	}
 
-	resolvedPath, err := config.ResolveConfigPath(*configPath)
-	if err != nil {
-		_, _ = fmt.Fprintf(errOut, "click-dog analyze trace: %v\n", err)
-		return 1
-	}
-	cfg, err := config.LoadConfig(resolvedPath)
+	cfg, resolvedPath, err := loadConfig(*configPath)
 	if err != nil {
 		_, _ = fmt.Fprintf(errOut, "click-dog analyze trace: %v\n", err)
 		return 1

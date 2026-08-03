@@ -99,8 +99,9 @@ click-dog -validate -config click-dog.yaml
 ```
 
 > **Datadog dashboards:** the config above exports traces only — enough for the
-> **Application Query Analysis** dashboard (`click-dog create-dashboards
-> --dashboard query`). The **Health** dashboard reads click-dog's own metrics.
+> **Application Query Analysis** and **Exported User Activity** dashboards
+> (`click-dog create-dashboards --dashboard query` / `--dashboard activity`).
+> The **Health** dashboard reads click-dog's own metrics.
 > For the OTLP path, enable `metrics.otlp.enabled: true`. The
 > installer-generated / `click-dog init --profile production` configs enable the
 > Prometheus `/metrics` endpoint for the legacy Datadog Agent OpenMetrics scrape

@@ -328,11 +328,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	resolvedPath, err := config.ResolveConfigPath(*configPath)
-	if err != nil {
-		log.Fatalf("Error: %v", err)
-	}
-	cfg, err := config.LoadConfig(resolvedPath)
+	cfg, resolvedPath, err := loadConfig(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -442,11 +438,12 @@ func main() {
 	}
 	defer func() { _ = chReader.Close() }()
 
-	// Mirror the capability probe result into a 0/1 metric so dashboards
-	// can correlate "normalized query attributes missing on spans" with
-	// the explicit ClickHouse capability state (#183). The reader probes
-	// once at construction; we propagate the result and never re-probe.
+	// Mirror capability probe results into 0/1 metrics so dashboards can
+	// correlate missing normalized-query and activity attributes with explicit
+	// ClickHouse capability state (#183). The reader probes once at construction;
+	// we propagate the results and never re-probe.
 	m.SetNormalizedQuerySupported(chReader.QueryLogNormalizedSupported())
+	m.SetQueryOperationSupported(chReader.QueryLogOperationSupported())
 
 	// Wire up HTTP listeners for metrics and health. Three possible paths:
 	//   1. metrics enabled, health mounts on same mux (one listener)
@@ -543,22 +540,15 @@ func main() {
 	var exporterNames []string
 	var otelExporters []*export.OTELExporter
 
-	for i, otelCfg := range cfg.Exporters.OTEL {
-		exp, otelErr := export.NewOTELExporter(otelCfg)
-		if otelErr != nil {
-			clicklog.Fatal("Failed to initialize OTEL exporter [%d]: %v", i, otelErr)
+	for _, b := range buildExporters(cfg) {
+		if b.InitErr != nil {
+			clicklog.Fatal("Failed to initialize exporter %s: %v", b.Label, b.InitErr)
 		}
-		exporters = append(exporters, exp)
-		otelExporters = append(otelExporters, exp)
-		exporterNames = append(exporterNames, fmt.Sprintf("otel[%d]:%s", i, otelCfg.CollectorAddress))
-	}
-	for i, splunkCfg := range cfg.Exporters.SplunkHEC {
-		exp, splunkErr := export.NewSplunkHECExporter(splunkCfg)
-		if splunkErr != nil {
-			clicklog.Fatal("Failed to initialize Splunk HEC exporter [%d]: %v", i, splunkErr)
+		exporters = append(exporters, b.Exporter)
+		exporterNames = append(exporterNames, b.Name)
+		if b.OTEL != nil {
+			otelExporters = append(otelExporters, b.OTEL)
 		}
-		exporters = append(exporters, exp)
-		exporterNames = append(exporterNames, fmt.Sprintf("splunk_hec[%d]:%s", i, splunkCfg.Endpoint))
 	}
 
 	// Wrap in MultiExporter if multiple, or use directly if single
@@ -950,8 +940,9 @@ func runScheduledMode(
 
 		case <-sigChan:
 			clicklog.Info("Shutting down gracefully...")
-			// Best-effort: Notify fires a goroutine that may not complete before return.
-			wh.Notify(webhook.EventShutdown, "Click-Dog shutting down")
+			// Shutdown delivery is synchronous so process exit cannot race the
+			// notification. The webhook client's configured timeout bounds the wait.
+			wh.NotifySync(context.Background(), webhook.EventShutdown, "Click-Dog shutting down")
 			return
 		}
 	}

@@ -293,7 +293,7 @@ log_level: info                     # debug, info, warn, error
 # orchestrators. Hitting these paths on the metrics scrape listener
 # returns 404; they only exist on the health listener.
 #
-# If health.listen_address normalises to the same socket as
+# If health.listen_address normalizes to the same socket as
 # metrics.listen_address, the handlers are mounted on the metrics
 # listener so only one port is opened.
 #

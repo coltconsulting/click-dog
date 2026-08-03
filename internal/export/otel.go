@@ -29,8 +29,15 @@ import (
 	"github.com/coltconsulting/click-dog/internal/model"
 )
 
-// Compile-time check that *OTELExporter satisfies model.SpanExporter.
-var _ model.SpanExporter = (*OTELExporter)(nil)
+// Compile-time checks that *OTELExporter satisfies model.SpanExporter and
+// model.ConnectivityChecker. Package convention: an exporter that can probe
+// its backend without exporting implements ConnectivityChecker so
+// `click-dog check` picks it up; exporters with no meaningful probe simply
+// omit it.
+var (
+	_ model.SpanExporter        = (*OTELExporter)(nil)
+	_ model.ConnectivityChecker = (*OTELExporter)(nil)
+)
 
 type OTELExporter struct {
 	conn           *grpc.ClientConn
@@ -110,7 +117,7 @@ func NewOTELGRPCConn(cfg config.OTELConfig) (*grpc.ClientConn, error) {
 		}
 	} else {
 		transportCreds = insecure.NewCredentials()
-		clicklog.Info("OTEL export using plaintext connection (secure: false)")
+		clicklog.Warn("OTEL export using plaintext connection (secure: false) — spans, including SQL text, travel unencrypted; set exporters.otel[].secure: true for TLS")
 	}
 
 	// Create gRPC connection to OTEL collector
@@ -170,9 +177,9 @@ func (o *OTELExporter) Close(ctx context.Context) error {
 //
 // Trace/span IDs are derived deterministically from the row's identity
 // (query_id + event_time + query_kind) so that a re-export — a MultiExporter
-// partial-failure retry, or a re-run backfill window — produces identical IDs
-// and OTEL trace backends can deduplicate by (trace_id, span_id). This is what
-// makes the at-least-once delivery contract safe for the query_log path.
+// partial-failure retry, or a re-run backfill window — produces identical IDs.
+// That makes repeats identifiable; whether a collector/backend collapses,
+// stores, or rejects them is backend-specific.
 //
 // The provided ctx controls the gRPC call deadline. Callers should set a
 // timeout (e.g. context.WithTimeout) to avoid blocking indefinitely if the
@@ -247,7 +254,7 @@ func (o *OTELExporter) ExportQuery(ctx context.Context, log model.QueryLog) (mod
 // deterministicQueryIDs derives a stable 16-byte trace ID and 8-byte span ID
 // from a query_log row's identity, so re-exporting the same row (a
 // MultiExporter partial-failure retry, or a re-run backfill window) yields
-// identical OTLP IDs so OTEL trace backends can deduplicate retries.
+// identical OTLP IDs so retries carry a stable, identifiable span identity.
 //
 // The key is (query_id, event_time, query_kind) — NOT query_id alone.
 // ClickHouse query_id is a caller-supplied value that is only guaranteed unique
@@ -296,19 +303,29 @@ func (o *OTELExporter) convertToOTLPSpan(span model.OpenTelemetrySpan) *tracepb.
 	// Calculate duration in milliseconds for easy querying
 	durationMs := int64((span.FinishTimeUs - span.StartTimeUs) / 1000)
 
-	// Convert attributes map to OTLP attributes.
-	// click_dog.source is first for consistency with ExportQuery.
+	// Convert attributes map to OTLP attributes. The source attribute is emitted
+	// exactly once and stays first for consistency with ExportQuery. A source
+	// supplied by the span (for example, test-span) is authoritative.
 	attrs := make([]*commonpb.KeyValue, 0, len(span.Attributes)+len(span.StringSliceAttributes)+3)
-	attrs = append(attrs, StringAttr("click_dog.source", "span_log"))
+	attrs = append(attrs, StringAttr(liveSpanSourceKey, liveSpanSource(span.Attributes)))
 	attrs = append(attrs, StringAttr("hostname", span.Hostname))
 	attrs = append(attrs, IntAttr("duration_ms", durationMs))
 	for k, v := range span.Attributes {
+		if k == liveSpanSourceKey {
+			continue
+		}
 		if _, ok := span.StringSliceAttributes[k]; ok {
 			continue
+		}
+		if k == liveSpanQueryKey {
+			v = TruncateQuery(v, o.maxQueryLength)
 		}
 		attrs = append(attrs, typedSpanAttr(k, v))
 	}
 	for k, values := range span.StringSliceAttributes {
+		if k == liveSpanSourceKey {
+			continue
+		}
 		attrs = append(attrs, StringSliceAttr(k, values))
 	}
 

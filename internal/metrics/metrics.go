@@ -104,6 +104,11 @@ type Metrics struct {
 	// nothing.
 	normalizedQuerySupported int
 
+	// queryOperationSupported mirrors the query_kind capability probe that
+	// controls query_log.operation and query_log.access_type enrichment. Like
+	// normalizedQuerySupported, it is set once during startup.
+	queryOperationSupported int
+
 	// topologyWarnings holds the click_dog_topology_warning{reason} gauge
 	// value (0/1) per reason for the topology self-audit (the sidecar +
 	// use_cluster_queries anti-pattern detector). Both known reasons are
@@ -481,6 +486,19 @@ func (m *Metrics) SetNormalizedQuerySupported(supported bool) {
 	}
 }
 
+// SetQueryOperationSupported records whether system.query_log.query_kind is
+// available for query operation and access-type enrichment. It is a stable
+// process-wide 0/1 gauge set once from the reader's startup capability probe.
+func (m *Metrics) SetQueryOperationSupported(supported bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if supported {
+		m.queryOperationSupported = 1
+	} else {
+		m.queryOperationSupported = 0
+	}
+}
+
 // Handler returns an http.HandlerFunc that writes Prometheus text exposition format.
 func (m *Metrics) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -637,6 +655,9 @@ func (m *Metrics) render() []byte {
 
 	name = writePromMetricHeader(&b, MetricNormalizedQuerySupported)
 	_, _ = fmt.Fprintf(&b, "%s %d\n", name, m.normalizedQuerySupported)
+
+	name = writePromMetricHeader(&b, MetricQueryOperationSupported)
+	_, _ = fmt.Fprintf(&b, "%s %d\n", name, m.queryOperationSupported)
 
 	return b.Bytes()
 }

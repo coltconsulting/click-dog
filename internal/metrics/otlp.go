@@ -52,6 +52,7 @@ type otlpSnapshot struct {
 	queryLogEnrichMatchRatio float64
 	spansWithQueryIDRatio    float64
 	normalizedQuerySupported int
+	queryOperationSupported  int
 	topologyWarnings         map[string]bool
 }
 
@@ -204,6 +205,7 @@ func (m *Metrics) observeOTLP(observer otelmetric.Observer, instruments otlpInst
 	observer.ObserveFloat64(instruments.floatGauges[MetricQueryLogEnrichmentMatchRatio], s.queryLogEnrichMatchRatio)
 	observer.ObserveFloat64(instruments.floatGauges[MetricSpansWithQueryIDRatio], s.spansWithQueryIDRatio)
 	observer.ObserveInt64(instruments.intGauges[MetricNormalizedQuerySupported], int64(s.normalizedQuerySupported))
+	observer.ObserveInt64(instruments.intGauges[MetricQueryOperationSupported], int64(s.queryOperationSupported))
 }
 
 func (m *Metrics) otlpSnapshot() otlpSnapshot {
@@ -242,6 +244,7 @@ func (m *Metrics) otlpSnapshot() otlpSnapshot {
 		queryLogEnrichMatchRatio: m.queryLogEnrichMatchRatio,
 		spansWithQueryIDRatio:    m.spansWithQueryIDRatio,
 		normalizedQuerySupported: m.normalizedQuerySupported,
+		queryOperationSupported:  m.queryOperationSupported,
 		topologyWarnings:         topologyWarnings,
 	}
 }

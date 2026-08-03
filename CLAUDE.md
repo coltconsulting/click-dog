@@ -17,10 +17,10 @@ make integration      # Full integration suite (requires Docker)
 make preflight        # Pre-release checks (includes govulncheck)
 ```
 
-- Go 1.25+ required for compiling (`go` directive); CI and releases use Go 1.26 so the govulncheck gate can clear stdlib advisories that are unfixed in earlier patch releases (e.g. GO-2026-5037/5039, fixed in go1.26.4)
+- Go 1.25+ required for compiling (`go` directive); CI and releases pin Go 1.26.5 so the govulncheck gate runs on the reviewed toolchain. Go 1.26.4 cleared GO-2026-5037/5039, and Go 1.26.5 additionally clears GO-2026-5856 in `crypto/tls`
 - Integration tests use Docker Compose with a 3-node ClickHouse cluster
 - Integration tests are tagged: `// +build integration`
-- CI runs: lint, build (linux/amd64), govulncheck, test (PR: no -race; master/tag: with -race) — integration-test and build-arm64 are gated to non-PR runs (master push, tag push via release.yml, or workflow_dispatch) to keep PR billing down on a private repo
+- CI runs test, lint, and linux/amd64 build on eligible non-draft PRs and non-PR events; PR tests omit `-race`, while master/tag/manual/scheduled runs use it. `govulncheck` and integration tests skip PRs; the linux/arm64 cross-build runs on `v*` tags only. PRs whose changes all match `docs/**`, `mkdocs.yml`, or `**/*.md` skip full CI; `docs.yml` separately validates its `docs/**`/`mkdocs.yml` paths
 - `govulncheck ./...` is enforced both in CI and `make preflight`; install with `go install golang.org/x/vuln/cmd/govulncheck@v1.3.0` (CI pin)
 
 ## Project Structure
@@ -32,6 +32,7 @@ main.go                      Entry point, CLI flag/subcommand routing, scheduled
 dryrun.go                    DryRunExporter — discards exports and prints a summary
 health_adapter.go            Wires the processor's runtime state into internal/health probes
 cmd_init.go                  `click-dog init` — generate starter config
+cmd_init_wizard.go           Guided `click-dog init --wizard` prompts + shared renderer
 cmd_check.go                 `click-dog check` — validate config + connectivity
 cmd_test_span.go             `click-dog test-span` — synthetic span sender
 cmd_flush.go                 `click-dog flush` — one-shot lookback export
@@ -43,6 +44,7 @@ cmd_deploy_status.go         `click-dog deploy status` — query installed-deplo
 cmd_analyze.go               `click-dog analyze` — dispatcher + `analyze queries` (deterministic local query analysis)
 cmd_analyze_trace.go         `click-dog analyze trace` — query-family trace drilldown + fan-out
 cmd_analyze_trace_wizard.go  Guided `-wizard` flow backing `analyze trace`
+export_gate.go               Cluster-mode leader gate for scheduled export
 ```
 
 `click-dog init` and `click-dog init --wizard` share a single YAML renderer
@@ -55,7 +57,7 @@ renderer by `TestWizard_ParityWithProfileTemplates`.
 Internal packages (`internal/`):
 
 ```
-analysis/     Query-analysis report contract + deterministic analyzers (pure; powers `analyze queries`)
+analysis/     Query-analysis and trace-drilldown report contracts + deterministic analyzers
 clickhouse/   ClickHouse span/query reader (enforces readonly=2)
 clicklog/     Custom leveled logging + rotating file writer
 config/       YAML config loading, validation, defaults, env expansion, deprecation compat
@@ -126,8 +128,8 @@ docs/development/specs/   Internal specs for in-flight work
 - Main branch: `master`
 - Feature branches merged via PRs
 - Release tags: `vYY.MM.idx` — calendar versioning (GoReleaser)
-- CI workflows: ci.yml (reusable — test + lint + build + govulncheck + conditional integration/arm64), release.yml (tag-triggered wrapper that calls ci.yml then runs GoReleaser + cosign), degradation.yml, docs.yml, claude.yml, claude-code-review.yml
-- Docs site (click-dog.com): `docs.yml` publishes `docs/` → `gh-pages` only on `v*` tags / `workflow_dispatch` (a plain master merge just validates). Manual `mkdocs gh-deploy` fallback + the pull-before-deploy gotcha: `docs/development/docs-publishing.md`
+- CI workflows: ci.yml (reusable test/lint/build/govulncheck gate with event-gated integration/arm64), release.yml (tag wrapper; internal is gate-only, public alone runs GoReleaser + cosign), degradation.yml, docs.yml (PR build-only gate: `mkdocs build --strict`; publishes nothing), site.yml (site deploys), claude.yml, claude-code-review.yml
+- Docs site (click-dog.com): published by `site.yml` to Cloudflare Pages. Master merges touching site paths auto-deploy staging; `site-vN` tags (and GA `v*` tags, as a docs refresh) deploy prod with docs pinned to the latest GA tag. Details: `docs/development/docs-publishing.md`
 
 ## Key Architectural Decisions
 

@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/coltconsulting/click-dog/internal/config"
 )
@@ -73,9 +75,10 @@ func TestWebhookNotifier_ShouldFire(t *testing.T) {
 }
 
 func TestWebhookNotifier_NilSafe(t *testing.T) {
-	// Calling Notify on nil should not panic
+	// Calling either notification path on nil should not panic.
 	var w *WebhookNotifier
 	w.Notify("startup", "test message") // should be no-op
+	w.NotifySync(context.Background(), "shutdown", "test message")
 }
 
 func TestWebhookNotifier_Send(t *testing.T) {
@@ -151,7 +154,7 @@ func TestWebhookNotifier_DoesNotFollowRedirects(t *testing.T) {
 		t.Fatal("expected non-nil notifier")
 	}
 
-	w.send("startup", "test")
+	w.send(context.Background(), "startup", "test")
 
 	if got := targetHits.Load(); got != 0 {
 		t.Fatalf("webhook followed redirect to target server (%d hits)", got)
@@ -215,4 +218,125 @@ func TestWebhookNotifier_ServerError(t *testing.T) {
 	// Should not panic on server error
 	w.Notify("startup", "test")
 	wg.Wait()
+}
+
+func TestWebhookNotifier_NotifySyncWaitsForDelivery(t *testing.T) {
+	requestStarted := make(chan struct{})
+	releaseResponse := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseResponse) }) }
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(requestStarted)
+		<-releaseResponse
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	defer release()
+
+	w := NewWebhookNotifier(config.WebhookConfig{
+		Enabled:  true,
+		URL:      server.URL,
+		TimeoutS: 5,
+	})
+
+	returned := make(chan struct{})
+	go func() {
+		w.NotifySync(context.Background(), EventShutdown, "Click-Dog shutting down")
+		close(returned)
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("synchronous webhook request did not reach server")
+	}
+
+	select {
+	case <-returned:
+		t.Fatal("NotifySync returned before the server completed the delivery attempt")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	release()
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("NotifySync did not return after the server responded")
+	}
+}
+
+func TestWebhookNotifier_NotifySyncHonorsContextDeadline(t *testing.T) {
+	requestStarted := make(chan struct{})
+	releaseResponse := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(requestStarted)
+		<-releaseResponse
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	defer close(releaseResponse)
+
+	w := NewWebhookNotifier(config.WebhookConfig{
+		Enabled:  true,
+		URL:      server.URL,
+		TimeoutS: 5,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	startedAt := time.Now()
+	w.NotifySync(ctx, EventShutdown, "Click-Dog shutting down")
+	elapsed := time.Since(startedAt)
+
+	select {
+	case <-requestStarted:
+	default:
+		t.Fatal("expected a delivery attempt before the context deadline")
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("NotifySync took %s, want a bounded return near the 50ms context deadline", elapsed)
+	}
+}
+
+func TestWebhookNotifier_NotifyKeepsBoundedQueue(t *testing.T) {
+	requestStarted := make(chan struct{}, maxConcurrentWebhooks)
+	releaseRequests := make(chan struct{})
+	var requests sync.WaitGroup
+	requests.Add(maxConcurrentWebhooks)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer requests.Done()
+		requestStarted <- struct{}{}
+		<-releaseRequests
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	w := NewWebhookNotifier(config.WebhookConfig{
+		Enabled:  true,
+		URL:      server.URL,
+		TimeoutS: 5,
+	})
+
+	for range maxConcurrentWebhooks {
+		w.Notify(EventStartup, "test")
+	}
+	for range maxConcurrentWebhooks {
+		select {
+		case <-requestStarted:
+		case <-time.After(time.Second):
+			close(releaseRequests)
+			t.Fatal("asynchronous webhook request did not reach server")
+		}
+	}
+
+	w.Notify(EventStartup, "dropped")
+	if got := w.dropped.Load(); got != 1 {
+		close(releaseRequests)
+		t.Fatalf("dropped notifications = %d, want 1", got)
+	}
+
+	close(releaseRequests)
+	requests.Wait()
 }

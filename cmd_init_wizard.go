@@ -556,6 +556,11 @@ func renderWizardYAML(a wizardAnswers) string {
 	b.WriteString(clickhouseHardeningForProfile(a.Profile))
 	b.WriteByte('\n')
 
+	// Emitted for every profile: the operator deciding where spans go is the
+	// same one who must decide whether SQL text needs redaction first.
+	b.WriteString("# Exported spans carry the full SQL text of each traced query\n")
+	b.WriteString("# (db.statement). If queries can embed secrets or PII, add\n")
+	b.WriteString("# filters.redact_queries rules — see docs/filtering.md (Query Redaction).\n")
 	b.WriteString("exporters:\n")
 	b.WriteString("  otel:\n")
 	fmt.Fprintf(&b, "    - collector_address: %s\n", yamlScalar(a.OTELCollector))

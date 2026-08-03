@@ -12,7 +12,7 @@ import (
 
 	"github.com/coltconsulting/click-dog/internal/clickhouse"
 	"github.com/coltconsulting/click-dog/internal/config"
-	"github.com/coltconsulting/click-dog/internal/export"
+	"github.com/coltconsulting/click-dog/internal/model"
 )
 
 // certHostnameHint avoids err.Error() on the typed path: x509.HostnameError.Error() dereferences Certificate.
@@ -83,12 +83,7 @@ Flags:
 	sawWarnings := false
 
 	// 1. Load config
-	resolvedPath, err := config.ResolveConfigPath(*configPath)
-	if err != nil {
-		_, _ = fmt.Fprintf(out, "Config:     FAIL (%v)\n", err)
-		return 1
-	}
-	cfg, err := config.LoadConfig(resolvedPath)
+	cfg, resolvedPath, err := loadConfig(*configPath)
 	if err != nil {
 		_, _ = fmt.Fprintf(out, "Config:     FAIL (%v)\n", err)
 		return 1
@@ -134,45 +129,32 @@ Flags:
 	}
 	chCancel()
 
-	// 3. OTEL exporters
-	for i, otelCfg := range cfg.Exporters.OTEL {
-		exp, otelErr := export.NewOTELExporter(otelCfg)
-		if otelErr != nil {
-			_, _ = fmt.Fprintf(out, "OTEL[%d]:    FAIL (init: %v)\n", i, otelErr)
+	// 3. Exporter connectivity — one line per configured exporter, in
+	// config order. Exporters that implement model.ConnectivityChecker are
+	// actively probed; any other kind passes construction only. The label
+	// column pads to the report's 12-column layout ("OTEL[0]:    ok",
+	// "SplunkHEC[0]: ok"), matching the Config/ClickHouse lines above.
+	for _, b := range buildExporters(cfg) {
+		label := b.Label + ":"
+		if b.InitErr != nil {
+			_, _ = fmt.Fprintf(out, "%-11s FAIL (init: %v)\n", label, b.InitErr)
 			allOK = false
 			continue
 		}
-		checkCtx, checkCancel := context.WithTimeout(context.Background(), perCheckTimeout)
-		if connErr := exp.CheckConnectivity(checkCtx); connErr != nil {
-			_, _ = fmt.Fprintf(out, "OTEL[%d]:    FAIL (%s: %v)\n", i, otelCfg.CollectorAddress, connErr)
-			allOK = false
+		if checker, canProbe := b.Exporter.(model.ConnectivityChecker); canProbe {
+			checkCtx, checkCancel := context.WithTimeout(context.Background(), perCheckTimeout)
+			if connErr := checker.CheckConnectivity(checkCtx); connErr != nil {
+				_, _ = fmt.Fprintf(out, "%-11s FAIL (%s: %v)\n", label, b.Endpoint, connErr)
+				allOK = false
+			} else {
+				_, _ = fmt.Fprintf(out, "%-11s ok (%s)\n", label, b.Endpoint)
+			}
+			checkCancel()
 		} else {
-			_, _ = fmt.Fprintf(out, "OTEL[%d]:    ok (%s)\n", i, otelCfg.CollectorAddress)
+			_, _ = fmt.Fprintf(out, "%-11s ok (constructed; exporter has no connectivity probe)\n", label)
 		}
-		checkCancel()
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = exp.Close(closeCtx)
-		closeCancel()
-	}
-
-	// 4. Splunk HEC exporters
-	for i, splunkCfg := range cfg.Exporters.SplunkHEC {
-		exp, splunkErr := export.NewSplunkHECExporter(splunkCfg)
-		if splunkErr != nil {
-			_, _ = fmt.Fprintf(out, "SplunkHEC[%d]: FAIL (init: %v)\n", i, splunkErr)
-			allOK = false
-			continue
-		}
-		checkCtx, checkCancel := context.WithTimeout(context.Background(), perCheckTimeout)
-		if connErr := exp.CheckConnectivity(checkCtx); connErr != nil {
-			_, _ = fmt.Fprintf(out, "SplunkHEC[%d]: FAIL (%s: %v)\n", i, splunkCfg.Endpoint, connErr)
-			allOK = false
-		} else {
-			_, _ = fmt.Fprintf(out, "SplunkHEC[%d]: ok (%s)\n", i, splunkCfg.Endpoint)
-		}
-		checkCancel()
-		closeCtx, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = exp.Close(closeCtx)
+		_ = b.Exporter.Close(closeCtx)
 		closeCancel()
 	}
 

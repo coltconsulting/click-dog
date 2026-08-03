@@ -218,6 +218,31 @@ func TestCapabilityProbeContextPositiveTimeoutHasDeadline(t *testing.T) {
 	}
 }
 
+func TestRunCapabilityProbeUsesIndependentContexts(t *testing.T) {
+	var first context.Context
+	if !runCapabilityProbe(0, func(ctx context.Context) bool {
+		first = ctx
+		return true
+	}) {
+		t.Fatal("first probe returned false")
+	}
+	if err := first.Err(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("first probe context error = %v, want context.Canceled after probe", err)
+	}
+
+	if !runCapabilityProbe(0, func(ctx context.Context) bool {
+		if ctx == first {
+			t.Error("second probe reused the first probe context")
+		}
+		if err := ctx.Err(); err != nil {
+			t.Errorf("second probe inherited a canceled context: %v", err)
+		}
+		return true
+	}) {
+		t.Fatal("second probe returned false")
+	}
+}
+
 func TestBuildQueryLogSQL_NormalizedColumns(t *testing.T) {
 	for _, template := range []string{queryLogSelectSQL, queryLogEnrichSelectSQL} {
 		got := buildQueryLogSQL(template, "system.query_log", true)
@@ -240,6 +265,19 @@ func TestQueryFamilyExactGroupsSQLTopKUsesRollupLimit(t *testing.T) {
 	want := fmt.Sprintf("topK(%d)", queryfamily.TopKLimit)
 	if got := strings.Count(queryFamilyExactGroupsSQL, want); got != 3 {
 		t.Fatalf("query family SQL has %d occurrences of %q, want 3:\n%s", got, want, queryFamilyExactGroupsSQL)
+	}
+}
+
+func TestQueryFamilyExactGroupsSQLCastsQuantilesToFloat64(t *testing.T) {
+	for _, want := range []string{
+		"toFloat64(quantileTDigest(0.95)(query_duration_ms)) AS p95_duration_ms",
+		"toFloat64(quantileTDigest(0.99)(query_duration_ms)) AS p99_duration_ms",
+		"toFloat64(quantileTDigest(0.95)(read_rows)) AS p95_read_rows",
+		"toFloat64(quantileTDigest(0.95)(read_bytes)) AS p95_read_bytes",
+	} {
+		if !strings.Contains(queryFamilyExactGroupsSQL, want) {
+			t.Errorf("query family SQL missing Float64 cast %q:\n%s", want, queryFamilyExactGroupsSQL)
+		}
 	}
 }
 
@@ -458,7 +496,7 @@ func TestFetchQueryFamilyRollupsAggregatesExactGroupsBeforeRollup(t *testing.T) 
 		"normalized_query_hash",
 		"min(normalizeQuery(query)) AS normalized_query",
 		"count() AS execution_count",
-		"quantileTDigest(0.95)(query_duration_ms) AS p95_duration_ms",
+		"toFloat64(quantileTDigest(0.95)(query_duration_ms)) AS p95_duration_ms",
 		"GROUP BY normalized_query_hash",
 		"HAVING count() >= ?",
 		"ORDER BY execution_count DESC LIMIT ?",

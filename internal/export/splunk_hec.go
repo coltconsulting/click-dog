@@ -17,8 +17,12 @@ import (
 	"github.com/coltconsulting/click-dog/internal/model"
 )
 
-// Compile-time check that *SplunkHECExporter satisfies model.SpanExporter.
-var _ model.SpanExporter = (*SplunkHECExporter)(nil)
+// Compile-time checks that *SplunkHECExporter satisfies model.SpanExporter
+// and model.ConnectivityChecker (see otel.go for the package convention).
+var (
+	_ model.SpanExporter        = (*SplunkHECExporter)(nil)
+	_ model.ConnectivityChecker = (*SplunkHECExporter)(nil)
+)
 
 // SplunkHECExporter exports spans and queries to a Splunk HTTP Event Collector.
 type SplunkHECExporter struct {
@@ -106,7 +110,7 @@ func (s *SplunkHECExporter) ExportSpans(ctx context.Context, spans []model.OpenT
 		durationMs := int64((span.FinishTimeUs - span.StartTimeUs) / 1000)
 
 		eventData := map[string]interface{}{
-			"click_dog_source": "span_log",
+			"click_dog_source": liveSpanSource(span.Attributes),
 			"trace_id":         span.TraceID,
 			"span_id":          span.SpanID,
 			"parent_span_id":   span.ParentSpanID,
@@ -116,7 +120,7 @@ func (s *SplunkHECExporter) ExportSpans(ctx context.Context, spans []model.OpenT
 			"start_time_us":    span.StartTimeUs,
 			"finish_time_us":   span.FinishTimeUs,
 			"duration_ms":      durationMs,
-			"attributes":       span.Attributes,
+			"attributes":       liveSpanAttributesForHEC(span.Attributes, s.maxQueryLength),
 		}
 
 		ev := hecEvent{

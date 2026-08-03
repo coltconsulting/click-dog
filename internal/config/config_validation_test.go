@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -776,6 +778,14 @@ func TestValidate_NoExporters(t *testing.T) {
 	if !strings.Contains(err.Error(), "at least one exporter") {
 		t.Errorf("error should mention 'at least one exporter', got: %v", err)
 	}
+	if strings.Contains(err.Error(), "(otel or") {
+		t.Errorf("error should not name the removed top-level otel key, got: %v", err)
+	}
+	for _, current := range []string{"exporters.otel", "exporters.splunk_hec"} {
+		if !strings.Contains(err.Error(), current) {
+			t.Errorf("error should point at %s, got: %v", current, err)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -911,7 +921,7 @@ func TestValidate_ValidMinimalPasses(t *testing.T) {
 }
 
 func TestValidate_ValidFullPasses(t *testing.T) {
-	cfg, err := LoadConfig(writeConfigFile(t, validFullYAML))
+	cfg, err := LoadConfig(writeConfigFile(t, validFullYAMLWithTLSFiles(t)))
 	if err != nil {
 		t.Fatalf("LoadConfig of validFullYAML failed: %v", err)
 	}
@@ -992,6 +1002,292 @@ func TestValidate_ExportersOTEL_InsecureSkipVerifyRequiresSecure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "exporters.otel[0].insecure_skip_verify requires secure: true") {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestValidate_ExportersOTEL_ClientCertificatePair(t *testing.T) {
+	validExporter := OTELConfig{
+		CollectorAddress: "localhost:4317",
+		ServiceName:      "test",
+		MaxQueryLength:   100000,
+	}
+	tests := []struct {
+		name      string
+		exporters []OTELConfig
+		want      string
+	}{
+		{
+			name: "client certificate without key while plaintext",
+			exporters: []OTELConfig{{
+				CollectorAddress: "localhost:4317",
+				ServiceName:      "test",
+				MaxQueryLength:   100000,
+				ClientCert:       "/tls/client.pem",
+			}},
+			want: "exporters.otel[0].client_cert and exporters.otel[0].client_key must be provided together",
+		},
+		{
+			name: "client key without certificate at second exporter",
+			exporters: []OTELConfig{validExporter, {
+				CollectorAddress: "backup:4317",
+				ServiceName:      "backup",
+				MaxQueryLength:   100000,
+				Secure:           true,
+				ClientKey:        "/tls/client-key.pem",
+			}},
+			want: "exporters.otel[1].client_cert and exporters.otel[1].client_key must be provided together",
+		},
+		{
+			name: "complete pair is coherent even while plaintext",
+			exporters: []OTELConfig{{
+				CollectorAddress: "localhost:4317",
+				ServiceName:      "test",
+				MaxQueryLength:   100000,
+				ClientCert:       "/tls/client.pem",
+				ClientKey:        "/tls/client-key.pem",
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Exporters.OTEL = tt.exporters
+			err := cfg.Validate()
+			if tt.want == "" {
+				if err != nil {
+					t.Fatalf("complete client certificate pair should pass Validate: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Validate() error = %v, want substring %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidationWarnings_TLSMaterialWithoutSecure(t *testing.T) {
+	tests := []struct {
+		name              string
+		mutate            func(*Config)
+		want              []string
+		wantValidationErr bool
+	}{
+		{
+			name: "ClickHouse CA is ignored without TLS",
+			mutate: func(c *Config) {
+				c.ClickHouse.CACert = "/tls/clickhouse-ca.pem"
+			},
+			want: []string{"clickhouse.ca_cert", "clickhouse.secure is false"},
+		},
+		{
+			name: "ClickHouse CA is active with TLS",
+			mutate: func(c *Config) {
+				c.ClickHouse.Secure = true
+				c.ClickHouse.CACert = "/tls/clickhouse-ca.pem"
+			},
+		},
+		{
+			name: "second exporter CA and complete mTLS pair are ignored",
+			mutate: func(c *Config) {
+				c.Exporters.OTEL = append(c.Exporters.OTEL, OTELConfig{
+					CollectorAddress: "backup:4317",
+					ServiceName:      "backup",
+					MaxQueryLength:   100000,
+					CACert:           "/tls/otel-ca.pem",
+					ClientCert:       "/tls/client.pem",
+					ClientKey:        "/tls/client-key.pem",
+				})
+			},
+			want: []string{
+				"exporters.otel[1].ca_cert",
+				"exporters.otel[1].secure is false",
+				"exporters.otel[1].client_cert and client_key",
+			},
+		},
+		{
+			name: "active exporter TLS material is silent",
+			mutate: func(c *Config) {
+				c.Exporters.OTEL[0].Secure = true
+				c.Exporters.OTEL[0].CACert = "/tls/otel-ca.pem"
+				c.Exporters.OTEL[0].ClientCert = "/tls/client.pem"
+				c.Exporters.OTEL[0].ClientKey = "/tls/client-key.pem"
+			},
+		},
+		{
+			name: "incoherent half pair has only a validation error",
+			mutate: func(c *Config) {
+				c.Exporters.OTEL[0].ClientCert = "/tls/client.pem"
+			},
+			wantValidationErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			tt.mutate(cfg)
+			warnings := cfg.tlsMaterialWarnings()
+			got := strings.Join(warnings, "\n")
+			for _, want := range tt.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("tlsMaterialWarnings() = %v, want substring %q", warnings, want)
+				}
+			}
+			if len(tt.want) == 0 && len(warnings) != 0 {
+				t.Errorf("tlsMaterialWarnings() = %v, want none", warnings)
+			}
+			if gotErr := cfg.Validate() != nil; gotErr != tt.wantValidationErr {
+				t.Errorf("Validate() error presence = %v, want %v", gotErr, tt.wantValidationErr)
+			}
+		})
+	}
+}
+
+func TestLoadConfig_TLSSemantics(t *testing.T) {
+	t.Run("populates indexed inactive-material warnings", func(t *testing.T) {
+		const yaml = `
+clickhouse:
+  host: localhost
+  port: 9000
+  database: default
+  ca_cert: /not/read/while/plaintext/clickhouse-ca.pem
+exporters:
+  otel:
+    - collector_address: primary:4317
+    - collector_address: backup:4317
+      ca_cert: /not/read/while/plaintext/otel-ca.pem
+      client_cert: /not/read/while/plaintext/client.pem
+      client_key: /not/read/while/plaintext/client-key.pem
+monitor:
+  enabled: true
+  min_trace_duration_ms: 1000
+  check_interval_s: 30
+`
+		cfg, err := LoadConfig(writeConfigFile(t, yaml))
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		got := strings.Join(cfg.ValidationWarnings, "\n")
+		for _, want := range []string{
+			"clickhouse.ca_cert",
+			"exporters.otel[1].ca_cert",
+			"exporters.otel[1].client_cert and client_key",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("ValidationWarnings = %v, want substring %q", cfg.ValidationWarnings, want)
+			}
+		}
+	})
+
+	t.Run("rejects half pair at second exporter", func(t *testing.T) {
+		const yaml = `
+clickhouse:
+  host: localhost
+  port: 9000
+  database: default
+exporters:
+  otel:
+    - collector_address: primary:4317
+    - collector_address: backup:4317
+      client_key: /tls/client-key.pem
+monitor:
+  enabled: true
+  min_trace_duration_ms: 1000
+  check_interval_s: 30
+`
+		_, err := LoadConfig(writeConfigFile(t, yaml))
+		if err == nil || !strings.Contains(err.Error(), "exporters.otel[1].client_cert and exporters.otel[1].client_key") {
+			t.Fatalf("LoadConfig() error = %v, want indexed client certificate pair error", err)
+		}
+	})
+}
+
+func TestLoadConfig_RejectsUnreadableActiveTLSFiles(t *testing.T) {
+	dir := t.TempDir()
+	readable := filepath.Join(dir, "client.pem")
+	if err := os.WriteFile(readable, []byte("test TLS material\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(dir, "missing.pem")
+	tests := []struct {
+		name string
+		yaml string
+		want string
+	}{
+		{
+			name: "ClickHouse CA",
+			yaml: `
+clickhouse:
+  host: localhost
+  port: 9000
+  database: default
+  secure: true
+  ca_cert: ` + missing + `
+exporters:
+  otel:
+    - collector_address: primary:4317
+monitor:
+  enabled: true
+  min_trace_duration_ms: 1000
+  check_interval_s: 30
+`,
+			want: "clickhouse.ca_cert",
+		},
+		{
+			name: "second exporter CA",
+			yaml: `
+clickhouse:
+  host: localhost
+  port: 9000
+  database: default
+exporters:
+  otel:
+    - collector_address: primary:4317
+    - collector_address: backup:4317
+      secure: true
+      ca_cert: ` + missing + `
+monitor:
+  enabled: true
+  min_trace_duration_ms: 1000
+  check_interval_s: 30
+`,
+			want: "exporters.otel[1].ca_cert",
+		},
+		{
+			name: "second exporter client key",
+			yaml: `
+clickhouse:
+  host: localhost
+  port: 9000
+  database: default
+exporters:
+  otel:
+    - collector_address: primary:4317
+    - collector_address: backup:4317
+      secure: true
+      client_cert: ` + readable + `
+      client_key: ` + missing + `
+monitor:
+  enabled: true
+  min_trace_duration_ms: 1000
+  check_interval_s: 30
+`,
+			want: "exporters.otel[1].client_key",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := LoadConfig(writeConfigFile(t, tt.yaml))
+			if err == nil {
+				t.Fatal("LoadConfig() succeeded with an unreadable active TLS file")
+			}
+			if !strings.Contains(err.Error(), tt.want) || !strings.Contains(err.Error(), "fix the path or file permissions") {
+				t.Fatalf("LoadConfig() error = %v, want field %q and actionable remedy", err, tt.want)
+			}
+		})
 	}
 }
 

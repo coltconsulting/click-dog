@@ -136,7 +136,19 @@ func TestFailoverDocs_KeepLookbackRecoveryConditional(t *testing.T) {
 		"docs/operating.md",
 		"docs/development/specs/deployment-topology.md",
 	}
+	// docs/development is internal-only (export-ignored), so the whole tree is
+	// absent from the public archive. When it is absent, skip its files here;
+	// the public docs in this list are still checked. When it IS present, a
+	// missing file under it is a real regression and still fails below. Decide
+	// once from the directory, not per-file, so a deleted file while the tree
+	// exists is not mistaken for the public archive. Mirrors
+	// TestDomainLanguage_SubcommandsDocumented.
+	_, devErr := os.Stat("docs/development")
+	developmentPresent := !os.IsNotExist(devErr)
 	for _, path := range files {
+		if !developmentPresent && strings.HasPrefix(path, "docs/development/") {
+			continue
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
@@ -205,6 +217,195 @@ func TestAnalyzeQueriesDocs_ListEveryFlag(t *testing.T) {
 	}
 }
 
+func TestDatadogDashboardCatalog_DocumentedFromQueryAnalysis(t *testing.T) {
+	want := map[string]string{
+		"query":    "datadog-query-analysis.json",
+		"activity": "datadog-user-activity.json",
+		"health":   "datadog-clickdog-health.json",
+	}
+	if got := len(shippedDashboards); got != len(want) {
+		t.Fatalf("shipped dashboard count = %d, want %d", got, len(want))
+	}
+
+	docs, err := os.ReadFile("docs/query-analysis.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(docs)
+	for _, dashboard := range shippedDashboards {
+		filename, ok := want[dashboard.name]
+		if !ok {
+			t.Errorf("unexpected shipped dashboard selector %q", dashboard.name)
+			continue
+		}
+		if dashboard.filename != filename {
+			t.Errorf("dashboard %q filename = %q, want %q", dashboard.name, dashboard.filename, filename)
+		}
+		if selector := "--dashboard " + dashboard.name; !strings.Contains(text, selector) {
+			t.Errorf("docs/query-analysis.md does not document %q", selector)
+		}
+		delete(want, dashboard.name)
+	}
+	if len(want) > 0 {
+		t.Errorf("shipped dashboard selectors missing: %v", want)
+	}
+
+	for _, required := range []string{
+		"Application Query Analysis",
+		"Exported User Activity",
+		"default `all` selection",
+		"provisions all three",
+		"not a compliance or audit log",
+		"click_dog.query_operation_supported",
+	} {
+		if !strings.Contains(text, required) {
+			t.Errorf("docs/query-analysis.md missing dashboard contract wording %q", required)
+		}
+	}
+}
+
+func TestDatadogDashboardCatalog_InstallSurfacesDocumentAllThree(t *testing.T) {
+	surfaces := []struct {
+		path  string
+		start string
+		end   string
+	}{
+		{path: "docs/getting-started.md", start: "## 3. See Value", end: "\n## Next steps"},
+		{path: "deploy/install.sh", start: `echo "  Next steps:"`, end: "    else"},
+	}
+	for _, surface := range surfaces {
+		t.Run(surface.path, func(t *testing.T) {
+			data, err := os.ReadFile(surface.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wholeFile := string(data)
+			start := strings.Index(wholeFile, surface.start)
+			if start < 0 {
+				t.Fatalf("%s missing dashboard guidance start marker %q", surface.path, surface.start)
+			}
+			section := wholeFile[start:]
+			end := strings.Index(section, surface.end)
+			if end < 0 {
+				t.Fatalf("%s missing dashboard guidance end marker %q", surface.path, surface.end)
+			}
+			text := strings.Join(strings.Fields(section[:end]), " ")
+			for _, required := range []string{
+				"three",
+				"Application Query Analysis",
+				"Exported User Activity",
+				"Health",
+				"click-dog create-dashboards",
+			} {
+				if !strings.Contains(text, required) {
+					t.Errorf("%s does not document the full dashboard catalog: missing %q", surface.path, required)
+				}
+			}
+			for _, stale := range []string{"creates two", "query-analysis and health dashboards"} {
+				if strings.Contains(text, stale) {
+					t.Errorf("%s retains stale dashboard wording %q", surface.path, stale)
+				}
+			}
+		})
+	}
+}
+
+func TestDatadogActivityCompatibilityDocs_DescribeDependentWidgetDegradation(t *testing.T) {
+	requiredByPath := map[string][]string{
+		"docs/query-analysis.md": {
+			"Other query-log attributes remain on eligible enriched spans",
+			"dashboard widgets that filter or group by operation/access type can be empty",
+			"user-to-database and user-to-table relationship tables",
+		},
+		"openspec/specs/datadog-dashboards/spec.md": {
+			"underlying user, database, and table attributes SHALL remain available on eligible enriched spans",
+			"dashboard widgets that also filter or group by operation/access type MAY be empty",
+			"user-to-database and user-to-table relationship tables",
+		},
+	}
+	for path, required := range requiredByPath {
+		t.Run(path, func(t *testing.T) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := strings.Join(strings.Fields(string(data)), " ")
+			for _, phrase := range required {
+				if !strings.Contains(text, phrase) {
+					t.Errorf("%s missing compatibility wording %q", path, phrase)
+				}
+			}
+		})
+	}
+
+	spanSpec, err := os.ReadFile("openspec/specs/span-attributes/spec.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spanSpecText := strings.Join(strings.Fields(string(spanSpec)), " ")
+	if !strings.Contains(spanSpecText, "A failed probe, zero discovered replicas, or mixed-version cluster") {
+		t.Error("span-attributes spec does not exhaustively document operation capability disable conditions")
+	}
+}
+
+func TestDatadogManualImport_ListsEveryShippedDashboardFile(t *testing.T) {
+	for _, path := range []string{"docs/integrations/datadog.md", "dashboards/README.md"} {
+		t.Run(path, func(t *testing.T) {
+			docs, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := string(docs)
+			start := strings.Index(text, "### Option 2: Datadog API")
+			if start < 0 {
+				t.Fatalf("%s missing manual API import section", path)
+			}
+			section := text[start:]
+			codeStart := strings.Index(section, "```bash")
+			if codeStart < 0 {
+				t.Fatalf("%s manual API import section missing bash block", path)
+			}
+			codeStart += len("```bash")
+			codeEnd := strings.Index(section[codeStart:], "```")
+			if codeEnd < 0 {
+				t.Fatalf("%s manual API import bash block is not closed", path)
+			}
+			manualImport := section[codeStart : codeStart+codeEnd]
+			for _, dashboard := range shippedDashboards {
+				if !strings.Contains(manualImport, dashboard.filename) {
+					t.Errorf("%s manual import does not list %q", path, dashboard.filename)
+				}
+			}
+		})
+	}
+}
+
+func TestExportedUserActivity_WebsiteCopyKeepsOperationalBoundary(t *testing.T) {
+	home, err := os.ReadFile("overrides/home.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	homeText := string(home)
+	for _, required := range []string{
+		"exported user-activity review",
+		"exported operational activity—not an audit log",
+		"users, databases, tables, and operations",
+	} {
+		if !strings.Contains(homeText, required) {
+			t.Errorf("homepage missing exported-user-activity wording %q", required)
+		}
+	}
+
+	overview, err := os.ReadFile("docs/overview.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	overviewText := strings.Join(strings.Fields(string(overview)), " ")
+	if !strings.Contains(overviewText, "exported user activity") {
+		t.Error("documentation overview does not make exported user activity discoverable")
+	}
+}
+
 func TestResilienceDocs_UseCurrentBackoffLogFormat(t *testing.T) {
 	for _, path := range []string{"docs/resilience.md", "docs/troubleshooting.md"} {
 		data, err := os.ReadFile(path)
@@ -213,6 +414,111 @@ func TestResilienceDocs_UseCurrentBackoffLogFormat(t *testing.T) {
 		}
 		if strings.Contains(string(data), "Backoff increased to") {
 			t.Errorf("%s documents the pre-format-change backoff log message", path)
+		}
+	}
+}
+
+func TestAuditedOperatorContracts_AreDocumented(t *testing.T) {
+	required := map[string][]string{
+		"docs/configuration.md": {
+			"omitting `monitor:` is not a valid scheduled-mode config",
+			"Replace the removed top-level `otel:` mapping",
+			"Delete the removed `ha.enabled` key",
+			"uses the host's system trust roots",
+		},
+		"docs/filtering.md": {
+			"`blacklist_queries` expressions are not compiled by configuration loading",
+			"`click-dog -validate` and `click-dog check` can succeed",
+		},
+		"docs/integrations/generic-otlp.md": {
+			"3,500,000 bytes (3.5 MB)",
+			"`ResourceExhausted`",
+			"returns no accepted span keys",
+		},
+		"docs/integrations/splunk-hec.md": {
+			"appends `/services/collector/event`",
+			"does not request or poll Splunk indexer acknowledgements",
+			"fixed 30-second timeout",
+			"does **not** validate the token",
+		},
+		"docs/observability.md": {
+			"at most four sends in flight",
+			"There is no waiting queue",
+			"uses a synchronous send during graceful signal handling",
+			"Last success does not prove the regular span fetch ran",
+		},
+		"docs/span-attributes.md": {
+			"A direct attribute therefore wins",
+			"Values larger than 64 KiB are silently skipped",
+		},
+		"docs/install.md": {
+			"does not preflight it",
+			"it deletes both destination files",
+			"systemd-only",
+			"20 most recent public GitHub Releases",
+		},
+	}
+
+	for path, phrases := range required {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		text := strings.Join(strings.Fields(string(data)), " ")
+		for _, phrase := range phrases {
+			if !strings.Contains(text, phrase) {
+				t.Errorf("%s is missing audited operator contract %q", path, phrase)
+			}
+		}
+	}
+}
+
+func TestConfigSourceComments_DoNotRestoreStaleSemantics(t *testing.T) {
+	data, err := os.ReadFile("internal/config/config.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, stale := range []string{
+		"Log rotation settings (only when log_file is set)",
+		"Skip queries with SQL text > this many characters (0 = no limit, default: 100000)",
+	} {
+		if strings.Contains(text, stale) {
+			t.Errorf("internal/config/config.go contains stale comment %q", stale)
+		}
+	}
+}
+
+func TestHomeTerminalTranscript_UsesCurrentOutput(t *testing.T) {
+	data, err := os.ReadFile("overrides/home.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+
+	for _, fabricated := range []string{
+		"✓ config valid · 1 source · 1 sink",
+		"→ 248 spans matched · 0 sent (dry-run)",
+		"collector up · leader · exporting",
+		"clickhouse → otel://localhost:4317 healthy",
+	} {
+		if strings.Contains(text, fabricated) {
+			t.Errorf("overrides/home.html contains fabricated terminal output %q", fabricated)
+		}
+	}
+
+	for _, current := range []string{
+		"Config click-dog.yaml is valid.",
+		"Exporters:   1 OTEL, 0 Splunk HEC",
+		"OTEL[0]:       localhost:4317 (service=click-dog-monitor)",
+		"Monitor:     min_trace=1000ms, interval=30s",
+		"Self-metrics: OTLP push off",
+		"Dry-run mode: exports will be discarded",
+		"--- Dry Run Summary ---",
+		"Starting scheduled mode: min_trace_duration=1000ms, interval=30s, lookback=40s (interval=30 + buffer=10)",
+	} {
+		if !strings.Contains(text, current) {
+			t.Errorf("overrides/home.html is missing current terminal output %q", current)
 		}
 	}
 }

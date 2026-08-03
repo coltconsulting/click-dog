@@ -60,6 +60,7 @@ const (
 	MetricQueryLogEnrichmentMatchRatio = "query_log_enrichment_match_ratio"
 	MetricSpansWithQueryIDRatio        = "spans_with_query_id_ratio"
 	MetricNormalizedQuerySupported     = "normalized_query_supported"
+	MetricQueryOperationSupported      = "query_operation_supported"
 )
 
 var metricDescriptors = []MetricDescriptor{
@@ -89,6 +90,7 @@ var metricDescriptors = []MetricDescriptor{
 	{Key: MetricQueryLogEnrichmentMatchRatio, Kind: MetricKindGauge, ValueType: MetricValueTypeFloat64, Help: "Last cycle's match ratio (matched query_ids / requested query_ids); 0 before first successful enrichment."},
 	{Key: MetricSpansWithQueryIDRatio, Kind: MetricKindGauge, ValueType: MetricValueTypeFloat64, Help: "Last cycle's ratio of fetched spans carrying clickhouse.query_id (0 before first observation)."},
 	{Key: MetricNormalizedQuerySupported, Kind: MetricKindGauge, ValueType: MetricValueTypeInt64, Help: "Whether system.query_log.normalized_query_hash is available and in use (1=yes, 0=no). In cluster query mode this requires all cluster replicas to support it. Set once at startup."},
+	{Key: MetricQueryOperationSupported, Kind: MetricKindGauge, ValueType: MetricValueTypeInt64, Help: "Whether system.query_log.query_kind is available and query operation enrichment is in use (1=yes, 0=no). In cluster query mode this requires all cluster replicas to support it. Set once at startup."},
 }
 
 var descriptorByKey = func() map[string]MetricDescriptor {

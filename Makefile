@@ -1,4 +1,4 @@
-.PHONY: help test build build-all build-amd64 build-arm64 clean run \
+.PHONY: help test test-scripts build build-all build-amd64 build-arm64 clean run \
        test-coverage docker docker-multiarch docker-multiarch-push docker-push \
        preflight tag release version fmt fmt-check lint deps dev-setup vulncheck \
        integration-up integration-test integration-down integration \
@@ -65,9 +65,20 @@ build-arm64:
 
 # ── Test ────────────────────────────────────────────────────────────
 
-test: ## Run unit tests + the install.sh test suite
+test: ## Run unit tests + the shell test suites
 	go test -v ./...
+	@$(MAKE) --no-print-directory test-scripts
+
+# Shell test suites, shared by `make test`, CI (ci.yml), and `preflight` so a
+# single source gates them everywhere. install_test.sh is always present;
+# publish-to-public_test.sh is export-ignored, so the public archive skips it.
+test-scripts: ## Run the shell test suites (install.sh + publish gate)
 	bash deploy/install_test.sh
+	@if [ -f scripts/publish-to-public_test.sh ]; then \
+		bash scripts/publish-to-public_test.sh; \
+	else \
+		echo "skipping publish-gate tests (internal-only; absent from the public archive)"; \
+	fi
 
 test-coverage:
 	go test -v -coverprofile=coverage.out ./...
@@ -155,6 +166,9 @@ preflight: ## Pre-release gate (fmt, test, lint, govulncheck, build, config)
 	@# Tests pass
 	@echo "  [..] running tests..."
 	@go test -race ./... >/dev/null 2>&1 && echo "  [ok] tests pass" || { echo "FAIL: tests failed"; exit 1; }
+	@# Shell test suites pass (install.sh + publish gate)
+	@echo "  [..] running shell test suites..."
+	@$(MAKE) --no-print-directory test-scripts >/dev/null 2>&1 && echo "  [ok] shell tests pass" || { echo "FAIL: shell tests failed — run 'make test-scripts'"; exit 1; }
 	@# Lint passes
 	@echo "  [..] running lint..."
 	@golangci-lint run >/dev/null 2>&1 && echo "  [ok] lint clean" || { echo "FAIL: lint failed"; exit 1; }
@@ -228,11 +242,13 @@ release: ## preflight + tag + push in one step
 #
 # DRY RUN by default — previews the squashed diff and stops. To actually commit
 # and push, pass PUSH=1. Overrides:
-#   TAG=vYY.MM.idx   release to publish (default: latest GA tag)
+#   TAG=vYY.MM.idx   GA release to publish (default: latest GA tag). Must be
+#                    >= MIN_PUBLIC_VERSION and not in the WITHDRAWN_VERSIONS
+#                    denylist (both defined in scripts/publish-to-public.sh).
 #   PUBLIC_DIR=path  clean checkout of the public repo (default: ../click-dog-public)
 #
 #   make update-public                 # preview latest GA release
-#   make update-public TAG=v26.07.1    # preview a specific release
+#   make update-public TAG=v26.07.5    # preview a specific release
 #   make update-public PUSH=1          # actually publish
 update-public: ## Publish a GA release to the public repo (squash; DRY RUN unless PUSH=1)
 	@test -f scripts/publish-to-public.sh || { \
