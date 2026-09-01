@@ -11,12 +11,12 @@ on:
     # run. `synchronize` still re-runs CI on every push to a non-draft PR.
     types: [opened, synchronize, reopened, ready_for_review]
     # Documentation-only paths do not need the full CI matrix. docs.yml
-    # separately validates docs/**, overrides/**, and mkdocs.yml; other Markdown-only PRs
+    # separately validates docs/**, www/**, and mkdocs.yml; other Markdown-only PRs
     # intentionally skip this code matrix. paths-ignore only skips when EVERY
     # changed path matches, so mixed code+docs PRs still run.
     paths-ignore:
       - 'docs/**'
-      - 'overrides/**'
+      - 'www/**'
       - 'mkdocs.yml'
       - '**/*.md'
   # Reusable entry point: release.yml calls this workflow on tag pushes
@@ -52,15 +52,21 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.6'
 
       - name: Download dependencies
         run: go mod download
+
+      - name: Install GoReleaser for public release snapshot
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: '~> v2'
+          install-only: true
 
       # PRs run unit tests without -race to halve wall-clock; master and tag
       # pushes (which gate releases) get the full race-detected run.
@@ -74,9 +80,25 @@ jobs:
 
       # Shell test suites (install.sh + publish-to-public gate). go test above
       # does not cover these, so gate them here through the same shared target
-      # `make test` and `preflight` use.
+      # `make check` and `check-release` use.
       - name: Run shell test suites
         run: make test-scripts
+
+      # The public source mirror is built from `git archive`, which removes
+      # internal docs/site/spec paths via export-ignore. Exercise that exact
+      # tree before a GA tag can reach the artifact-building repository:
+      # boundary, then its Go tests, then an unsigned GoReleaser snapshot
+      # asserting both platform archives contain all starter configs.
+      - name: Check the public export tree
+        # check-public lives in Makefile.internal, which is export-ignored, so
+        # it does not exist in the public repo. There the tree IS the public
+        # tree and only the release build is meaningful; that script ships.
+        run: |
+          if [ -f Makefile.internal ]; then
+            make check-public
+          else
+            bash scripts/test-public-release.sh
+          fi
 
       - name: Upload coverage
         # codecov-action v7.0.0, pinned by commit to avoid major-tag drift.
@@ -89,32 +111,54 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.6'
 
       - name: gofmt
-        run: make fmt-check
+        run: make check-fmt
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
           version: v2.12.2
           args: --timeout=5m
+
+      - name: Install actionlint
+        run: |
+          source scripts/tool-versions.env
+          go install github.com/rhysd/actionlint/cmd/actionlint@"$ACTIONLINT_VERSION"
+
+      - name: Lint GitHub Actions workflows
+        run: make check-workflows
+
+      - name: Install shellcheck
+        run: |
+          set -euo pipefail
+          source scripts/tool-versions.env
+          mkdir -p .agent-cache/bin
+          curl -sSfL "https://github.com/koalaman/shellcheck/releases/download/$SHELLCHECK_VERSION/shellcheck-$SHELLCHECK_VERSION.linux.x86_64.tar.xz" -o shellcheck.tar.xz
+          tar -xJ -O -f shellcheck.tar.xz "shellcheck-$SHELLCHECK_VERSION/shellcheck" > .agent-cache/bin/shellcheck
+          rm -f shellcheck.tar.xz
+          chmod +x .agent-cache/bin/shellcheck
+          .agent-cache/bin/shellcheck --version
+
+      - name: Lint shell sources
+        run: make check-shell
 
   build:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.6'
 
       - name: Build (linux/amd64)
         run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o click-dog-linux-amd64
@@ -126,12 +170,12 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.6'
 
       - name: Build (linux/arm64)
         run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o click-dog-linux-arm64
@@ -140,16 +184,16 @@ jobs:
     # Moved off PRs: the vuln DB updates daily, not per-commit, so scanning
     # every PR push was wasted minutes. Now runs on master push, tag/release
     # (the gate that matters), the weekly schedule above, and manual dispatch.
-    # Run `make vulncheck` locally if you need a pre-merge check on a PR.
+    # Run `make check-vuln` locally if you need a pre-merge check on a PR.
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.6'
 
       # Pinned: avoid silent CI behavior changes from a govulncheck
       # release we haven't reviewed. v1.3.0 requires Go >= 1.25, which
@@ -170,12 +214,12 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.6'
 
       - name: Download dependencies
         run: go mod download
@@ -280,7 +324,7 @@ jobs:
 
       - name: Upload logs on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: integration-logs
           path: integration-logs.txt

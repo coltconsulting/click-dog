@@ -30,10 +30,10 @@ archives:
       # bundling, so re-list them here or they drop out of the tarball.
       - LICENSE
       - README.md
-      # Annotated starter configs, parity-pinned to `click-dog init --profile`
-      # by TestWizard_ParityWithProfileTemplates so they can't drift from the
-      # renderer. Flattened to examples/ in the archive (not docs/examples/).
-      - src: docs/examples/click-dog-*.yaml
+      # Public starter configs, parity-pinned to `click-dog init --profile` by
+      # TestWizard_ParityWithProfileTemplates. These live outside the private
+      # docs site so the exact public export tree contains every archive input.
+      - src: examples/click-dog-*.yaml
         dst: examples
         strip_parent: true
 
@@ -64,19 +64,17 @@ dockers_v2:
       - click-dog
     dockerfile: Dockerfile
     images:
-      - "ghcr.io/coltconsulting/click-dog"
+      - "{{ .Env.CLICK_DOG_IMAGE_REPOSITORY }}"
     tags:
       - "{{ .Version }}"
     platforms:
       - linux/amd64
       - linux/arm64
-    # Pin the OCI source to the PUBLIC repo. Otherwise GoReleaser derives it
-    # from the build's git remote — which was click-dog-internal, so the public
-    # image advertised the private repo AND GHCR auto-linked the package to
-    # click-dog-internal (inheriting its access, blocking pushes from the public
-    # release). See docs/development/specs/release-build-dedup.md.
+    # The release workflow pins this to the repository that owns the channel:
+    # private internal for alpha, public for GA. Do not derive it from a checkout
+    # remote or allow one channel to claim the other channel's source identity.
     labels:
-      org.opencontainers.image.source: "https://github.com/coltconsulting/click-dog"
+      org.opencontainers.image.source: "{{ .Env.CLICK_DOG_SOURCE_REPOSITORY }}"
       org.opencontainers.image.url: "https://click-dog.com"
       org.opencontainers.image.documentation: "https://click-dog.com"
 
@@ -89,14 +87,14 @@ dockers_v2:
       - click-dog
     dockerfile: Dockerfile
     images:
-      - "ghcr.io/coltconsulting/click-dog"
+      - "{{ .Env.CLICK_DOG_IMAGE_REPOSITORY }}"
     tags:
       - "latest"
     platforms:
       - linux/amd64
       - linux/arm64
     labels:
-      org.opencontainers.image.source: "https://github.com/coltconsulting/click-dog"
+      org.opencontainers.image.source: "{{ .Env.CLICK_DOG_SOURCE_REPOSITORY }}"
       org.opencontainers.image.url: "https://click-dog.com"
       org.opencontainers.image.documentation: "https://click-dog.com"
     disable: "{{ if .Prerelease }}true{{ else }}false{{ end }}"
@@ -129,7 +127,7 @@ docker_signs:
       - --yes
 
 release:
-  # `auto` flags any tag with a semver prerelease suffix (-alpha/-beta/-test)
+  # `auto` flags any tag with a semver prerelease suffix (-alpha.1/-alpha.1/etc.)
   # as a GitHub prerelease. Combined with the conditional `latest` docker tag
   # above, this means prereleases never displace the GA on either surface.
   prerelease: auto
@@ -137,6 +135,9 @@ release:
   # https://github.com/coltconsulting/click-dog/releases/latest/download/install.sh
   # (GitHub serves /releases/latest from the most recent NON-prerelease.)
   extra_files:
+    # Internal alpha Releases also contain this public-channel installer for
+    # config/reference parity. It deliberately remains wired to public GA and
+    # must not be used to install the private alpha binary.
     - glob: ./deploy/install.sh
       name_template: install.sh
 

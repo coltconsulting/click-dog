@@ -57,6 +57,14 @@ func shutdownHTTPServer(srv *http.Server) {
 	_ = srv.Shutdown(ctx)
 }
 
+// scheduledModeSignalContext cancels the same context passed through the live
+// ClickHouse/export pipeline as soon as SIGINT or SIGTERM arrives. Keeping this
+// construction outside the polling select is what lets an in-flight cycle stop
+// immediately instead of waiting for the select loop to become idle.
+func scheduledModeSignalContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
+}
+
 func otlpMetricsSinkNames(cfg *config.Config, dryRun bool) map[string]string {
 	if dryRun {
 		return map[string]string{"dry_run": "dry_run"}
@@ -103,6 +111,17 @@ func selfMetricsStatusLine(cfg *config.Config) string {
 	}
 	return fmt.Sprintf("Self-metrics: OTLP push → %s (%s), every %ds (service=%s, host=%s)",
 		endpoint, source, cfg.Metrics.OTLP.IntervalSeconds, cfg.Metrics.OTLP.ServiceName, cfg.Metrics.OTLP.Host)
+}
+
+// queryTextCapabilityWarning ties the normalized-query capability probe to
+// the operator-selected privacy mode. The reader already reports the probe
+// failure itself; this second, mode-specific warning explains the observable
+// fail-closed result rather than leaving an empty query-text stream mysterious.
+func queryTextCapabilityWarning(cfg *config.Config, normalizedQuerySupported bool) string {
+	if cfg.Filters.EffectiveQueryTextMode() != config.QueryTextModeNormalizedOnly || normalizedQuerySupported {
+		return ""
+	}
+	return "filters.query_text_mode is normalized_only, but ClickHouse normalized-query support is unavailable; exports will omit query text rather than fall back to raw SQL"
 }
 
 // sameListenAddress reports whether two ListenAndServe addresses would bind
@@ -210,6 +229,7 @@ var subcommands = map[string]func(args []string, out, errOut io.Writer) int{
 	"init":              runInit,
 	"check":             runCheck,
 	"analyze":           runAnalyze,
+	"test":              runTest,
 	"test-span":         runTestSpan,
 	"flush":             runFlush,
 	"self-update":       runSelfUpdate,
@@ -230,8 +250,9 @@ Usage:
   click-dog init [flags]         Generate a starter configuration file
   click-dog check [flags]        Validate config, probe the ClickHouse data plane, and test exporters
   click-dog analyze <subcommand> Run a local, read-only query analysis report
-  click-dog test-span            Send a synthetic test span to verify export pipeline
-  click-dog flush                Export current lookback window and exit
+  click-dog test <subcommand>    Test exporter delivery or native ClickHouse tracing
+  click-dog test-span            Deprecated alias for 'click-dog test export'
+  click-dog flush                Ask the running service (systemd or leader) to export
   click-dog self-update [flags]  Update to the latest release
   click-dog create-dashboards    Create the Datadog dashboards via API
   click-dog deploy <subcommand>  Install / inspect a click-dog deployment
@@ -251,6 +272,8 @@ Examples:
   click-dog --dry-run -config /etc/click-dog/config.yaml
   click-dog init --ch-host clickhouse.local --collector otel:4317
   click-dog check -config /etc/click-dog/config.yaml
+  click-dog test export -config /etc/click-dog/config.yaml
+  click-dog test tracing -config /etc/click-dog/config.yaml
   click-dog -backfill-start 2024-01-01T00:00:00Z -backfill-end 2024-01-02T00:00:00Z
 `
 
@@ -359,6 +382,7 @@ func main() {
 		}
 		fmt.Printf("  Monitor:     min_trace=%dms, interval=%ds\n",
 			cfg.Monitor.MinTraceDurationMs, cfg.Monitor.CheckIntervalS)
+		fmt.Printf("  Query text:  %s\n", cfg.Filters.EffectiveQueryTextMode())
 		if cfg.HA.Active() {
 			fmt.Printf("  HA:          leader election (keeper: %v)\n", cfg.HA.Keeper.Hosts)
 		}
@@ -410,6 +434,7 @@ func main() {
 	clicklog.Info("Configuration: min_trace_duration=%dms, min_span_duration=%dms, max_trace_duration=%dms, max_span_duration=%dms",
 		cfg.Monitor.MinTraceDurationMs, cfg.Monitor.MinSpanDurationMs,
 		cfg.Monitor.MaxTraceDurationMs, cfg.Monitor.MaxSpanDurationMs)
+	clicklog.Info("Query text export mode: %s", cfg.Filters.EffectiveQueryTextMode())
 	clicklog.Info("ClickHouse: %s:%d (cluster_mode=%v, max_conns=%d, query_timeout=%ds)",
 		cfg.ClickHouse.Host, cfg.ClickHouse.Port, cfg.ClickHouse.UseClusterQueries,
 		cfg.ClickHouse.MaxOpenConns, cfg.ClickHouse.QueryTimeoutS)
@@ -442,8 +467,12 @@ func main() {
 	// correlate missing normalized-query and activity attributes with explicit
 	// ClickHouse capability state (#183). The reader probes once at construction;
 	// we propagate the results and never re-probe.
-	m.SetNormalizedQuerySupported(chReader.QueryLogNormalizedSupported())
+	normalizedQuerySupported := chReader.QueryLogNormalizedSupported()
+	m.SetNormalizedQuerySupported(normalizedQuerySupported)
 	m.SetQueryOperationSupported(chReader.QueryLogOperationSupported())
+	if warning := queryTextCapabilityWarning(cfg, normalizedQuerySupported); warning != "" {
+		clicklog.Warn("%s", warning)
+	}
 
 	// Wire up HTTP listeners for metrics and health. Three possible paths:
 	//   1. metrics enabled, health mounts on same mux (one listener)
@@ -739,21 +768,33 @@ func runScheduledMode(
 		cfg.Monitor.MinTraceDurationMs, cfg.Monitor.CheckIntervalS, cfg.Monitor.LookbackS,
 		cfg.Monitor.CheckIntervalS, cfg.Monitor.LookbackBufferS)
 
-	// Set up graceful shutdown
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	// The pipeline receives this signal-aware context directly, so SIGINT/SIGTERM
+	// cancels an in-flight ClickHouse query, batch delay, or exporter call rather
+	// than waiting for the polling select to become idle.
+	ctx, stopSignals := scheduledModeSignalContext(ctx)
+	defer stopSignals()
+	shutdown := func() {
+		// Restore the default signal behavior before the bounded webhook attempt;
+		// a second signal can therefore force termination if shutdown itself stalls.
+		stopSignals()
+		clicklog.Info("Shutting down gracefully...")
+		wh.NotifySync(context.Background(), webhook.EventShutdown, "Click-Dog shutting down")
+	}
 
 	// SIGUSR1 feeds into the shared flushChan
 	sigusr1 := make(chan os.Signal, 1)
 	signal.Notify(sigusr1, syscall.SIGUSR1)
+	defer signal.Stop(sigusr1)
 	go func() {
-		for range sigusr1 {
+		for {
 			select {
-			case flushChan <- struct{}{}:
-			default:
+			case <-ctx.Done():
+				return
+			case <-sigusr1:
+				select {
+				case flushChan <- struct{}{}:
+				default:
+				}
 			}
 		}
 	}()
@@ -905,6 +946,10 @@ func runScheduledMode(
 	// full ClickHouse → filter → OTEL pipeline is wired correctly before
 	// we enter the steady-state loop.
 	startupErr := pipeline.Process(ctx)
+	if ctx.Err() != nil {
+		shutdown()
+		return
+	}
 	switch {
 	case errors.Is(startupErr, processor.ErrLeaderStandby):
 		clicklog.Info("Startup check: standby (not leader) — export gated, no work this cycle")
@@ -929,20 +974,25 @@ func runScheduledMode(
 		select {
 		case <-ticker.C:
 			runErr := pipeline.Process(ctx)
+			if ctx.Err() != nil {
+				shutdown()
+				return
+			}
 			processor.UpdatePollerState(adaptivePoller, runErr, ticker, baseInterval, m)
 
 		case <-flushChan:
 			clicklog.Info("Flush requested — running immediate cycle")
 			runErr := pipeline.Process(ctx)
+			if ctx.Err() != nil {
+				shutdown()
+				return
+			}
 			processor.UpdatePollerState(adaptivePoller, runErr, ticker, baseInterval, m)
 			// Reset ticker so the next regular cycle starts from now
 			ticker.Reset(baseInterval)
 
-		case <-sigChan:
-			clicklog.Info("Shutting down gracefully...")
-			// Shutdown delivery is synchronous so process exit cannot race the
-			// notification. The webhook client's configured timeout bounds the wait.
-			wh.NotifySync(context.Background(), webhook.EventShutdown, "Click-Dog shutting down")
+		case <-ctx.Done():
+			shutdown()
 			return
 		}
 	}

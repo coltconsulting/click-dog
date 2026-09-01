@@ -297,8 +297,9 @@ func TestRenderWizardYAML_LoadsForEveryCombination(t *testing.T) {
 // against renderer drift, now that the wizard is the only YAML-emitting
 // surface. For each profile, with the optional blocks (TLS, Splunk HEC,
 // HA) NOT enabled, the parsed config from the wizard renderer must be
-// reflect.DeepEqual to the parsed config from the matching tracked
-// example under docs/examples/. The earlier version of this test
+// reflect.DeepEqual to the parsed config from the matching tracked release
+// example under examples/. The internal docs copy is checked separately when
+// the site tree is present. The earlier version of this test
 // hand-listed six fields; that turned out to be the exact size of the
 // bug surface (paranoid's clickhouse: hardening was dropped because no
 // listed field covered ClickHouse.QueryTimeoutS). DeepEqual catches the
@@ -333,19 +334,33 @@ func TestWizard_ParityWithProfileTemplates(t *testing.T) {
 				t.Fatalf("wizard YAML failed to load: %v", err)
 			}
 
-			examplePath := filepath.Join("docs", "examples", "click-dog-"+profile+".yaml")
+			examplePath := filepath.Join("examples", "click-dog-"+profile+".yaml")
 			profCfg, err := config.LoadConfig(examplePath)
 			if err != nil {
-				t.Fatalf("example %s failed to load: %v", examplePath, err)
+				t.Fatalf("release example %s failed to load: %v", examplePath, err)
 			}
 
 			wizCfg.DeprecationWarnings = nil
 			profCfg.DeprecationWarnings = nil
 
 			if !reflect.DeepEqual(wizCfg, profCfg) {
-				t.Errorf("wizard renderer / docs/examples/ diverge for %q:\nwizard:  %+v\nexample: %+v",
+				t.Errorf("wizard renderer / examples/ diverge for %q:\nwizard:  %+v\nexample: %+v",
 					profile, wizCfg, profCfg)
 			}
+
+			t.Run("docs-copy", func(t *testing.T) {
+				requireInternalDocs(t)
+				docsPath := filepath.Join("docs", "examples", "click-dog-"+profile+".yaml")
+				docsCfg, err := config.LoadConfig(docsPath)
+				if err != nil {
+					t.Fatalf("documentation example %s failed to load: %v", docsPath, err)
+				}
+				docsCfg.DeprecationWarnings = nil
+				if !reflect.DeepEqual(profCfg, docsCfg) {
+					t.Errorf("release and documentation examples diverge for %q:\nrelease: %+v\ndocs:    %+v",
+						profile, profCfg, docsCfg)
+				}
+			})
 		})
 	}
 }
@@ -393,9 +408,8 @@ func extractBlacklistQueries(block string) []string {
 }
 
 // TestBlacklistOpsConsistentAcrossProfiles closes the drift gap called out in
-// review: the engine-internal operation list is now hand-copied across five
-// places — active in production and paranoid, commented in minimal, plus the
-// matching docs/examples/ files for minimal and paranoid. The parity gate is
+// review: the engine-internal operation list is hand-copied across renderer
+// profiles and the matching public examples. The parity gate is
 // blind to comment text (and doesn't diff active lists op-by-op), so without
 // this a copy could silently diverge from production. Assert every source
 // carries the identical list, in the same order.
@@ -405,20 +419,27 @@ func TestBlacklistOpsConsistentAcrossProfiles(t *testing.T) {
 		t.Fatal("no ops extracted from production block — the rendered format changed; update extractBlacklistOps")
 	}
 
-	readExample := func(profile string) string {
-		b, err := os.ReadFile(filepath.Join("docs", "examples", "click-dog-"+profile+".yaml"))
+	readExample := func(root, profile string) string {
+		b, err := os.ReadFile(filepath.Join(root, "click-dog-"+profile+".yaml"))
 		if err != nil {
 			t.Fatalf("read %s example: %v", profile, err)
 		}
 		return string(b)
 	}
 
-	for _, src := range []struct{ name, block string }{
+	opSources := []struct{ name, block string }{
 		{"minimal profile (commented)", monitorSectionForProfile("minimal")},
 		{"paranoid profile (active)", monitorSectionForProfile("paranoid")},
-		{"docs/examples/click-dog-minimal.yaml", readExample("minimal")},
-		{"docs/examples/click-dog-paranoid.yaml", readExample("paranoid")},
-	} {
+		{"examples/click-dog-minimal.yaml", readExample("examples", "minimal")},
+		{"examples/click-dog-paranoid.yaml", readExample("examples", "paranoid")},
+	}
+	if _, err := os.Stat(filepath.Join("docs", "examples")); err == nil {
+		opSources = append(opSources,
+			struct{ name, block string }{"docs/examples/click-dog-minimal.yaml", readExample(filepath.Join("docs", "examples"), "minimal")},
+			struct{ name, block string }{"docs/examples/click-dog-paranoid.yaml", readExample(filepath.Join("docs", "examples"), "paranoid")},
+		)
+	}
+	for _, src := range opSources {
 		if got := extractBlacklistOps(src.block); !reflect.DeepEqual(prod, got) {
 			t.Errorf("%s blacklist drifted from production:\n production=%v\n %s=%v", src.name, prod, src.name, got)
 		}
@@ -430,10 +451,16 @@ func TestBlacklistOpsConsistentAcrossProfiles(t *testing.T) {
 	if len(prodQ) == 0 {
 		t.Fatal("no queries extracted from production block — the rendered format changed; update extractBlacklistQueries")
 	}
-	for _, src := range []struct{ name, block string }{
+	querySources := []struct{ name, block string }{
 		{"paranoid profile (active)", monitorSectionForProfile("paranoid")},
-		{"docs/examples/click-dog-paranoid.yaml", readExample("paranoid")},
-	} {
+		{"examples/click-dog-paranoid.yaml", readExample("examples", "paranoid")},
+	}
+	if _, err := os.Stat(filepath.Join("docs", "examples")); err == nil {
+		querySources = append(querySources,
+			struct{ name, block string }{"docs/examples/click-dog-paranoid.yaml", readExample(filepath.Join("docs", "examples"), "paranoid")},
+		)
+	}
+	for _, src := range querySources {
 		if got := extractBlacklistQueries(src.block); !reflect.DeepEqual(prodQ, got) {
 			t.Errorf("%s blacklist_queries drifted from production:\n production=%v\n %s=%v", src.name, prodQ, src.name, got)
 		}

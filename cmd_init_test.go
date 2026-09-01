@@ -189,6 +189,9 @@ func TestRunInit_ParanoidProfile(t *testing.T) {
 	if len(cfg.Filters.BlacklistOperations) == 0 {
 		t.Errorf("paranoid profile should ship blacklist_operations active, got none")
 	}
+	if cfg.Filters.QueryTextMode != config.QueryTextModeNormalizedOnly {
+		t.Errorf("paranoid query_text_mode = %q, want normalized_only", cfg.Filters.QueryTextMode)
+	}
 }
 
 // TestRunInit_ProductionHasHardeningAndBlacklistOps locks in the spec
@@ -234,6 +237,9 @@ func TestRunInit_ProductionHasHardeningAndBlacklistOps(t *testing.T) {
 	}
 	if cfg.Health.ListenAddress != ":8686" {
 		t.Errorf("production health.listen_address = %q, want :8686", cfg.Health.ListenAddress)
+	}
+	if cfg.Filters.QueryTextMode != config.QueryTextModeRaw {
+		t.Errorf("production query_text_mode = %q, want raw compatibility default", cfg.Filters.QueryTextMode)
 	}
 
 	// blacklist_operations must contain the install.sh-era set of
@@ -431,7 +437,7 @@ func TestRunInit_MinimalProfileHonorsCHUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(body), "username:") {
-		t.Errorf("minimal profile with default user should omit username: to match docs/examples; got:\n%s", body)
+		t.Errorf("minimal profile with default user should omit username to match examples/; got:\n%s", body)
 	}
 }
 

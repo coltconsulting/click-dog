@@ -16,12 +16,12 @@ jobs:
   degradation-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.6'
 
       - name: Download dependencies
         run: go mod download
@@ -46,23 +46,23 @@ jobs:
             container="clickhouse-int-${svc##clickhouse}"
             echo "Waiting for $svc (container $container)..."
             for i in $(seq 1 90); do
-              if docker exec $container wget --spider -q localhost:8123/ping 2>/dev/null; then
+              if docker exec "$container" wget --spider -q localhost:8123/ping 2>/dev/null; then
                 echo "$svc HTTP ping OK"
                 break
               fi
-              if [ $i -eq 90 ]; then
+              if [ "$i" -eq 90 ]; then
                 echo "$svc failed to start"
-                docker compose -f testing/docker-compose.integration.yml logs $svc
+                docker compose -f testing/docker-compose.integration.yml logs "$svc"
                 exit 1
               fi
               sleep 2
             done
             for i in $(seq 1 30); do
-              if docker exec $container clickhouse-client --query "SELECT 1" 2>/dev/null; then
+              if docker exec "$container" clickhouse-client --query "SELECT 1" 2>/dev/null; then
                 echo "$svc is fully ready"
                 break
               fi
-              if [ $i -eq 30 ]; then
+              if [ "$i" -eq 30 ]; then
                 echo "$svc native protocol not ready"
                 exit 1
               fi
@@ -72,7 +72,7 @@ jobs:
 
       - name: Wait for OTEL Collector
         run: |
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if curl -sf http://localhost:13133/ > /dev/null 2>&1; then
               echo "OTEL Collector is ready"
               exit 0
@@ -86,7 +86,7 @@ jobs:
       - name: Run degradation tests
         run: |
           go test -v -race -tags integration -run "$TEST_FILTER" -timeout 300s ./... 2>&1 | tee test-output.txt
-          exit ${PIPESTATUS[0]}
+          exit "${PIPESTATUS[0]}"
         env:
           TEST_FILTER: ${{ github.event.inputs.test_filter }}
           CLICKHOUSE1_ADDR: localhost:19000
@@ -117,7 +117,7 @@ jobs:
 
       - name: Upload logs on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: degradation-logs
           path: |

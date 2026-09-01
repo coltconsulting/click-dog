@@ -89,6 +89,9 @@ assert_not_contains() {
 # ── Source install.sh functions ───────────────────────────────
 # We need to source the functions without running the main flow.
 # Extract just the function definitions.
+# The globals below are read by install.sh's functions, which arrive through
+# the eval at the end rather than a source, so the linter sees only the writes.
+# shellcheck disable=SC2034
 source_functions() {
     # Set required globals so sourced functions don't fail
     CLICKHOUSE_USER="monitoring"
@@ -562,13 +565,18 @@ docker() { k8s_docker_args="$*"; }
 k8s_tmp=$(make_temp_dir)
 TEST_TEMP_DIRS+=("$k8s_tmp")
 
+# do_kubernetes reads these; it comes from the eval in source_functions, so the
+# linter sees the writes and none of the reads.
+# shellcheck disable=SC2034
 OUTPUT_DIR="$k8s_tmp"
 COLLECTOR_ADDRESS="otel-collector:4317"
 CLICKHOUSE_PASSWORD="testpass123"
 CLICKHOUSE_USER="click_dog_monitor"
 CLICKHOUSE_HOST="clickhouse.clickhouse.svc.cluster.local"
+# shellcheck disable=SC2034
 CLICKHOUSE_CLUSTER="main"
 VERSION="26.04.1"
+# shellcheck disable=SC2034
 SUBCOMMAND=""
 
 do_kubernetes > /dev/null
@@ -588,6 +596,7 @@ assert_not_contains "password not baked into argv" "testpass123"                
 # --ch-host is required: a standalone click-dog pod can't reach ClickHouse via
 # localhost. Subshell so the function's `exit 1` doesn't kill the suite.
 k8s_noch_rc=0
+# shellcheck disable=SC2034  # read by do_kubernetes, which arrives via eval
 ( CLICKHOUSE_HOST=""; do_kubernetes >/dev/null 2>&1 ) || k8s_noch_rc=$?
 assert_eq "kubernetes without --ch-host fails" "1" "$k8s_noch_rc"
 
@@ -1311,10 +1320,28 @@ assert_contains "operator auth used verbatim" "-u admin --password secret -q SEL
 assert_not_contains "monitoring user not appended over operator auth" "monitoring" "$auth_out"
 
 # Runner: a password already exists (CLICKHOUSE_PASSWORD env) → authenticate as
-# that user, since it exists.
-CLICKHOUSE_CLIENT="record_args"; CLICKHOUSE_USER="monitoring"; CLICKHOUSE_PASSWORD="monpass"
+# that user, since it exists. Record the child environment separately so the
+# assertion also proves that the password did not move back into argv.
+record_env_and_args() { echo "password=${CLICKHOUSE_PASSWORD:-} args=$*"; }
+CLICKHOUSE_CLIENT="record_env_and_args"; CLICKHOUSE_USER="monitoring"; CLICKHOUSE_PASSWORD="monpass"
 withpw_out="$(_span_log_default_runner 'SELECT 1')"
-assert_contains "existing password authenticates as that user" "-u monitoring --password monpass -q SELECT 1" "$withpw_out"
+assert_contains "existing password is passed in child environment" "password=monpass" "$withpw_out"
+assert_contains "existing password authenticates as that user" "args=-u monitoring -q SELECT 1" "$withpw_out"
+assert_not_contains "existing password is absent from argv" "--password" "$withpw_out"
+
+# Docker wrappers cross a process/container boundary. They must forward the
+# command-scoped password by name; otherwise the installer warns instead of
+# silently degrading to the no-client/manual path.
+docker_warn="$(_warn_clickhouse_client_password_forwarding 'docker exec clickhouse clickhouse-client' 2>&1)"
+assert_contains "docker exec without env forwarding warns" "without forwarding CLICKHOUSE_PASSWORD" "$docker_warn"
+docker_safe="$(_warn_clickhouse_client_password_forwarding 'docker exec -e CLICKHOUSE_PASSWORD clickhouse clickhouse-client' 2>&1)"
+assert_eq "docker exec by-name env forwarding is accepted" "" "$docker_safe"
+docker_long_safe="$(_warn_clickhouse_client_password_forwarding 'docker exec --env=CLICKHOUSE_PASSWORD clickhouse clickhouse-client' 2>&1)"
+assert_eq "docker exec long env forwarding is accepted" "" "$docker_long_safe"
+docker_invalid_short="$(_warn_clickhouse_client_password_forwarding 'docker exec -e=CLICKHOUSE_PASSWORD clickhouse clickhouse-client' 2>&1)"
+assert_contains "invalid docker short env spelling still warns" "without forwarding CLICKHOUSE_PASSWORD" "$docker_invalid_short"
+plain_safe="$(_warn_clickhouse_client_password_forwarding 'clickhouse-client' 2>&1)"
+assert_eq "plain clickhouse-client needs no boundary warning" "" "$plain_safe"
 
 # Runner: default quickstart — no -C auth, no password yet. The monitoring user
 # isn't created until Step 2, so the runner must NOT probe as it; it uses the
@@ -1424,6 +1451,12 @@ echo "=== user-setup flow copy + blast radius (issue #181) ==="
 
 # Extract the quickstart body so we can assert on its operator-facing copy.
 quickstart_body=$(awk '/^do_quickstart\(\)/,/^# ── Dispatch/' deploy/install.sh)
+# Generated monitoring credentials must use clickhouse-client's environment
+# support, not process arguments visible to other local users.
+assert_not_contains "generated password is absent from client argv" '--password "$mon_pass"' "$quickstart_body"
+assert_contains "generated password uses child environment" 'CLICKHOUSE_PASSWORD="$mon_pass" $CLICKHOUSE_CLIENT' "$quickstart_body"
+assert_contains "manual fallback models argv-safe password handling" 'Run with: CLICKHOUSE_PASSWORD=... clickhouse-client' "$quickstart_body"
+assert_contains "embedded -C auth suppresses forwarding warning" 'if ! _span_log_client_has_auth "$CLICKHOUSE_CLIENT"; then' "$quickstart_body"
 # The inaccurate "Nothing else is changed" reassurance must be gone.
 assert_not_contains "no false 'Nothing else is changed' copy" "Nothing else is changed" "$quickstart_body"
 # Copy must accurately describe the non-clobbering CREATE USER IF NOT EXISTS posture.

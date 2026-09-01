@@ -26,7 +26,10 @@
 #   -k HOSTS         Keeper hosts for HA, comma-separated (install only)
 #   -x PROXY         HTTPS proxy for binary download
 #   -C CMD           clickhouse-client command/path (default: clickhouse-client)
-#                    e.g. -C "clickhouse-client -u admin --password secret"
+#                    e.g. -C "clickhouse-client -u admin". A docker-exec
+#                    wrapper must add `-e CLICKHOUSE_PASSWORD` (by name, with
+#                    no value) so command-scoped credentials cross into the
+#                    container without appearing in host process arguments.
 #   -f PATH          Use this pre-rendered click-dog.yaml instead of having
 #                    install.sh render one (install only). Pair with the
 #                    output of `click-dog init --wizard` from a laptop.
@@ -35,7 +38,7 @@
 #                    clickhouse.clickhouse.svc.cluster.local — not localhost)
 #   --cluster NAME   ClickHouse cluster name for kubernetes; enables cluster()
 #                    reads across all shards
-#   --prerelease     When -v is unset, resolve the newest pre-release
+#   --prerelease     When -v is unset, resolve the newest PUBLIC pre-release
 #                    (alpha/beta) instead of the latest GA release
 #   --systemd        Create + enable systemd unit (install only)
 #   -h               Show this help
@@ -83,7 +86,8 @@ CONFIG_FROM_FILE=""
 HTTPS_PROXY_FLAG=""
 VERSION=""
 # When set (via --prerelease) and no -v is given, resolve_version picks the
-# newest release INCLUDING alpha/beta prereleases instead of the latest GA.
+# newest explicitly public prerelease instead of the latest GA. Private alpha
+# releases in click-dog-internal are intentionally not resolved here.
 PRERELEASE="false"
 SYSTEMD="false"
 OUTPUT_DIR=""
@@ -1521,6 +1525,21 @@ _span_log_client_has_auth() {
     esac
 }
 
+# Warn when a docker-exec wrapper would drop a command-scoped password at the
+# container boundary. `docker exec -e CLICKHOUSE_PASSWORD` copies the value
+# from this process's environment without putting the secret itself in argv.
+_warn_clickhouse_client_password_forwarding() {
+    case " $1 " in
+        *" docker exec "*) ;;
+        *) return 0 ;;
+    esac
+    case " $1 " in
+        *" -e CLICKHOUSE_PASSWORD "*|*" --env CLICKHOUSE_PASSWORD "*|*" --env=CLICKHOUSE_PASSWORD "*) return 0 ;;
+    esac
+    echo "  WARNING: -C uses docker exec without forwarding CLICKHOUSE_PASSWORD." >&2
+    echo "           Add: docker exec -e CLICKHOUSE_PASSWORD ... clickhouse-client" >&2
+}
+
 # Default query runner: invoke $CLICKHOUSE_CLIENT for the SQL string. Word-split
 # $CLICKHOUSE_CLIENT intentionally (it may carry host/port/auth flags).
 #
@@ -1543,8 +1562,10 @@ _span_log_default_runner() {
         return
     fi
     if [[ -n "${CLICKHOUSE_PASSWORD:-}" ]]; then
+        # clickhouse-client reads CLICKHOUSE_PASSWORD natively. Supplying it
+        # only in the child environment keeps the secret out of /proc/*/cmdline.
         # shellcheck disable=SC2086
-        $CLICKHOUSE_CLIENT -u "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" -q "$sql"
+        CLICKHOUSE_PASSWORD="$CLICKHOUSE_PASSWORD" $CLICKHOUSE_CLIENT -u "$CLICKHOUSE_USER" -q "$sql"
         return
     fi
     # shellcheck disable=SC2086
@@ -2005,6 +2026,9 @@ OTELXML
         echo ""
         echo "  Using existing credentials (user: ${CLICKHOUSE_USER}, password from env)"
         echo "  Skipping ClickHouse user setup."
+        if ! _span_log_client_has_auth "$CLICKHOUSE_CLIENT"; then
+            _warn_clickhouse_client_password_forwarding "$CLICKHOUSE_CLIENT"
+        fi
     else
         local mon_pass=""
         local reusing_password="false"
@@ -2025,6 +2049,7 @@ OTELXML
             [[ ${#mon_pass} -ge 16 ]] || { echo "Error: failed to generate password"; exit 1; }
         fi
         CLICKHOUSE_PASSWORD="$mon_pass"
+        _warn_clickhouse_client_password_forwarding "$CLICKHOUSE_CLIENT"
 
         # Generate SHA256 hash (used by both SQL and XML user config)
         local pass_hash=""
@@ -2066,7 +2091,10 @@ OTELXML
         local probed="false"
         if command -v ${CLICKHOUSE_CLIENT%% *} &>/dev/null; then
             probed="true"
-            if $CLICKHOUSE_CLIENT -u "$CLICKHOUSE_USER" --password "$mon_pass" -q "SELECT 1" &>/dev/null; then
+            # Use clickhouse-client's password environment variable so the
+            # generated credential is never exposed in the process argv. A
+            # docker-exec -C wrapper must forward it with `-e CLICKHOUSE_PASSWORD`.
+            if CLICKHOUSE_PASSWORD="$mon_pass" $CLICKHOUSE_CLIENT -u "$CLICKHOUSE_USER" -q "SELECT 1" &>/dev/null; then
                 user_can_auth="true"
             fi
         fi
@@ -2087,7 +2115,7 @@ OTELXML
         if [[ "$auth_decision" == "ok" ]]; then
             # User authenticates. Verify it can read BOTH required tables
             # instead of assuming SELECT 1 implies access.
-            if $CLICKHOUSE_CLIENT -u "$CLICKHOUSE_USER" --password "$mon_pass" --multiquery < "$verify_sql" &>/dev/null; then
+            if CLICKHOUSE_PASSWORD="$mon_pass" $CLICKHOUSE_CLIENT -u "$CLICKHOUSE_USER" --multiquery < "$verify_sql" &>/dev/null; then
                 echo "  Existing ClickHouse user '${CLICKHOUSE_USER}' authenticates and can read"
                 echo "  system.opentelemetry_span_log and system.query_log — nothing to do."
                 echo "  Password: /etc/click-dog/.secret"
@@ -2275,8 +2303,9 @@ OTELXML
                         echo "  Retrying as '${ch_admin}' on '${ch_addr}' (attempt ${attempt}/2)..."
                         # Password via CLICKHOUSE_PASSWORD env (command-scoped) so it
                         # never appears in ps / /proc/<pid>/cmdline. Empty = no
-                        # password. (For a "docker exec" client this env won't cross
-                        # into the container — put the auth in -C for that case.)
+                        # password. A "docker exec" -C wrapper must include
+                        # `-e CLICKHOUSE_PASSWORD` to copy this command-scoped value
+                        # into the container without exposing it in host argv.
                         if CLICKHOUSE_PASSWORD="$ch_admin_pass" "${admin_cli[@]}" --multiquery < "$setup_sql" >/dev/null 2>&1; then
                             echo "  Done."
                             run_ok="true"
@@ -2292,7 +2321,7 @@ OTELXML
                     echo "  ──────────────────────────────────────────────────────"
                     echo ""
                     echo "  Saved to: ${setup_sql}"
-                    echo "  Run with: clickhouse-client --host HOST -u ADMIN --password ... --multiquery < ${setup_sql}"
+                    echo "  Run with: CLICKHOUSE_PASSWORD=... clickhouse-client --host HOST -u ADMIN --multiquery < ${setup_sql}"
                     echo ""
                     read -rp "  Press Enter once done..."
                     break

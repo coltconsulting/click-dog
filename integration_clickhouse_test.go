@@ -207,9 +207,17 @@ func TestIntegration_FetchSpans_DurationFilters(t *testing.T) {
 		t.Fatalf("FetchOpenTelemetrySpans (all) failed: %v", err)
 	}
 
-	if len(spans) >= len(allSpans) && len(allSpans) > 0 {
-		t.Logf("Filtered spans (%d) should be <= all spans (%d)", len(spans), len(allSpans))
-	}
+	// No assertion here, deliberately. This test cannot verify the duration
+	// filter as written: seedSlowQueries issues its queries on a plain context,
+	// so they produce system.query_log rows and no spans, and the 1500ms fetch
+	// above returns zero. (allSpans is usually non-zero — earlier tests seed
+	// traced queries into the same window — so the two counts prove nothing
+	// about this filter.) Comparing the counts would be unsound even with a
+	// fixture, because both fetches share one LIMIT and a saturated window
+	// makes them equal while the filter works correctly. A real check needs a
+	// traced slow-query fixture plus a per-trace assertion (group by TraceID,
+	// require some span >= 1500ms); that is a shared-helper change.
+	t.Logf("Duration filter: %d spans at min=1500ms, %d at min=1ms", len(spans), len(allSpans))
 }
 
 // TestIntegration_FetchSpans_RespectsSpanCap pins issue #91: the limit

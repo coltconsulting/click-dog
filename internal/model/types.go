@@ -72,8 +72,11 @@ type QueryFamilyExactGroup struct {
 	NormalizedQueryHash uint64
 	NormalizedQuery     string
 	ExecutionCount      uint64
+	SuccessfulCount     uint64
+	FailedCount         uint64
 	P95DurationMs       float64
 	P99DurationMs       float64
+	TopExceptions       []QueryExceptionCount
 	MaxMemoryUsage      uint64
 	P95ReadRows         float64
 	P95ReadBytes        float64
@@ -88,17 +91,21 @@ type QueryFamilyExactGroup struct {
 // normalized-query groups. Percentile-like fields are conservative rollups of
 // the member exact-group percentiles, not recomputed from raw executions.
 type QueryFamilyStats struct {
-	ExecutionCount uint64
-	P95DurationMs  float64
-	P99DurationMs  float64
-	MaxMemoryUsage uint64
-	P95ReadRows    float64
-	P95ReadBytes   float64
-	TopUsers       []string
-	TopClients     []string
-	TopTables      []string
-	FirstSeen      time.Time
-	LastSeen       time.Time
+	ExecutionCount  uint64
+	SuccessfulCount uint64
+	FailedCount     uint64
+	FailureRate     float64
+	P95DurationMs   float64
+	P99DurationMs   float64
+	TopExceptions   []QueryExceptionCount
+	MaxMemoryUsage  uint64
+	P95ReadRows     float64
+	P95ReadBytes    float64
+	TopUsers        []string
+	TopClients      []string
+	TopTables       []string
+	FirstSeen       time.Time
+	LastSeen        time.Time
 }
 
 // QueryFamilyMember preserves the exact normalized-query group membership of
@@ -107,6 +114,20 @@ type QueryFamilyMember struct {
 	NormalizedQueryHash uint64
 	NormalizedQuery     string
 	ExecutionCount      uint64
+	SuccessfulCount     uint64
+	FailedCount         uint64
+	FailureRate         float64
+	P95DurationMs       float64
+	P99DurationMs       float64
+	TopExceptions       []QueryExceptionCount
+}
+
+// QueryExceptionCount is one bounded exception-code frequency for an exact
+// normalized-query group or a rollup family. Entries are ordered by count
+// descending, then code ascending.
+type QueryExceptionCount struct {
+	Code  int32
+	Count uint64
 }
 
 // QueryFamilyMergeReason explains why two exact normalized-query groups were

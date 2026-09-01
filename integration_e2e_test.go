@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	lru "github.com/hashicorp/golang-lru/v2"
-
+	chreader "github.com/coltconsulting/click-dog/internal/clickhouse"
 	"github.com/coltconsulting/click-dog/internal/config"
 	"github.com/coltconsulting/click-dog/internal/filter"
+	"github.com/coltconsulting/click-dog/internal/metrics"
 	"github.com/coltconsulting/click-dog/internal/model"
 	"github.com/coltconsulting/click-dog/internal/processor"
 	"github.com/coltconsulting/click-dog/internal/resilience"
@@ -221,75 +221,109 @@ func TestIntegration_E2E_ProcessQueriesBatch(t *testing.T) {
 	t.Logf("Batch E2E: collector received %d spans", len(receivedNames))
 }
 
-// TestIntegration_E2E_DedupWithRealData runs two fetch-export cycles on the
-// same data and verifies the LRU dedup cache prevents re-export.
+// TestIntegration_E2E_DedupWithRealData drives the real export pipeline twice
+// over the same ClickHouse rows and asserts the dedup cache stops the second
+// delivery. It calls processor.Pipeline.Process, so a regression in the
+// product's own dedup path fails this test — it does not re-implement the loop.
+//
+// Deduplication and cursor forward-progress are separate mechanisms and this
+// test isolates the first. The scheduled reader carries a keyset cursor, so a
+// second cycle on the SAME reader would fetch the NEXT page by design; each
+// cycle therefore gets its own reader, both starting at the head of the
+// window, while the dedup cache is shared exactly as it is across cycles in a
+// running process.
+//
+// The single-reader wrap path is NOT covered here. FetchOpenTelemetrySpans
+// returns an empty page both when the walk ends and when a trace page yields
+// no spans after SQL filtering, and those two cases move the cursor in
+// opposite directions, so a caller cannot detect a wrap from outside.
+// internal/clickhouse/span_cursor_test.go covers it against a fake connection.
 func TestIntegration_E2E_DedupWithRealData(t *testing.T) {
 	conn := waitForClickHouse(t, 1, 30*time.Second)
 	defer conn.Close()
 	waitForOTELCollector(t, 30*time.Second)
 	clearOTELOutput(t)
 
+	// Seeding flushes the span log and waits for the rows to materialize, so
+	// the two cycles below read a window that nothing writes to in between.
 	seedTracedQueries(t, conn, 3)
 
-	reader := newCHReader(t, 1)
-	defer reader.Close()
+	qf, err := filter.NewQueryFilter(config.FiltersConfig{})
+	if err != nil {
+		t.Fatalf("NewQueryFilter failed: %v", err)
+	}
 
 	exporter := newOTELExporter(t, "e2e-dedup-test")
 	defer exporter.Close(context.Background())
 
-	filter, _ := filter.NewQueryFilter(config.FiltersConfig{})
-	seenSpans, _ := lru.New[model.SpanKey, bool](10000)
-
-	ctx := context.Background()
-
-	// Cycle 1: fetch and export
-	spans1, err := reader.FetchOpenTelemetrySpans(ctx, 1, 0, 0, 0, 10*time.Minute, 100)
-	if err != nil {
-		t.Fatalf("Cycle 1 fetch failed: %v", err)
+	cfg := &config.Config{
+		Monitor: config.MonitorConfig{
+			MinTraceDurationMs: 1,
+			LookbackS:          600,
+			MaxSpansPerCycle:   100,
+			DedupCacheSize:     10000,
+			// Explicit: a zero here means "no per-export deadline", which is
+			// not what LoadConfig would produce for a real operator.
+			ExportTimeoutS: 30,
+		},
 	}
 
-	exported1 := 0
-	for _, span := range spans1 {
-		if seenSpans.Contains(model.KeyOf(span)) {
-			continue
+	// One cache across both cycles, as a running process has. Each cycle gets
+	// its own reader so cycle 2 re-serves cycle 1's rows instead of paging past
+	// them; only the cache can suppress the repeat.
+	seenSpans := mustLRU(t, cfg.Monitor.DedupCacheSize)
+
+	runCycle := func(reader *chreader.ClickHouseReader) metrics.CycleSnapshot {
+		t.Helper()
+		m := metrics.NewMetrics()
+		pipeline, err := processor.NewPipeline(processor.Pipeline{
+			Reader:    reader,
+			Exporter:  exporter,
+			Filter:    qf,
+			Config:    cfg,
+			SeenSpans: seenSpans,
+			Metrics:   m,
+		})
+		if err != nil {
+			t.Fatalf("NewPipeline: %v", err)
 		}
-		queryText := span.Attributes["db.statement"]
-		clientAddr := span.Attributes["client.address"]
-		if filter.ShouldFilter(span.OperationName, queryText, clientAddr) {
-			continue
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+		defer cancel()
+		if err := pipeline.Process(ctx); err != nil {
+			t.Fatalf("pipeline.Process failed: %v", err)
 		}
-		seenSpans.Add(model.KeyOf(span), true)
-		exported1++
+		snap := m.Snapshot()
+		if !snap.HaveLastCycle {
+			t.Fatal("pipeline recorded no cycle")
+		}
+		return snap.LastCycle
 	}
 
-	// Cycle 2: fetch same data again
-	spans2, err := reader.FetchOpenTelemetrySpans(ctx, 1, 0, 0, 0, 10*time.Minute, 100)
-	if err != nil {
-		t.Fatalf("Cycle 2 fetch failed: %v", err)
+	reader1 := newCHReader(t, 1)
+	defer reader1.Close()
+	cycle1 := runCycle(reader1)
+
+	reader2 := newCHReader(t, 1)
+	defer reader2.Close()
+	cycle2 := runCycle(reader2)
+
+	t.Logf("Dedup E2E: cycle1 exported=%d filtered=%d duplicates=%d; cycle2 exported=%d filtered=%d duplicates=%d",
+		cycle1.Exported, cycle1.Filtered, cycle1.Duplicates,
+		cycle2.Exported, cycle2.Filtered, cycle2.Duplicates)
+
+	if cycle1.Exported == 0 {
+		t.Fatal("Cycle 1 exported nothing, so there is nothing for cycle 2 to deduplicate")
 	}
-
-	exported2 := 0
-	deduped := 0
-	for _, span := range spans2 {
-		if seenSpans.Contains(model.KeyOf(span)) {
-			deduped++
-			continue
-		}
-		queryText := span.Attributes["db.statement"]
-		clientAddr := span.Attributes["client.address"]
-		if filter.ShouldFilter(span.OperationName, queryText, clientAddr) {
-			continue
-		}
-		seenSpans.Add(model.KeyOf(span), true)
-		exported2++
+	if cycle2.Duplicates == 0 {
+		t.Fatal("Cycle 2 deduplicated nothing; either the rows did not repeat or the cache is not consulted")
 	}
-
-	t.Logf("Dedup E2E: cycle1 exported=%d, cycle2 exported=%d, deduped=%d",
-		exported1, exported2, deduped)
-
-	// Most spans from cycle 2 should be deduplicated
-	if deduped == 0 && len(spans1) > 0 {
-		t.Error("Expected some spans to be deduplicated in cycle 2")
+	// The property, stated directly: nothing already delivered is delivered
+	// again. Counting a span as a duplicate is not enough — it must also not be
+	// exported. Nothing writes to the window between the cycles, so any export
+	// here is a second delivery.
+	if cycle2.Exported != 0 {
+		t.Errorf("Cycle 2 exported %d spans that were already delivered in cycle 1 (it also counted %d duplicates); every span in the window had been seen",
+			cycle2.Exported, cycle2.Duplicates)
 	}
 }
 

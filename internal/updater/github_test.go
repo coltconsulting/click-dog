@@ -361,6 +361,18 @@ func TestCosignIdentityRegexpMatchesDocs(t *testing.T) {
 	// the constant in this file drifts from the docs snippet, manual
 	// verifiers would be checking a different signer identity than
 	// self-update — false assurance. Lock the two together.
+	docsRoot := filepath.Join("..", "..", "docs")
+	info, err := os.Stat(docsRoot)
+	if err == nil && !info.IsDir() {
+		t.Fatalf("%s exists but is not a directory", docsRoot)
+	}
+	if os.IsNotExist(err) {
+		t.Skip("docs are internal-only (export-ignored); signer identity parity is enforced in the internal repository")
+	}
+	if err != nil {
+		t.Fatalf("stat %s: %v", docsRoot, err)
+	}
+
 	docsPath := filepath.Join("..", "..", "docs", "install.md")
 	docs, err := os.ReadFile(docsPath)
 	if err != nil {

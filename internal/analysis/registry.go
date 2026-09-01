@@ -28,6 +28,18 @@ func NewRegistry() *Registry {
 	}}
 }
 
+// NewRegistryWithRegression returns the Phase 1 registry followed by the two
+// baseline-aware analyzers. Callers use it only for explicit comparisons so
+// ordinary v1 reports keep their original analyzer inventory.
+func NewRegistryWithRegression() *Registry {
+	reg := NewRegistry()
+	reg.analyzers = append(reg.analyzers,
+		&latencyRegressionAnalyzer{},
+		&failureSpikeAnalyzer{},
+	)
+	return reg
+}
+
 // AnalyzerNames returns the registry's analyzer names in execution order.
 // Used by the domain-language parity test and useful for diagnostics.
 func (r *Registry) AnalyzerNames() []string {
@@ -192,7 +204,7 @@ func BuildReport(ctx context.Context, reg *Registry, input AnalysisInput, genera
 	if findings == nil {
 		findings = []Finding{}
 	}
-	return AnalysisReport{
+	report := AnalysisReport{
 		SchemaVersion: ReportSchemaVersion,
 		GeneratedAt:   generatedAt.UTC(),
 		Window:        input.Window,
@@ -202,4 +214,9 @@ func BuildReport(ctx context.Context, reg *Registry, input AnalysisInput, genera
 		AnalyzerRuns:  runs,
 		Warnings:      warnings,
 	}
+	if input.Comparison != nil {
+		report.SchemaVersion = ComparisonReportSchemaVersion
+		report.Comparison = &input.Comparison.Summary
+	}
+	return report
 }

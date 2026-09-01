@@ -102,6 +102,32 @@ func TestDispatch(t *testing.T) {
 	}
 }
 
+func TestQueryTextCapabilityWarning(t *testing.T) {
+	tests := []struct {
+		name                string
+		mode                config.QueryTextMode
+		normalizedSupported bool
+		wantWarning         bool
+	}{
+		{name: "normalized only unsupported", mode: config.QueryTextModeNormalizedOnly, wantWarning: true},
+		{name: "normalized only supported", mode: config.QueryTextModeNormalizedOnly, normalizedSupported: true},
+		{name: "none unsupported", mode: config.QueryTextModeNone},
+		{name: "redacted unsupported", mode: config.QueryTextModeRedacted},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{Filters: config.FiltersConfig{QueryTextMode: tt.mode}}
+			got := queryTextCapabilityWarning(cfg, tt.normalizedSupported)
+			if (got != "") != tt.wantWarning {
+				t.Fatalf("queryTextCapabilityWarning() = %q, wantWarning=%v", got, tt.wantWarning)
+			}
+			if got != "" && !strings.Contains(got, "omit query text") {
+				t.Fatalf("warning = %q, want fail-closed consequence", got)
+			}
+		})
+	}
+}
+
 // TestDispatch_RoutesKnownVerb asserts that a registered verb is routed to its
 // handler with the post-verb args (argv[2:]) and does not fall through. It
 // swaps the subcommands registry for a stub so no real handler runs.

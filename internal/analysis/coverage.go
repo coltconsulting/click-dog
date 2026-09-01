@@ -113,6 +113,7 @@ func (a *coverageAnalyzer) finding(input AnalysisInput, scope string, severity S
 	return Finding{
 		ID:             FindingID(a.Name(), scope, subject, input.Window.Start, nil),
 		Analyzer:       a.Name(),
+		ConditionScope: scope,
 		Severity:       severity,
 		Confidence:     1.0,
 		Title:          title,

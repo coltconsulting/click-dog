@@ -89,7 +89,7 @@ func (p *Pipeline) Process(ctx context.Context) error {
 
 	// Check circuit breaker before proceeding
 	if p.CircuitBreaker != nil && !p.CircuitBreaker.Allow() {
-		return handleCircuitOpen(ctx, p.Exporter, p.Config, p.CircuitBreaker, p.Heartbeat, p.CanaryQuerier, p.Metrics, p.Webhook, cycleStart)
+		return handleCircuitOpen(ctx, p.Exporter, p.Config, p.Filter, p.CircuitBreaker, p.Heartbeat, p.CanaryQuerier, p.Metrics, p.Webhook, cycleStart)
 	}
 
 	// If Allow() transitioned the circuit breaker to half-open, reflect that in metrics.
@@ -98,7 +98,7 @@ func (p *Pipeline) Process(ctx context.Context) error {
 	}
 
 	// Check if backoff is elevated and canary should run instead of full fetch.
-	if ran, canaryErr := handleElevatedBackoff(ctx, p.Exporter, p.Config, p.CircuitBreaker, p.Heartbeat, p.Poller, p.CanaryQuerier, p.Metrics, p.Webhook, cycleStart); ran {
+	if ran, canaryErr := handleElevatedBackoff(ctx, p.Exporter, p.Config, p.Filter, p.CircuitBreaker, p.Heartbeat, p.Poller, p.CanaryQuerier, p.Metrics, p.Webhook, cycleStart); ran {
 		return canaryErr
 	}
 

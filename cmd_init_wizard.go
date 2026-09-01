@@ -172,19 +172,21 @@ func writeWizardNextSteps(out io.Writer, a wizardAnswers, outputPath string) {
 	}
 	_, _ = fmt.Fprintln(out, "  2. Validate config and connectivity:")
 	_, _ = fmt.Fprintf(out, "       click-dog check%s\n", cfgFlag)
-	_, _ = fmt.Fprintln(out, "  3. Send a synthetic span end-to-end:")
-	_, _ = fmt.Fprintf(out, "       click-dog test-span%s\n", cfgFlag)
-	_, _ = fmt.Fprintln(out, "  4. Start scheduled monitoring:")
+	_, _ = fmt.Fprintln(out, "  3. Test exporter delivery:")
+	_, _ = fmt.Fprintf(out, "       click-dog test export%s\n", cfgFlag)
+	_, _ = fmt.Fprintln(out, "  4. Test native ClickHouse trace propagation:")
+	_, _ = fmt.Fprintf(out, "       click-dog test tracing%s\n", cfgFlag)
+	_, _ = fmt.Fprintln(out, "  5. Start scheduled monitoring:")
 	_, _ = fmt.Fprintf(out, "       click-dog%s\n", cfgFlag)
 
-	// Step 5 only when the user wrote somewhere other than the two paths
+	// Step 6 only when the user wrote somewhere other than the two paths
 	// the binary already searches by default — that's the signal they're
 	// rendering locally to deploy elsewhere. Suppressing it for the
 	// canonical paths keeps the next-steps short for the "just run it here"
 	// flow.
 	if clean != config.DefaultConfigFlag && clean != config.DefaultConfigPath {
 		base := filepath.Base(outputPath)
-		_, _ = fmt.Fprintln(out, "  5. Or deploy to a remote Linux host with systemd.")
+		_, _ = fmt.Fprintln(out, "  6. Or deploy to a remote Linux host with systemd.")
 		_, _ = fmt.Fprintln(out, "     install.sh fetches + verifies the release binary on the target.")
 		if a.CHPasswordFile != "" {
 			// File-based config: the systemd unit ships no EnvironmentFile, so
@@ -509,7 +511,7 @@ func splitAndTrim(s string) []string {
 // (via the binary) reach the on-disk YAML through this function. The
 // invariant is enforced by TestRenderWizardYAML_NeverEmitsTopLevelOtel.
 //
-// The output layout matches docs/examples/click-dog-<profile>.yaml so a user
+// The output layout matches examples/click-dog-<profile>.yaml so a user
 // comparing renderer output to the tracked example sees the same shape; the
 // parity test (TestWizard_ParityWithProfileTemplates) DeepEquals the parsed
 // configs so the example stays a regression gate against renderer drift.
@@ -545,7 +547,7 @@ func renderWizardYAML(a wizardAnswers) string {
 	}
 	// Cluster topology: name the cluster and wrap span reads in cluster(...).
 	// Emitted only in cluster mode, so the sidecar default stays byte-identical
-	// to docs/examples/*.yaml (parity gate).
+	// to examples/*.yaml (parity gate).
 	if a.UseClusterQueries {
 		fmt.Fprintf(&b, "  cluster: %s\n", yamlScalar(a.Cluster))
 		b.WriteString("  use_cluster_queries: true\n")
@@ -557,10 +559,10 @@ func renderWizardYAML(a wizardAnswers) string {
 	b.WriteByte('\n')
 
 	// Emitted for every profile: the operator deciding where spans go is the
-	// same one who must decide whether SQL text needs redaction first.
-	b.WriteString("# Exported spans carry the full SQL text of each traced query\n")
-	b.WriteString("# (db.statement). If queries can embed secrets or PII, add\n")
-	b.WriteString("# filters.redact_queries rules — see docs/filtering.md (Query Redaction).\n")
+	// same one who must choose the query-text privacy posture below.
+	b.WriteString("# filters.query_text_mode controls whether raw SQL crosses the export boundary.\n")
+	b.WriteString("# Use normalized_only or none for privacy-sensitive production environments.\n")
+	b.WriteString("# See docs/filtering.md#query-text-export-modes.\n")
 	b.WriteString("exporters:\n")
 	b.WriteString("  otel:\n")
 	fmt.Fprintf(&b, "    - collector_address: %s\n", yamlScalar(a.OTELCollector))
@@ -633,7 +635,7 @@ func yamlScalar(s string) string {
 
 // clickhouseHardeningForProfile returns the profile-specific clickhouse:
 // hardening lines (each already indented two spaces). Returns empty for
-// profiles that don't add hardening. Mirrors docs/examples/click-dog-*.yaml.
+// profiles that don't add hardening. Mirrors examples/click-dog-*.yaml.
 //
 // `production` carries the modest connection-cap + 30s query timeout that
 // install.sh emitted unconditionally pre-unification; without these the
@@ -699,7 +701,7 @@ func healthSectionForProfile(profile string) string {
 
 // monitorSectionForProfile returns the monitor: block (and, for production,
 // the trailing filters: block) tuned for the named profile. Values mirror
-// docs/examples/click-dog-<profile>.yaml — see renderWizardYAML's
+// examples/click-dog-<profile>.yaml — see renderWizardYAML's
 // commentary on the duplication.
 //
 // Unknown profiles panic rather than fall back to production silently:
@@ -731,6 +733,7 @@ func monitorSectionForProfile(profile string) string {
     backoff_factor: 2.0
 
 filters:
+  query_text_mode: raw # raw | redacted | normalized_only | none
   blacklist_queries:
     - "^SYSTEM"
     - "^INSERT INTO.*\\.inner\\."
@@ -755,6 +758,7 @@ filters:
 # Health dashboard's "spans with query_id" tile toward zero and inflates ingest
 # ~10-100x. The production profile enables this list; uncomment to use it here.
 # filters:
+#   query_text_mode: raw # raw | redacted | normalized_only | none
 #   blacklist_operations:
 #     - "MergeTreeSource"
 #     - "MergeTreeMarksLoader"
@@ -790,6 +794,9 @@ filters:
     threshold_duration_ms: 60000
 
 filters:
+  # Never export raw SQL in the paranoid profile. If ClickHouse cannot provide
+  # a normalized preview, query text is omitted rather than falling back.
+  query_text_mode: normalized_only
   # Both lists are ACTIVE here (unlike minimal's commented block): paranoid's
   # max_spans_per_cycle budget would otherwise fill with engine-internal spans
   # instead of the slow query spans it exists to catch, and aggressive dropping

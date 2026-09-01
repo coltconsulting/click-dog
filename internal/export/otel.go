@@ -117,7 +117,7 @@ func NewOTELGRPCConn(cfg config.OTELConfig) (*grpc.ClientConn, error) {
 		}
 	} else {
 		transportCreds = insecure.NewCredentials()
-		clicklog.Warn("OTEL export using plaintext connection (secure: false) — spans, including SQL text, travel unencrypted; set exporters.otel[].secure: true for TLS")
+		clicklog.Warn("OTEL export using plaintext connection (secure: false) — span payloads travel unencrypted; set exporters.otel[].secure: true for TLS")
 	}
 
 	// Create gRPC connection to OTEL collector
@@ -196,7 +196,6 @@ func (o *OTELExporter) ExportQuery(ctx context.Context, log model.QueryLog) (mod
 	attrs := []*commonpb.KeyValue{
 		StringAttr("click_dog.source", "query_log"),
 		StringAttr("db.system", "clickhouse"),
-		StringAttr("db.statement", TruncateQuery(log.Query, o.maxQueryLength)),
 		StringAttr("db.user", log.User),
 		StringAttr("db.query_id", log.QueryID),
 		StringAttr("db.query_kind", log.QueryKind),
@@ -211,6 +210,9 @@ func (o *OTELExporter) ExportQuery(ctx context.Context, log model.QueryLog) (mod
 		IntAttr("db.result_rows", int64(log.ResultRows)),
 		IntAttr("db.result_bytes", int64(log.ResultBytes)),
 		IntAttr("db.memory_usage", int64(log.MemoryUsage)),
+	}
+	if statement := TruncateQuery(log.Query, o.maxQueryLength); statement != "" {
+		attrs = append(attrs, StringAttr("db.statement", statement))
 	}
 
 	if len(log.DatabasesVisited) > 0 {

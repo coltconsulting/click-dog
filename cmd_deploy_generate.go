@@ -33,6 +33,7 @@ var (
 	deployLatestVersion = defaultDeployLatestVersion
 	clickDogImageRE     = regexp.MustCompile(`(?m)^(\s*image:\s*ghcr\.io/coltconsulting/click-dog:).*$`)
 	deployUsernameRE    = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_.-]*$`)
+	deployVersionRE     = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$`)
 )
 
 type deployGenerateOptions struct {
@@ -151,7 +152,8 @@ func parseDeployGenerateFlags(name string, args []string, opts *deployGenerateOp
 
 func deployKubernetes(opts deployGenerateOptions, out, errOut io.Writer) error {
 	if opts.Update {
-		if err := requireDeployUpdateVersion(opts.Version, "kubernetes"); err != nil {
+		version, err := requireDeployUpdateVersion(opts.Version, "kubernetes")
+		if err != nil {
 			return err
 		}
 		// Pre-#199 output dirs hold daemonset.yaml, not deployment.yaml. The
@@ -166,7 +168,7 @@ func deployKubernetes(opts deployGenerateOptions, out, errOut io.Writer) error {
 				"then delete the old workload (apply -k won't remove it):\n"+
 				"  kubectl delete daemonset click-dog -n click-dog", opts.OutDir)
 		}
-		return updateDeploymentImage(opts.OutDir, "deployment.yaml", opts.Version, out, "Kubernetes")
+		return updateDeploymentImage(opts.OutDir, "deployment.yaml", version, out, "Kubernetes")
 	}
 
 	// A standalone click-dog pod has its own network namespace, so it can only
@@ -207,17 +209,18 @@ func deployKubernetes(opts deployGenerateOptions, out, errOut io.Writer) error {
 		template string
 		output   string
 		mode     os.FileMode
+		private  bool
 	}{
-		{"k8s/namespace.yaml.tmpl", "namespace.yaml", 0644},
-		{"k8s/serviceaccount.yaml.tmpl", "serviceaccount.yaml", 0644},
-		{"k8s/configmap.yaml.tmpl", "configmap.yaml", 0644},
-		{"k8s/secret.yaml.tmpl", "secret.yaml", 0644},
-		{"k8s/deployment.yaml.tmpl", "deployment.yaml", 0644},
-		{"k8s/kustomization.yaml.tmpl", "kustomization.yaml", 0644},
-		{"k8s/gitignore.tmpl", ".gitignore", 0644},
+		{"k8s/namespace.yaml.tmpl", "namespace.yaml", 0644, false},
+		{"k8s/serviceaccount.yaml.tmpl", "serviceaccount.yaml", 0644, false},
+		{"k8s/configmap.yaml.tmpl", "configmap.yaml", 0644, false},
+		{"k8s/secret.yaml.tmpl", "secret.yaml", 0600, true},
+		{"k8s/deployment.yaml.tmpl", "deployment.yaml", 0644, false},
+		{"k8s/kustomization.yaml.tmpl", "kustomization.yaml", 0644, false},
+		{"k8s/gitignore.tmpl", ".gitignore", 0644, false},
 	}
 	for _, f := range files {
-		if err := writeDeployTemplate(opts.OutDir, f.output, f.template, data, f.mode); err != nil {
+		if err := writeDeployTemplate(opts.OutDir, f.output, f.template, data, f.mode, f.private); err != nil {
 			return err
 		}
 	}
@@ -230,10 +233,11 @@ func deployKubernetes(opts deployGenerateOptions, out, errOut io.Writer) error {
 
 func deployDocker(opts deployGenerateOptions, out, errOut io.Writer) error {
 	if opts.Update {
-		if err := requireDeployUpdateVersion(opts.Version, "docker"); err != nil {
+		version, err := requireDeployUpdateVersion(opts.Version, "docker")
+		if err != nil {
 			return err
 		}
-		return updateDeploymentImage(opts.OutDir, "docker-compose.yml", opts.Version, out, "Docker")
+		return updateDeploymentImage(opts.OutDir, "docker-compose.yml", version, out, "Docker")
 	}
 
 	if err := prepareInitialDeployOptions(&opts, out, errOut); err != nil {
@@ -252,25 +256,20 @@ func deployDocker(opts deployGenerateOptions, out, errOut io.Writer) error {
 		template string
 		output   string
 		mode     os.FileMode
+		private  bool
 	}{
-		{"docker/docker-compose.yml.tmpl", "docker-compose.yml", 0644},
-		{"docker/click-dog.yaml.tmpl", "click-dog.yaml", 0644},
-		{"docker/gitignore.tmpl", ".gitignore", 0644},
+		{"docker/docker-compose.yml.tmpl", "docker-compose.yml", 0644, false},
+		{"docker/click-dog.yaml.tmpl", "click-dog.yaml", 0644, false},
+		{"docker/gitignore.tmpl", ".gitignore", 0644, false},
 	}
 	for _, f := range files {
-		if err := writeDeployTemplate(opts.OutDir, f.output, f.template, data, f.mode); err != nil {
+		if err := writeDeployTemplate(opts.OutDir, f.output, f.template, data, f.mode, f.private); err != nil {
 			return err
 		}
 	}
 
 	envPath := filepath.Join(opts.OutDir, ".env")
-	// Remove any pre-existing .env so WriteFile creates fresh with 0600 -
-	// WriteFile honors the perm bits only on create, so a pre-existing
-	// world-readable file would keep its old mode.
-	if err := os.Remove(envPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("removing pre-existing .env: %w", err)
-	}
-	if err := os.WriteFile(envPath, []byte("CLICKHOUSE_PASSWORD="+escapeComposeEnv(opts.ClickHousePass)+"\n"), 0600); err != nil {
+	if err := writePrivateDeployFile(envPath, []byte("CLICKHOUSE_PASSWORD="+escapeComposeEnv(opts.ClickHousePass)+"\n"), 0600); err != nil {
 		return fmt.Errorf("writing .env: %w", err)
 	}
 
@@ -308,23 +307,35 @@ func prepareInitialDeployOptions(opts *deployGenerateOptions, out, errOut io.Wri
 			return errors.New("ClickHouse password required. Set CLICKHOUSE_PASSWORD env var or use -p")
 		}
 	}
+	resolvedLatest := false
 	if opts.Version == "" {
 		resolved, err := deployLatestVersion()
 		if err != nil {
 			return fmt.Errorf("could not resolve latest release version from GitHub API: %w", err)
 		}
 		opts.Version = resolved
-		_, _ = fmt.Fprintf(out, "Latest version: %s\n", imageTag(opts.Version))
+		resolvedLatest = true
 	}
-	opts.Version = cleanVersion(opts.Version)
+	version, err := validateDeployVersion(opts.Version)
+	if err != nil {
+		return err
+	}
+	opts.Version = version
+	if resolvedLatest {
+		_, _ = fmt.Fprintf(out, "Latest version: %s\n", opts.Version)
+	}
 	return nil
 }
 
-func requireDeployUpdateVersion(version, mode string) error {
+func requireDeployUpdateVersion(version, mode string) (string, error) {
 	if strings.TrimSpace(version) == "" {
-		return fmt.Errorf("-v VERSION is required for %s update", mode)
+		return "", fmt.Errorf("-v VERSION is required for %s update", mode)
 	}
-	return nil
+	cleaned, err := validateDeployVersion(version)
+	if err != nil {
+		return "", err
+	}
+	return cleaned, nil
 }
 
 // isLegacyDaemonSetOutDir reports whether an output dir was generated before
@@ -367,14 +378,57 @@ func validateClickHouseHostForK8s(host string) error {
 	return nil
 }
 
-func writeDeployTemplate(outDir, output, templatePath string, data deployTemplateData, mode os.FileMode) error {
+func writeDeployTemplate(outDir, output, templatePath string, data deployTemplateData, mode os.FileMode, private bool) error {
 	rendered, err := deploytemplate.Render(templatePath, data)
 	if err != nil {
 		return fmt.Errorf("rendering %s: %w", templatePath, err)
 	}
-	if err := os.WriteFile(filepath.Join(outDir, output), rendered, mode); err != nil {
+	path := filepath.Join(outDir, output)
+	if private {
+		if err := writePrivateDeployFile(path, rendered, mode); err != nil {
+			return fmt.Errorf("writing %s: %w", output, err)
+		}
+		return nil
+	}
+	if err := os.WriteFile(path, rendered, mode); err != nil {
 		return fmt.Errorf("writing %s: %w", output, err)
 	}
+	return nil
+}
+
+// writePrivateDeployFile replaces path with a freshly-created private file.
+// O_EXCL makes a symlink planted between remove and create fail closed instead
+// of following it, and Chmod corrects both a permissive pre-existing mode and
+// any owner bits masked by the caller's umask.
+func writePrivateDeployFile(path string, content []byte, mode os.FileMode) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("removing pre-existing private file: %w", err)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		return err
+	}
+	removeOnFailure := true
+	closed := false
+	defer func() {
+		if !closed {
+			_ = f.Close()
+		}
+		if removeOnFailure {
+			_ = os.Remove(path)
+		}
+	}()
+	if err := f.Chmod(mode); err != nil {
+		return err
+	}
+	if _, err := f.Write(content); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	closed = true
+	removeOnFailure = false
 	return nil
 }
 
@@ -450,6 +504,14 @@ func defaultDeployLatestVersion() (string, error) {
 
 func cleanVersion(v string) string {
 	return strings.TrimPrefix(strings.TrimSpace(v), "v")
+}
+
+func validateDeployVersion(v string) (string, error) {
+	cleaned := cleanVersion(v)
+	if !deployVersionRE.MatchString(cleaned) {
+		return "", fmt.Errorf("-version %q must be X.Y.Z with an optional alphanumeric prerelease suffix", v)
+	}
+	return cleaned, nil
 }
 
 // imageTag is the container image tag pinned for a version. GoReleaser

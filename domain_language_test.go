@@ -13,13 +13,8 @@ import (
 // "Keeping This In Sync".
 func TestDomainLanguage_SubcommandsDocumented(t *testing.T) {
 	const docPath = "docs/development/domain-language.md"
-	// docs/development is internal-only (export-ignored), so the whole tree is
-	// absent from the public archive. Skip there — this governance check runs on
-	// the internal repo, where the tree exists. A missing file while the tree IS
-	// present is a real regression and still fails below.
-	if _, err := os.Stat("docs/development"); os.IsNotExist(err) {
-		t.Skip("docs/development is internal-only (export-ignored); domain-language governance runs on the internal repo")
-	}
+	requireInternalDocs(t)
+
 	raw, err := os.ReadFile(docPath)
 	if err != nil {
 		t.Fatalf("read %s: %v", docPath, err)

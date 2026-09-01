@@ -50,7 +50,7 @@ type builtExporter struct {
 // OTEL-then-Splunk-HEC order — the single place exporter construction and
 // naming live. Constructor failures are reported per entry via InitErr rather
 // than aborting the build, because callers disagree on severity: the daemon
-// treats any failure as fatal, while `check` and `test-span` report the
+// treats any failure as fatal, while `check` and the test commands report the
 // failed exporter and keep going.
 func buildExporters(cfg *config.Config) []builtExporter {
 	built := make([]builtExporter, 0, len(cfg.Exporters.OTEL)+len(cfg.Exporters.SplunkHEC))

@@ -12,9 +12,10 @@ import (
 
 func publicDocFiles(t *testing.T) []string {
 	t.Helper()
+	requireInternalDocs(t)
 
 	files := []string{"README.md", "CONTRIBUTING.md"}
-	for _, root := range []string{"docs", "overrides"} {
+	for _, root := range []string{"docs", "www"} {
 		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -131,6 +132,8 @@ func TestKeeperStartupDocs_QualifyFailurePaths(t *testing.T) {
 }
 
 func TestFailoverDocs_KeepLookbackRecoveryConditional(t *testing.T) {
+	requireInternalDocs(t)
+
 	files := []string{
 		"docs/configuration.md",
 		"docs/operating.md",
@@ -168,6 +171,8 @@ func TestFailoverDocs_KeepLookbackRecoveryConditional(t *testing.T) {
 }
 
 func TestInstallDocs_DoNotPinCommandExamplesToOneRelease(t *testing.T) {
+	requireInternalDocs(t)
+
 	data, err := os.ReadFile("docs/install.md")
 	if err != nil {
 		t.Fatal(err)
@@ -204,6 +209,8 @@ func TestAnalyzeQueriesDocs_ListEveryFlag(t *testing.T) {
 		t.Fatalf("analyze queries -help exit code = %d, want 0", code)
 	}
 
+	requireInternalDocs(t)
+
 	docs, err := os.ReadFile("docs/query-analysis.md")
 	if err != nil {
 		t.Fatal(err)
@@ -226,6 +233,8 @@ func TestDatadogDashboardCatalog_DocumentedFromQueryAnalysis(t *testing.T) {
 	if got := len(shippedDashboards); got != len(want) {
 		t.Fatalf("shipped dashboard count = %d, want %d", got, len(want))
 	}
+
+	requireInternalDocs(t)
 
 	docs, err := os.ReadFile("docs/query-analysis.md")
 	if err != nil {
@@ -275,6 +284,9 @@ func TestDatadogDashboardCatalog_InstallSurfacesDocumentAllThree(t *testing.T) {
 	}
 	for _, surface := range surfaces {
 		t.Run(surface.path, func(t *testing.T) {
+			if strings.HasPrefix(surface.path, "docs/") {
+				requireInternalDocs(t)
+			}
 			data, err := os.ReadFile(surface.path)
 			if err != nil {
 				t.Fatal(err)
@@ -311,6 +323,8 @@ func TestDatadogDashboardCatalog_InstallSurfacesDocumentAllThree(t *testing.T) {
 }
 
 func TestDatadogActivityCompatibilityDocs_DescribeDependentWidgetDegradation(t *testing.T) {
+	requireInternalDocs(t)
+
 	requiredByPath := map[string][]string{
 		"docs/query-analysis.md": {
 			"Other query-log attributes remain on eligible enriched spans",
@@ -349,14 +363,17 @@ func TestDatadogActivityCompatibilityDocs_DescribeDependentWidgetDegradation(t *
 }
 
 func TestDatadogManualImport_ListsEveryShippedDashboardFile(t *testing.T) {
-	for _, path := range []string{"docs/integrations/datadog.md", "dashboards/README.md"} {
+	for _, path := range []string{"docs/integrations/datadog/dashboards.md", "dashboards/README.md"} {
 		t.Run(path, func(t *testing.T) {
+			if strings.HasPrefix(path, "docs/") {
+				requireInternalDocs(t)
+			}
 			docs, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatal(err)
 			}
 			text := string(docs)
-			start := strings.Index(text, "### Option 2: Datadog API")
+			start := strings.Index(text, "Option 2: Datadog API")
 			if start < 0 {
 				t.Fatalf("%s missing manual API import section", path)
 			}
@@ -381,32 +398,43 @@ func TestDatadogManualImport_ListsEveryShippedDashboardFile(t *testing.T) {
 }
 
 func TestExportedUserActivity_WebsiteCopyKeepsOperationalBoundary(t *testing.T) {
-	home, err := os.ReadFile("overrides/home.html")
-	if err != nil {
-		t.Fatal(err)
-	}
-	homeText := string(home)
-	for _, required := range []string{
-		"exported user-activity review",
-		"exported operational activity—not an audit log",
-		"users, databases, tables, and operations",
-	} {
-		if !strings.Contains(homeText, required) {
-			t.Errorf("homepage missing exported-user-activity wording %q", required)
-		}
-	}
+	t.Run("site", func(t *testing.T) {
+		requireInternalSite(t)
 
-	overview, err := os.ReadFile("docs/overview.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	overviewText := strings.Join(strings.Fields(string(overview)), " ")
-	if !strings.Contains(overviewText, "exported user activity") {
-		t.Error("documentation overview does not make exported user activity discoverable")
-	}
+		home, err := os.ReadFile("www/home.html")
+		if err != nil {
+			t.Fatal(err)
+		}
+		homeText := string(home)
+		for _, required := range []string{
+			"exported user activity",
+			"bounded operational activity",
+			"It is not an audit log",
+			"users, databases, tables, and operations",
+		} {
+			if !strings.Contains(homeText, required) {
+				t.Errorf("homepage missing exported-user-activity wording %q", required)
+			}
+		}
+	})
+
+	t.Run("documentation", func(t *testing.T) {
+		requireInternalDocs(t)
+
+		overview, err := os.ReadFile("docs/overview.md")
+		if err != nil {
+			t.Fatal(err)
+		}
+		overviewText := strings.Join(strings.Fields(string(overview)), " ")
+		if !strings.Contains(overviewText, "exported user activity") {
+			t.Error("documentation overview does not make exported user activity discoverable")
+		}
+	})
 }
 
 func TestResilienceDocs_UseCurrentBackoffLogFormat(t *testing.T) {
+	requireInternalDocs(t)
+
 	for _, path := range []string{"docs/resilience.md", "docs/troubleshooting.md"} {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -419,6 +447,8 @@ func TestResilienceDocs_UseCurrentBackoffLogFormat(t *testing.T) {
 }
 
 func TestAuditedOperatorContracts_AreDocumented(t *testing.T) {
+	requireInternalDocs(t)
+
 	required := map[string][]string{
 		"docs/configuration.md": {
 			"omitting `monitor:` is not a valid scheduled-mode config",
@@ -455,7 +485,7 @@ func TestAuditedOperatorContracts_AreDocumented(t *testing.T) {
 			"does not preflight it",
 			"it deletes both destination files",
 			"systemd-only",
-			"20 most recent public GitHub Releases",
+			"20 most recent **public** GitHub Releases",
 		},
 	}
 
@@ -489,8 +519,89 @@ func TestConfigSourceComments_DoNotRestoreStaleSemantics(t *testing.T) {
 	}
 }
 
+// TestMonitorMaxQueryLengthDocs_ScopeToQueryLogFetch pins the documented scope
+// of monitor.max_query_length to where the predicate actually lives. The
+// length(query) filter is built only by queryLogBuilder.addDurationFilters, so
+// it reaches the backfill and analyze query_log fetches and never the
+// scheduled span-log fetch; on that path the key only bounds the enriched
+// query_log.normalized_query attribute. Docs have twice drifted toward
+// promising a fetch-time exclusion that scheduled mode does not perform.
+func TestMonitorMaxQueryLengthDocs_ScopeToQueryLogFetch(t *testing.T) {
+	reader, err := os.ReadFile("internal/clickhouse/reader.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(reader), "length(query) <= ?"); got != 1 {
+		t.Fatalf("length(query) predicate occurs %d times in internal/clickhouse/reader.go, want 1; "+
+			"if a span-log length filter was added, update docs/filtering.md and "+
+			"docs/integrations/generic-otlp.md before changing this test", got)
+	}
+
+	// The predicate reaches only the builders that call addDurationFilters:
+	// backfill's slowQueries* pair and analyze trace's recentQueryCandidates.
+	// The analyze queries family rollups take no MaxQueryLength at all, so the
+	// docs must not fold them into a blanket "analyze" claim.
+	if strings.Contains(string(reader), "MaxQueryLength") {
+		opts := string(reader)
+		start := strings.Index(opts, "type QueryFamilyRollupOptions struct {")
+		if start < 0 {
+			t.Fatal("QueryFamilyRollupOptions not found in internal/clickhouse/reader.go")
+		}
+		end := strings.Index(opts[start:], "\n}")
+		if end < 0 {
+			t.Fatal("could not delimit QueryFamilyRollupOptions")
+		}
+		if strings.Contains(opts[start:start+end], "MaxQueryLength") {
+			t.Error("QueryFamilyRollupOptions gained a MaxQueryLength field; " +
+				"docs/filtering.md and docs/integrations/generic-otlp.md say the " +
+				"family rollups do not take this key")
+		}
+	}
+
+	requireInternalDocs(t)
+
+	for path, phrases := range map[string][]string{
+		"docs/filtering.md": {
+			"During the query_log fetch (backfill, `analyze trace` candidate search)",
+			"`monitor.max_query_length` never drops a live span",
+			"The `analyze queries` family rollups do not take this key",
+		},
+		"docs/integrations/generic-otlp.md": {
+			"Scheduled mode does not apply that predicate to the span-log fetch",
+			"the `analyze queries` family rollups do not take the key at all",
+		},
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		text := strings.Join(strings.Fields(string(data)), " ")
+		for _, phrase := range phrases {
+			if !strings.Contains(text, phrase) {
+				t.Errorf("%s is missing the monitor.max_query_length scope contract %q", path, phrase)
+			}
+		}
+	}
+
+	for path, stale := range map[string]string{
+		"docs/filtering.md":                 "| `monitor.max_query_length` | During ClickHouse query |",
+		"docs/integrations/generic-otlp.md": "`monitor.max_query_length` applies to scheduled/live fetch",
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		text := strings.Join(strings.Fields(string(data)), " ")
+		if strings.Contains(text, stale) {
+			t.Errorf("%s restates the unscoped fetch-time claim %q", path, stale)
+		}
+	}
+}
+
 func TestHomeTerminalTranscript_UsesCurrentOutput(t *testing.T) {
-	data, err := os.ReadFile("overrides/home.html")
+	requireInternalSite(t)
+
+	data, err := os.ReadFile("www/home.html")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -503,7 +614,7 @@ func TestHomeTerminalTranscript_UsesCurrentOutput(t *testing.T) {
 		"clickhouse → otel://localhost:4317 healthy",
 	} {
 		if strings.Contains(text, fabricated) {
-			t.Errorf("overrides/home.html contains fabricated terminal output %q", fabricated)
+			t.Errorf("www/home.html contains fabricated terminal output %q", fabricated)
 		}
 	}
 
@@ -518,7 +629,7 @@ func TestHomeTerminalTranscript_UsesCurrentOutput(t *testing.T) {
 		"Starting scheduled mode: min_trace_duration=1000ms, interval=30s, lookback=40s (interval=30 + buffer=10)",
 	} {
 		if !strings.Contains(text, current) {
-			t.Errorf("overrides/home.html is missing current terminal output %q", current)
+			t.Errorf("www/home.html is missing current terminal output %q", current)
 		}
 	}
 }

@@ -14,6 +14,13 @@ import (
 func TestDeployKubernetesInitialGeneration(t *testing.T) {
 	outDir := t.TempDir()
 	var stdout, stderr bytes.Buffer
+	secretPath := filepath.Join(outDir, "secret.yaml")
+	if err := os.WriteFile(secretPath, []byte("stale credentials\n"), 0600); err != nil {
+		t.Fatalf("pre-create secret.yaml: %v", err)
+	}
+	if err := os.Chmod(secretPath, 0644); err != nil {
+		t.Fatalf("make pre-existing secret.yaml world-readable: %v", err)
+	}
 
 	err := deployKubernetes(deployGenerateOptions{
 		CollectorAddress:  "otel-collector.monitoring:4317",
@@ -43,15 +50,15 @@ func TestDeployKubernetesInitialGeneration(t *testing.T) {
 	}
 
 	assertFileContains(t, filepath.Join(outDir, "configmap.yaml"),
-		"collector_address: otel-collector.monitoring:4317",
-		"host: clickhouse.clickhouse.svc.cluster.local",
+		`collector_address: "otel-collector.monitoring:4317"`,
+		`host: "clickhouse.clickhouse.svc.cluster.local"`,
 		"use_cluster_queries: true",
-		"cluster: main",
+		`cluster: "main"`,
 		"username: ${CLICKHOUSE_USERNAME}",
 		"password: ${CLICKHOUSE_PASSWORD}",
 		"listen_address: \":8686\"",
 	)
-	assertFileContains(t, filepath.Join(outDir, "secret.yaml"),
+	assertFileContains(t, secretPath,
 		"CLICKHOUSE_USERNAME: Y2xpY2tfZG9nX21vbml0b3I=",
 		"CLICKHOUSE_PASSWORD: czNjcjN0",
 	)
@@ -72,6 +79,13 @@ func TestDeployKubernetesInitialGeneration(t *testing.T) {
 		"key: CLICKHOUSE_PASSWORD",
 	)
 	assertFileContains(t, filepath.Join(outDir, ".gitignore"), "secret.yaml")
+	secretInfo, err := os.Stat(secretPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := secretInfo.Mode().Perm(); got != 0600 {
+		t.Fatalf("secret.yaml mode = %v, want 0600", got)
+	}
 
 	if !strings.Contains(stdout.String(), "WARNING: secret.yaml contains credentials") {
 		t.Fatalf("stdout missing secret warning:\n%s", stdout.String())
@@ -104,9 +118,9 @@ func TestDeployDockerInitialGeneration(t *testing.T) {
 		"network_mode: host",
 	)
 	assertFileContains(t, filepath.Join(outDir, "click-dog.yaml"),
-		"username: click_dog_monitor",
+		`username: "click_dog_monitor"`,
 		"password: ${CLICKHOUSE_PASSWORD}",
-		"collector_address: localhost:4317",
+		`collector_address: "localhost:4317"`,
 		"port: 9000",
 	)
 	dockerCfg := readFile(t, filepath.Join(outDir, "click-dog.yaml"))
@@ -130,6 +144,66 @@ func TestDeployDockerInitialGeneration(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "WARNING: .env contains credentials") {
 		t.Fatalf("stdout missing .env warning:\n%s", stdout.String())
+	}
+}
+
+func TestDeployKubernetesQuotesTemplateScalars(t *testing.T) {
+	outDir := t.TempDir()
+	payload := "otel:4317\n        - name: injected\n          image: attacker.invalid/poc:1"
+	err := deployKubernetes(deployGenerateOptions{
+		CollectorAddress:  payload,
+		OutDir:            outDir,
+		Version:           "26.05.1",
+		ClickHouseHost:    "clickhouse.example\n---\ninjected",
+		ClickHouseCluster: "main: prod",
+		ClickHouseUser:    "click_dog_monitor",
+		ClickHousePass:    "secret",
+	}, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("deployKubernetes returned error: %v", err)
+	}
+	config := readFile(t, filepath.Join(outDir, "configmap.yaml"))
+	for _, want := range []string{
+		`collector_address: "otel:4317\n        - name: injected\n          image: attacker.invalid/poc:1"`,
+		`host: "clickhouse.example\n---\ninjected"`,
+		`cluster: "main: prod"`,
+	} {
+		if !strings.Contains(config, want) {
+			t.Fatalf("configmap missing safely quoted scalar %q:\n%s", want, config)
+		}
+	}
+	if strings.Count(config, "apiVersion:") != 1 {
+		t.Fatalf("template input created another YAML document:\n%s", config)
+	}
+}
+
+func TestDeployRejectsUnsafeVersions(t *testing.T) {
+	for _, version := range []string{
+		"26.05",
+		"latest",
+		"26.05.1+meta",
+		"26.05.1\n        - name: injected\n          image: attacker.invalid/poc:1",
+	} {
+		t.Run(strings.ReplaceAll(version, "\n", "_newline_"), func(t *testing.T) {
+			if _, err := validateDeployVersion(version); err == nil {
+				t.Fatalf("validateDeployVersion(%q) unexpectedly succeeded", version)
+			}
+			outDir := t.TempDir()
+			err := deployKubernetes(deployGenerateOptions{
+				CollectorAddress: "otel:4317",
+				OutDir:           outDir,
+				Version:          version,
+				ClickHouseHost:   "clickhouse.clickhouse.svc.cluster.local",
+				ClickHouseUser:   "click_dog_monitor",
+				ClickHousePass:   "secret",
+			}, io.Discard, io.Discard)
+			if err == nil {
+				t.Fatalf("deployKubernetes accepted unsafe version %q", version)
+			}
+			if _, statErr := os.Stat(filepath.Join(outDir, "deployment.yaml")); !os.IsNotExist(statErr) {
+				t.Fatalf("deployment.yaml written for unsafe version %q: %v", version, statErr)
+			}
+		})
 	}
 }
 
@@ -293,7 +367,7 @@ func TestDeployDockerUpdateBumpsImageAndBacksUp(t *testing.T) {
 
 	if err := deployDocker(deployGenerateOptions{
 		OutDir:  outDir,
-		Version: "26.05.2",
+		Version: " v26.05.2 ",
 		Update:  true,
 	}, &stdout, &stderr); err != nil {
 		t.Fatalf("update deployDocker returned error: %v\nstderr:\n%s", err, stderr.String())

@@ -92,9 +92,9 @@
         mode: "0750"
 
     # ── Binary ───────────────────────────────────────────────────
-    # Three modes: explicit URL, versioned release, latest release, or local binary.
-    # GitHub URL patterns differ: versioned = releases/download/VERSION/FILE
-    #                              latest   = releases/latest/download/FILE
+    # Four modes: explicit URL, versioned release, latest release, or local binary.
+    # Official versioned/latest downloads both resolve a tag and use
+    # releases/download/TAG/FILE so their signed assets share one trust path.
 
     - name: Back up current binary
       ansible.builtin.copy:
@@ -106,37 +106,6 @@
         mode: "0755"
       failed_when: false  # OK if binary doesn't exist yet (first deploy)
 
-    - name: Download click-dog binary (explicit URL)
-      ansible.builtin.get_url:
-        url: "{{ click_dog_download_url }}"
-        dest: /tmp/click-dog.tar.gz
-        mode: "0644"
-      when: click_dog_download_url is defined
-
-    # GoReleaser archives use the version without 'v' prefix in the filename
-    # but the GitHub release tag includes it, e.g.:
-    #   /releases/download/v1.0.0/click-dog_1.0.0_linux_amd64.tar.gz
-    - name: Download click-dog binary (versioned release)
-      ansible.builtin.get_url:
-        url: "https://github.com/coltconsulting/click-dog/releases/download/{{ click_dog_version }}/click-dog_{{ click_dog_version | regex_replace('^v', '') }}_linux_{{ click_dog_arch }}.tar.gz"
-        dest: /tmp/click-dog.tar.gz
-        mode: "0644"
-      when: click_dog_download_url is not defined and click_dog_version != 'latest'
-
-    - name: Resolve latest release version from GitHub API
-      ansible.builtin.uri:
-        url: "https://api.github.com/repos/coltconsulting/click-dog/releases/latest"
-        return_content: true
-      register: latest_release
-      when: click_dog_download_url is not defined and click_dog_version == 'latest' and click_dog_local_binary is not defined
-
-    - name: Download click-dog binary (latest release)
-      ansible.builtin.get_url:
-        url: "https://github.com/coltconsulting/click-dog/releases/download/{{ latest_release.json.tag_name }}/click-dog_{{ latest_release.json.tag_name | regex_replace('^v', '') }}_linux_{{ click_dog_arch }}.tar.gz"
-        dest: /tmp/click-dog.tar.gz
-        mode: "0644"
-      when: click_dog_download_url is not defined and click_dog_version == 'latest' and click_dog_local_binary is not defined
-
     - name: Copy click-dog binary from local build
       ansible.builtin.copy:
         src: "{{ click_dog_local_binary | default('../../click-dog') }}"
@@ -147,13 +116,169 @@
       notify: restart click-dog
       when: click_dog_local_binary is defined
 
-    - name: Extract click-dog from tarball
-      ansible.builtin.unarchive:
-        src: /tmp/click-dog.tar.gz
-        dest: "{{ click_dog_install_dir }}"
-        remote_src: true
-      notify: restart click-dog
+    - name: Validate release download inputs
+      ansible.builtin.assert:
+        that:
+          - click_dog_arch in ['amd64', 'arm64']
+          - click_dog_download_url is defined or click_dog_version == 'latest' or click_dog_version is regex('^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$')
+          - click_dog_download_url is not defined or (click_dog_download_checksum is defined and (click_dog_download_checksum | string) is regex('^[0-9a-fA-F]{64}$'))
+        fail_msg: >-
+          Release tags must be vX.Y.Z, architectures must be amd64/arm64, and
+          click_dog_download_url requires a trusted 64-character
+          click_dog_download_checksum.
       when: click_dog_local_binary is not defined
+
+    - name: Download and verify click-dog release archive
+      when: click_dog_local_binary is not defined
+      block:
+        - name: Create private release staging directory
+          ansible.builtin.tempfile:
+            state: directory
+            suffix: click-dog-release
+          register: click_dog_release_staging
+
+        - name: Restrict release staging directory permissions
+          ansible.builtin.file:
+            path: "{{ click_dog_release_staging.path }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+
+        - name: Resolve latest release version from GitHub API
+          ansible.builtin.uri:
+            url: "https://api.github.com/repos/coltconsulting/click-dog/releases/latest"
+            return_content: true
+          register: latest_release
+          when: click_dog_download_url is not defined and click_dog_version == 'latest'
+
+        - name: Select official release tag
+          ansible.builtin.set_fact:
+            click_dog_release_tag: "{{ latest_release.json.tag_name if click_dog_version == 'latest' else click_dog_version }}"
+          when: click_dog_download_url is not defined
+
+        - name: Validate official release tag
+          ansible.builtin.assert:
+            that:
+              - click_dog_release_tag is regex('^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$')
+            fail_msg: "GitHub returned an invalid click-dog release tag."
+          when: click_dog_download_url is not defined
+
+        # GoReleaser archives omit the tag's leading v in the filename.
+        - name: Select official release archive
+          ansible.builtin.set_fact:
+            click_dog_archive_name: "click-dog_{{ click_dog_release_tag | regex_replace('^v', '') }}_linux_{{ click_dog_arch }}.tar.gz"
+            click_dog_release_base_url: "https://github.com/coltconsulting/click-dog/releases/download/{{ click_dog_release_tag }}"
+          when: click_dog_download_url is not defined
+
+        - name: Select mirrored release archive
+          ansible.builtin.set_fact:
+            click_dog_archive_name: click-dog-custom.tar.gz
+          when: click_dog_download_url is defined
+
+        - name: Download official release and signed verification assets
+          ansible.builtin.get_url:
+            url: "{{ click_dog_release_base_url }}/{{ item }}"
+            dest: "{{ click_dog_release_staging.path }}/{{ item }}"
+            owner: root
+            group: root
+            mode: "0600"
+          loop:
+            - "{{ click_dog_archive_name }}"
+            - checksums.txt
+            - checksums.txt.sig
+            - checksums.txt.pem
+          when: click_dog_download_url is not defined
+
+        - name: Download checksum-pinned mirrored release
+          ansible.builtin.get_url:
+            url: "{{ click_dog_download_url }}"
+            dest: "{{ click_dog_release_staging.path }}/{{ click_dog_archive_name }}"
+            checksum: "sha256:{{ click_dog_download_checksum }}"
+            owner: root
+            group: root
+            mode: "0600"
+          # Mirror URLs may be pre-signed or contain bearer credentials.
+          no_log: true
+          when: click_dog_download_url is defined
+
+        - name: Locate cosign for official release verification
+          ansible.builtin.command:
+            argv:
+              - /bin/sh
+              - -c
+              - command -v cosign
+          register: click_dog_cosign_path
+          changed_when: false
+          failed_when: false
+          when: click_dog_download_url is not defined
+
+        - name: Require cosign for official release verification
+          ansible.builtin.assert:
+            that:
+              - click_dog_cosign_path.rc == 0
+            fail_msg: >-
+              cosign is required to verify official click-dog releases.
+              Install it from https://docs.sigstore.dev/cosign/installation/
+              or provide a pre-verified click_dog_local_binary.
+          when: click_dog_download_url is not defined
+
+        - name: Verify official release checksum signature
+          ansible.builtin.command:
+            argv:
+              - cosign
+              - verify-blob
+              - --certificate
+              - "{{ click_dog_release_staging.path }}/checksums.txt.pem"
+              - --signature
+              - "{{ click_dog_release_staging.path }}/checksums.txt.sig"
+              - --certificate-identity-regexp
+              - '^https://github\.com/coltconsulting/click-dog/\.github/workflows/release\.yml@refs/tags/v.+$'
+              - --certificate-oidc-issuer
+              - https://token.actions.githubusercontent.com
+              - "{{ click_dog_release_staging.path }}/checksums.txt"
+          changed_when: false
+          # cosign may contact Rekor/Fulcio. Bound that network operation so a
+          # blackholed endpoint fails closed without hanging a fleet rollout.
+          async: 60
+          poll: 5
+          when: click_dog_download_url is not defined
+
+        - name: Compute downloaded official archive checksum
+          ansible.builtin.stat:
+            path: "{{ click_dog_release_staging.path }}/{{ click_dog_archive_name }}"
+            checksum_algorithm: sha256
+          register: click_dog_archive_stat
+          when: click_dog_download_url is not defined
+
+        - name: Read signed release checksums
+          ansible.builtin.slurp:
+            src: "{{ click_dog_release_staging.path }}/checksums.txt"
+          register: click_dog_signed_checksums
+          when: click_dog_download_url is not defined
+
+        - name: Verify archive is present in signed checksums
+          ansible.builtin.assert:
+            that:
+              - >-
+                (click_dog_signed_checksums.content | b64decode).splitlines()
+                | select('match', '^' ~ click_dog_archive_stat.stat.checksum ~ '[ *]+' ~ (click_dog_archive_name | regex_escape) ~ '$')
+                | list | length == 1
+            fail_msg: "Downloaded archive does not match signed release checksums."
+          when: click_dog_download_url is not defined
+
+        - name: Extract verified click-dog archive
+          ansible.builtin.unarchive:
+            src: "{{ click_dog_release_staging.path }}/{{ click_dog_archive_name }}"
+            dest: "{{ click_dog_install_dir }}"
+            remote_src: true
+          notify: restart click-dog
+      always:
+        - name: Remove release staging directory
+          ansible.builtin.file:
+            path: "{{ click_dog_release_staging.path }}"
+            state: absent
+          when: click_dog_release_staging is defined and click_dog_release_staging.path is defined
 
     # ── Configuration ────────────────────────────────────────────
     # Write the password to a 0600 file the click-dog user owns; the config

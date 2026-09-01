@@ -459,6 +459,40 @@ func TestSplunkHEC_ExportQueryOmitsNormalizedWhenAbsent(t *testing.T) {
 	}
 }
 
+func TestSplunkHEC_ExportQueryOmitsAbsentRawQuery(t *testing.T) {
+	var received map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var ev hecEvent
+		if err := json.NewDecoder(r.Body).Decode(&ev); err != nil {
+			t.Errorf("decode HEC event: %v", err)
+		}
+		received, _ = ev.Event.(map[string]interface{})
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	exp, err := NewSplunkHECExporter(config.SplunkHECConfig{Endpoint: server.URL, Token: "token"})
+	if err != nil {
+		t.Fatalf("NewSplunkHECExporter: %v", err)
+	}
+	_, err = exp.ExportQuery(context.Background(), model.QueryLog{
+		QueryID:             "q-normalized-only",
+		EventTime:           time.Now(),
+		NormalizedQueryHash: 123,
+		NormalizedQuery:     "SELECT ?",
+		ExceptionCode:       62,
+	})
+	if err != nil {
+		t.Fatalf("ExportQuery: %v", err)
+	}
+	if _, ok := received["query"]; ok {
+		t.Fatal("Splunk HEC exporter emitted query for a shaped record without raw text")
+	}
+	if received["normalized_query"] != "SELECT ?" || received["error"] != true {
+		t.Fatalf("safe normalized/error metadata missing: %#v", received)
+	}
+}
+
 func TestSplunkHEC_TLSSkipVerify(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

@@ -36,25 +36,30 @@ var imagePinSurfaces = []string{
 // which start with `v`. So the rule is simply: the tag must not start with `v`.
 func TestImagePins_UseBareVersionScheme(t *testing.T) {
 	for _, f := range imagePinSurfaces {
-		data, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatalf("reading %s: %v", f, err)
-		}
-
-		matches := clickDogImagePinRE.FindAllStringSubmatch(string(data), -1)
-		if len(matches) == 0 {
-			t.Errorf("%s: no ghcr.io/coltconsulting/click-dog: image reference found — "+
-				"did it move or change format? This guard must keep covering it", f)
-			continue
-		}
-
-		for _, m := range matches {
-			tag := m[1]
-			if strings.HasPrefix(tag, "v") {
-				t.Errorf("%s: image pin %q uses the v-prefixed scheme; GoReleaser publishes the "+
-					"bare {{ .Version }} (e.g. 26.04.6), so :v… is not a real GHCR tag (ErrImagePull, #232)", f, tag)
+		t.Run(f, func(t *testing.T) {
+			if strings.HasPrefix(f, "docs/") {
+				requireInternalDocs(t)
 			}
-		}
+			data, err := os.ReadFile(f)
+			if err != nil {
+				t.Fatalf("reading %s: %v", f, err)
+			}
+
+			matches := clickDogImagePinRE.FindAllStringSubmatch(string(data), -1)
+			if len(matches) == 0 {
+				t.Errorf("%s: no ghcr.io/coltconsulting/click-dog: image reference found — "+
+					"did it move or change format? This guard must keep covering it", f)
+				return
+			}
+
+			for _, m := range matches {
+				tag := m[1]
+				if strings.HasPrefix(tag, "v") {
+					t.Errorf("%s: image pin %q uses the v-prefixed scheme; GoReleaser publishes the "+
+						"bare {{ .Version }} (e.g. 26.04.6), so :v… is not a real GHCR tag (ErrImagePull, #232)", f, tag)
+				}
+			}
+		})
 	}
 }
 
