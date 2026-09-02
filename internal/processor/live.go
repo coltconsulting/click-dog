@@ -33,6 +33,7 @@ func handleCircuitOpen(
 	ctx context.Context,
 	exporter model.SpanExporter,
 	cfg *config.Config,
+	f *filter.QueryFilter,
 	circuitBreaker *resilience.CircuitBreaker,
 	hb *Heartbeat,
 	canaryQuerier model.CanaryQuerier,
@@ -42,7 +43,7 @@ func handleCircuitOpen(
 ) error {
 	if cfg.Monitor.Canary.Enabled && canaryQuerier != nil {
 		prevState := circuitBreaker.State()
-		err := RunCanaryAndExport(ctx, canaryQuerier, exporter, cfg, circuitBreaker)
+		err := RunCanaryAndExport(ctx, canaryQuerier, exporter, cfg, f, circuitBreaker)
 		notifyOnRecovery(prevState, circuitBreaker, m, wh, "Circuit breaker closed — canary recovery successful")
 		recordCanaryCycle(hb, m, err, cycleStart)
 		return err
@@ -68,6 +69,7 @@ func handleElevatedBackoff(
 	ctx context.Context,
 	exporter model.SpanExporter,
 	cfg *config.Config,
+	f *filter.QueryFilter,
 	circuitBreaker *resilience.CircuitBreaker,
 	hb *Heartbeat,
 	poller *resilience.AdaptivePoller,
@@ -90,7 +92,7 @@ func handleElevatedBackoff(
 	if circuitBreaker != nil {
 		prevState = circuitBreaker.State()
 	}
-	err := RunCanaryAndExport(ctx, canaryQuerier, exporter, cfg, circuitBreaker)
+	err := RunCanaryAndExport(ctx, canaryQuerier, exporter, cfg, f, circuitBreaker)
 	if circuitBreaker != nil {
 		notifyOnRecovery(prevState, circuitBreaker, m, wh, "Circuit breaker closed — canary recovery successful")
 	}
@@ -303,7 +305,10 @@ func fetchAndProcessSpans(
 		batch := spans[batchStart:batchEnd]
 		clicklog.Debug("Processing batch %d-%d of %d spans", batchStart+1, batchEnd, len(spans))
 
-		// First pass: filter, redact, and collect spans to export
+		// First pass: filter, enrich, and collect spans to export. Query-text
+		// shaping happens at the final boundary in ExportSpansWithDeadline so
+		// exporters and fan-out sinks never receive the raw representation for
+		// a privacy-restricting mode.
 		var toExport []model.OpenTelemetrySpan
 		for _, span := range batch {
 			// Composite key: span_id alone is not globally unique across traces.
@@ -337,17 +342,6 @@ func fetchAndProcessSpans(
 				continue
 			}
 
-			// Apply SQL redaction before export
-			redacted := f.RedactQuery(queryText)
-			if redacted != queryText {
-				newAttrs := make(map[string]string, len(span.Attributes))
-				for k, v := range span.Attributes {
-					newAttrs[k] = v
-				}
-				newAttrs["db.statement"] = redacted
-				span.Attributes = newAttrs
-			}
-
 			// Extract log_comment JSON from URI attributes
 			if cfg.Monitor.ShouldExtractLogComment() {
 				ExtractLogComment(&span)
@@ -365,7 +359,7 @@ func fetchAndProcessSpans(
 
 		// Export batch to OTEL in a single gRPC call
 		if len(toExport) > 0 {
-			exportResult, err := ExportSpansWithDeadline(ctx, cfg, exporter, toExport)
+			exportResult, err := ExportSpansWithDeadline(ctx, cfg, exporter, f, toExport)
 			RecordExportObservability(m, exportResult)
 			if err != nil {
 				clicklog.Error("Error exporting batch of %d spans: %v", len(toExport), err)

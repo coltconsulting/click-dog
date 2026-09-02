@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -56,6 +57,9 @@ func TestLoadConfig_ValidMinimal(t *testing.T) {
 	if cfg.Monitor.Backoff.BackoffFactor != 2.0 {
 		t.Errorf("backoff.backoff_factor default = %f, want 2.0", cfg.Monitor.Backoff.BackoffFactor)
 	}
+	if cfg.Filters.QueryTextMode != QueryTextModeRaw {
+		t.Errorf("filters.query_text_mode default = %q, want raw", cfg.Filters.QueryTextMode)
+	}
 }
 
 func TestLoadConfig_ClickHousePortDefault(t *testing.T) {
@@ -77,6 +81,86 @@ monitor:
 	}
 	if cfg.ClickHouse.Port != 9000 {
 		t.Errorf("clickhouse.port default = %d, want 9000", cfg.ClickHouse.Port)
+	}
+}
+
+func TestLoadConfig_LegacyRedactionRulesSelectRedactedMode(t *testing.T) {
+	yaml := validMinimalYAML + `
+filters:
+  redact_queries:
+    - pattern: "'[^']*'"
+      replacement: "?"
+`
+	cfg, err := LoadConfig(writeConfigFile(t, yaml))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Filters.QueryTextMode != QueryTextModeRedacted {
+		t.Fatalf("query_text_mode = %q, want redacted for legacy redact_queries config", cfg.Filters.QueryTextMode)
+	}
+	if len(cfg.ValidationWarnings) == 0 {
+		t.Fatal("expected a migration warning for implicit legacy redaction")
+	}
+	warnings := strings.Join(cfg.ValidationWarnings, "\n")
+	if !strings.Contains(warnings, "statements that match no rule are now omitted") {
+		t.Fatalf("migration warning does not disclose stricter unmatched-query behavior: %v", cfg.ValidationWarnings)
+	}
+}
+
+func TestLoadConfig_QueryTextModeWarnings(t *testing.T) {
+	tests := []struct {
+		name        string
+		yaml        string
+		wantWarning string
+	}{
+		{
+			name:        "normalized only without enrichment",
+			yaml:        strings.Replace(validMinimalYAML, "monitor:\n", "filters:\n  query_text_mode: normalized_only\nmonitor:\n  enrich_from_query_log: false\n", 1),
+			wantWarning: "scheduled/native spans cannot receive query_log normalized previews",
+		},
+		{
+			name: "none ignores stale redaction rules",
+			yaml: validMinimalYAML + `
+filters:
+  query_text_mode: none
+  redact_queries:
+    - pattern: "[invalid("
+`,
+			wantWarning: "redact_queries is ignored when filters.query_text_mode is none",
+		},
+		{
+			name: "normalized only ignores stale redaction rules",
+			yaml: validMinimalYAML + `
+filters:
+  query_text_mode: normalized_only
+  redact_queries:
+    - pattern: "[invalid("
+`,
+			wantWarning: "redact_queries is ignored when filters.query_text_mode is normalized_only",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := LoadConfig(writeConfigFile(t, tt.yaml))
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+			if warnings := strings.Join(cfg.ValidationWarnings, "\n"); !strings.Contains(warnings, tt.wantWarning) {
+				t.Fatalf("ValidationWarnings = %v, want substring %q", cfg.ValidationWarnings, tt.wantWarning)
+			}
+		})
+	}
+}
+
+func TestLoadConfig_ExplicitEmptyQueryTextModeRejected(t *testing.T) {
+	yaml := validMinimalYAML + `
+filters:
+  query_text_mode: ""
+`
+	_, err := LoadConfig(writeConfigFile(t, yaml))
+	if err == nil || !strings.Contains(err.Error(), "query_text_mode") {
+		t.Fatalf("LoadConfig error = %v, want explicit empty query_text_mode rejection", err)
 	}
 }
 

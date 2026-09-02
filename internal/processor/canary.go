@@ -11,6 +11,7 @@ import (
 
 	"github.com/coltconsulting/click-dog/internal/clicklog"
 	"github.com/coltconsulting/click-dog/internal/config"
+	"github.com/coltconsulting/click-dog/internal/filter"
 	"github.com/coltconsulting/click-dog/internal/model"
 	"github.com/coltconsulting/click-dog/internal/resilience"
 )
@@ -28,6 +29,7 @@ func RunCanaryAndExport(
 	querier model.CanaryQuerier,
 	exporter model.SpanExporter,
 	cfg *config.Config,
+	f *filter.QueryFilter,
 	circuitBreaker *resilience.CircuitBreaker,
 ) error {
 	canaryStart := time.Now()
@@ -45,7 +47,7 @@ func RunCanaryAndExport(
 
 	canarySpan := BuildCanarySpan(result, cfg.Monitor.Canary.ThresholdDurationMs)
 
-	_, exportErr := ExportSpansWithDeadline(ctx, cfg, exporter, []model.OpenTelemetrySpan{canarySpan})
+	_, exportErr := ExportSpansWithDeadline(ctx, cfg, exporter, f, []model.OpenTelemetrySpan{canarySpan})
 	if exportErr != nil {
 		clicklog.Warn("Canary span export failed: %v", exportErr)
 		if circuitBreaker != nil {

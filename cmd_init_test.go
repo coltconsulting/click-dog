@@ -71,6 +71,11 @@ func TestRunInit_ForceOverwrite(t *testing.T) {
 	if err := os.WriteFile(output, []byte("old"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	// Pin the permissive mode past the suite's umask: --force must reassert
+	// 0600 on the replacement rather than inherit whatever was already there.
+	if err := os.Chmod(output, 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	runInit([]string{"--force", "--output", output, "--ch-host", "new-host"}, io.Discard, io.Discard)
 
@@ -80,6 +85,14 @@ func TestRunInit_ForceOverwrite(t *testing.T) {
 	}
 	if string(data) == "old" {
 		t.Error("expected file to be overwritten")
+	}
+
+	info, err := os.Stat(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0600 {
+		t.Errorf("config perms after --force overwrite = %o, want 600", perm)
 	}
 }
 
@@ -189,6 +202,9 @@ func TestRunInit_ParanoidProfile(t *testing.T) {
 	if len(cfg.Filters.BlacklistOperations) == 0 {
 		t.Errorf("paranoid profile should ship blacklist_operations active, got none")
 	}
+	if cfg.Filters.QueryTextMode != config.QueryTextModeNormalizedOnly {
+		t.Errorf("paranoid query_text_mode = %q, want normalized_only", cfg.Filters.QueryTextMode)
+	}
 }
 
 // TestRunInit_ProductionHasHardeningAndBlacklistOps locks in the spec
@@ -234,6 +250,9 @@ func TestRunInit_ProductionHasHardeningAndBlacklistOps(t *testing.T) {
 	}
 	if cfg.Health.ListenAddress != ":8686" {
 		t.Errorf("production health.listen_address = %q, want :8686", cfg.Health.ListenAddress)
+	}
+	if cfg.Filters.QueryTextMode != config.QueryTextModeRaw {
+		t.Errorf("production query_text_mode = %q, want raw compatibility default", cfg.Filters.QueryTextMode)
 	}
 
 	// blacklist_operations must contain the install.sh-era set of
@@ -431,7 +450,7 @@ func TestRunInit_MinimalProfileHonorsCHUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(body), "username:") {
-		t.Errorf("minimal profile with default user should omit username: to match docs/examples; got:\n%s", body)
+		t.Errorf("minimal profile with default user should omit username to match examples/; got:\n%s", body)
 	}
 }
 

@@ -2,6 +2,7 @@ package updater
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -167,7 +168,7 @@ func TestVerifyCosignBlob_TimesOut(t *testing.T) {
 	}
 }
 
-func TestFetchVerifiedChecksums_HappyPath(t *testing.T) {
+func TestFetchReleaseChecksums_HappyPath(t *testing.T) {
 	dir := fakeCosign(t, 0)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
@@ -197,16 +198,19 @@ func TestFetchVerifiedChecksums_HappyPath(t *testing.T) {
 		},
 	}
 
-	got, err := g.FetchVerifiedChecksums(release)
+	got, err := g.FetchReleaseChecksums(release, false)
 	if err != nil {
-		t.Fatalf("FetchVerifiedChecksums() = %v, want nil", err)
+		t.Fatalf("FetchReleaseChecksums() = %v, want nil", err)
 	}
-	if got["click-dog_26.04.1_linux_amd64.tar.gz"] != hash {
-		t.Errorf("checksums = %v, want %s for amd64 archive", got, hash)
+	if got.Mode != ReleaseVerificationSigned {
+		t.Errorf("mode = %q, want %q", got.Mode, ReleaseVerificationSigned)
+	}
+	if got.Entries["click-dog_26.04.1_linux_amd64.tar.gz"] != hash {
+		t.Errorf("checksums = %v, want %s for amd64 archive", got.Entries, hash)
 	}
 }
 
-func TestFetchVerifiedChecksums_MissingSignature(t *testing.T) {
+func TestFetchReleaseChecksums_MissingSignature(t *testing.T) {
 	dir := fakeCosign(t, 0)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
@@ -227,16 +231,19 @@ func TestFetchVerifiedChecksums_MissingSignature(t *testing.T) {
 		},
 	}
 
-	_, err := g.FetchVerifiedChecksums(release)
+	_, err := g.FetchReleaseChecksums(release, false)
 	if err == nil {
-		t.Fatal("FetchVerifiedChecksums() = nil, want failure for missing signature asset")
+		t.Fatal("FetchReleaseChecksums() = nil, want failure for missing signature asset")
+	}
+	if !errors.Is(err, ErrCosignVerification) {
+		t.Errorf("error = %v, want ErrCosignVerification", err)
 	}
 	if !strings.Contains(err.Error(), "missing cosign signature") {
 		t.Errorf("error = %q, want it to mention missing cosign signature", err)
 	}
 }
 
-func TestFetchVerifiedChecksums_MissingCertificate(t *testing.T) {
+func TestFetchReleaseChecksums_MissingCertificate(t *testing.T) {
 	dir := fakeCosign(t, 0)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
@@ -255,16 +262,19 @@ func TestFetchVerifiedChecksums_MissingCertificate(t *testing.T) {
 		},
 	}
 
-	_, err := g.FetchVerifiedChecksums(release)
+	_, err := g.FetchReleaseChecksums(release, false)
 	if err == nil {
-		t.Fatal("FetchVerifiedChecksums() = nil, want failure for missing certificate asset")
+		t.Fatal("FetchReleaseChecksums() = nil, want failure for missing certificate asset")
+	}
+	if !errors.Is(err, ErrCosignVerification) {
+		t.Errorf("error = %v, want ErrCosignVerification", err)
 	}
 	if !strings.Contains(err.Error(), "missing cosign certificate") {
 		t.Errorf("error = %q, want it to mention missing cosign certificate", err)
 	}
 }
 
-func TestFetchVerifiedChecksums_EmptyChecksums(t *testing.T) {
+func TestFetchReleaseChecksums_EmptyChecksums(t *testing.T) {
 	// A signed-but-empty checksums.txt would otherwise leak through to
 	// cmd_selfupdate.go as a "no checksum found for archive" error,
 	// which is misleading. Surface the real cause early.
@@ -287,16 +297,16 @@ func TestFetchVerifiedChecksums_EmptyChecksums(t *testing.T) {
 		},
 	}
 
-	_, err := g.FetchVerifiedChecksums(release)
+	_, err := g.FetchReleaseChecksums(release, false)
 	if err == nil {
-		t.Fatal("FetchVerifiedChecksums() = nil, want failure for empty checksums.txt")
+		t.Fatal("FetchReleaseChecksums() = nil, want failure for empty checksums.txt")
 	}
 	if !strings.Contains(err.Error(), "is empty") {
 		t.Errorf("error = %q, want it to mention empty checksums", err)
 	}
 }
 
-func TestFetchVerifiedChecksums_BadSignatureFailsClosed(t *testing.T) {
+func TestFetchReleaseChecksums_BadSignatureFailsClosed(t *testing.T) {
 	dir := fakeCosign(t, 1) // cosign rejects the signature
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
@@ -315,12 +325,55 @@ func TestFetchVerifiedChecksums_BadSignatureFailsClosed(t *testing.T) {
 		},
 	}
 
-	got, err := g.FetchVerifiedChecksums(release)
+	got, err := g.FetchReleaseChecksums(release, false)
 	if err == nil {
-		t.Fatal("FetchVerifiedChecksums() = nil, want failure on bad signature")
+		t.Fatal("FetchReleaseChecksums() = nil, want failure on bad signature")
 	}
-	if got != nil {
-		t.Errorf("got = %v, want nil map on signature failure (must not return unverified checksums)", got)
+	if !errors.Is(err, ErrCosignVerification) {
+		t.Errorf("error = %v, want ErrCosignVerification", err)
+	}
+	if got.Entries != nil || got.Mode != "" {
+		t.Errorf("got = %+v, want zero result on signature failure (must not return unverified checksums)", got)
+	}
+}
+
+func TestFetchReleaseChecksums_DangerouslyIgnoreCosign(t *testing.T) {
+	dir := fakeCosign(t, 1)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	hash := strings.Repeat("a", 64)
+	var requested []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = append(requested, r.URL.Path)
+		_, _ = fmt.Fprintf(w, "%s  click-dog_26.04.1_linux_amd64.tar.gz\n", hash)
+	}))
+	defer srv.Close()
+
+	g := &GitHubClient{HTTPClient: srv.Client()}
+	release := &Release{
+		TagName: "v26.04.1",
+		Assets: []Asset{
+			{Name: "checksums.txt", BrowserDownloadURL: srv.URL + "/checksums.txt"},
+			{Name: "checksums.txt.sig", BrowserDownloadURL: srv.URL + "/checksums.txt.sig"},
+			{Name: "checksums.txt.pem", BrowserDownloadURL: srv.URL + "/checksums.txt.pem"},
+		},
+	}
+
+	got, err := g.FetchReleaseChecksums(release, true)
+	if err != nil {
+		t.Fatalf("FetchReleaseChecksums() = %v, want explicit checksum-only success", err)
+	}
+	if got.Mode != ReleaseVerificationCosignIgnored {
+		t.Errorf("mode = %q, want %q", got.Mode, ReleaseVerificationCosignIgnored)
+	}
+	if got.Entries["click-dog_26.04.1_linux_amd64.tar.gz"] != hash {
+		t.Errorf("checksums = %v, want archive hash", got.Entries)
+	}
+	if len(requested) != 1 || requested[0] != "/checksums.txt" {
+		t.Errorf("requested assets = %v, want checksums.txt only", requested)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "args.log")); !os.IsNotExist(err) {
+		t.Errorf("Cosign was invoked despite dangerous override; stat error = %v", err)
 	}
 }
 
@@ -361,6 +414,18 @@ func TestCosignIdentityRegexpMatchesDocs(t *testing.T) {
 	// the constant in this file drifts from the docs snippet, manual
 	// verifiers would be checking a different signer identity than
 	// self-update — false assurance. Lock the two together.
+	docsRoot := filepath.Join("..", "..", "docs")
+	info, err := os.Stat(docsRoot)
+	if err == nil && !info.IsDir() {
+		t.Fatalf("%s exists but is not a directory", docsRoot)
+	}
+	if os.IsNotExist(err) {
+		t.Skip("docs are internal-only (export-ignored); signer identity parity is enforced in the internal repository")
+	}
+	if err != nil {
+		t.Fatalf("stat %s: %v", docsRoot, err)
+	}
+
 	docsPath := filepath.Join("..", "..", "docs", "install.md")
 	docs, err := os.ReadFile(docsPath)
 	if err != nil {
@@ -371,19 +436,30 @@ func TestCosignIdentityRegexpMatchesDocs(t *testing.T) {
 	}
 }
 
-func TestFetchVerifiedChecksums_CosignNotInstalled(t *testing.T) {
+func TestFetchReleaseChecksums_CosignNotInstalled(t *testing.T) {
 	// Empty PATH so exec.LookPath("cosign") fails.
 	t.Setenv("PATH", "")
 
-	g := &GitHubClient{HTTPClient: http.DefaultClient}
-	release := &Release{TagName: "v26.04.1"}
-
-	_, err := g.FetchVerifiedChecksums(release)
-	if err == nil {
-		t.Fatal("FetchVerifiedChecksums() = nil, want failure when cosign is missing")
+	hash := strings.Repeat("a", 64)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintf(w, "%s  click-dog_26.04.1_linux_amd64.tar.gz\n", hash)
+	}))
+	defer srv.Close()
+	g := &GitHubClient{HTTPClient: srv.Client()}
+	release := &Release{
+		TagName: "v26.04.1",
+		Assets:  []Asset{{Name: "checksums.txt", BrowserDownloadURL: srv.URL + "/checksums.txt"}},
 	}
-	if !strings.Contains(err.Error(), "cosign not found") {
-		t.Errorf("error = %q, want it to mention cosign not found", err)
+
+	got, err := g.FetchReleaseChecksums(release, false)
+	if err != nil {
+		t.Fatalf("FetchReleaseChecksums() = %v, want checksum-only success", err)
+	}
+	if got.Mode != ReleaseVerificationNoCosign {
+		t.Errorf("mode = %q, want %q", got.Mode, ReleaseVerificationNoCosign)
+	}
+	if got.Entries["click-dog_26.04.1_linux_amd64.tar.gz"] != hash {
+		t.Errorf("checksums = %v, want archive hash", got.Entries)
 	}
 }
 

@@ -281,6 +281,20 @@ func TestQueryFamilyExactGroupsSQLCastsQuantilesToFloat64(t *testing.T) {
 	}
 }
 
+func TestQueryFamilyExactGroupsSQLIncludesOutcomeAndExceptionAggregates(t *testing.T) {
+	for _, want := range []string{
+		"countIf(type = 'QueryFinish') AS successful_count",
+		"countIf(type = 'ExceptionWhileProcessing') AS failed_count",
+		"sumMap([toInt64(exception_code)]",
+		"AS exception_codes",
+		"AS exception_counts",
+	} {
+		if !strings.Contains(queryFamilyExactGroupsSQL, want) {
+			t.Errorf("query family SQL missing %q:\n%s", want, queryFamilyExactGroupsSQL)
+		}
+	}
+}
+
 func TestExecuteQueryLogQueryScansNormalizedFields(t *testing.T) {
 	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
 	conn := &fakeConn{rows: newFakeRows([]any{
@@ -464,13 +478,13 @@ func TestFetchQueryFamilyRollupsAggregatesExactGroupsBeforeRollup(t *testing.T) 
 	conn := &fakeConn{rows: newFakeRows(
 		[]any{
 			uint64(100), "SELECT id, name FROM app.users WHERE tenant_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?",
-			uint64(12), float64(150), float64(220), uint64(2048), float64(1200), float64(9000),
+			uint64(12), uint64(10), uint64(2), float64(150), float64(220), []int64{241, 60}, []uint64{2, 0}, uint64(2048), float64(1200), float64(9000),
 			[]string{"api", "worker"}, []string{"clickhouse-go"}, []string{"app.users"},
 			now.Add(-3 * time.Hour), now,
 		},
 		[]any{
 			uint64(200), "SELECT id, name FROM app.users WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?",
-			uint64(11), float64(90), float64(140), uint64(512), float64(800), float64(6000),
+			uint64(11), uint64(11), uint64(0), float64(90), float64(140), []int64{0}, []uint64{0}, uint64(512), float64(800), float64(6000),
 			[]string{"api"}, []string{"clickhouse-go"}, []string{"app.users"},
 			now.Add(-90 * time.Minute), now.Add(-30 * time.Minute),
 		},
@@ -528,6 +542,12 @@ func TestFetchQueryFamilyRollupsAggregatesExactGroupsBeforeRollup(t *testing.T) 
 	if rollups[0].Stats.ExecutionCount != 23 {
 		t.Errorf("ExecutionCount = %d, want 23", rollups[0].Stats.ExecutionCount)
 	}
+	if rollups[0].Stats.SuccessfulCount != 21 || rollups[0].Stats.FailedCount != 2 {
+		t.Errorf("outcome counts = %d successful / %d failed, want 21 / 2", rollups[0].Stats.SuccessfulCount, rollups[0].Stats.FailedCount)
+	}
+	if len(rollups[0].Stats.TopExceptions) != 1 || rollups[0].Stats.TopExceptions[0].Code != 241 || rollups[0].Stats.TopExceptions[0].Count != 2 {
+		t.Errorf("top exceptions = %+v, want code 241 count 2", rollups[0].Stats.TopExceptions)
+	}
 	if rollups[0].RepresentativeQuery == "" {
 		t.Fatal("RepresentativeQuery should be populated")
 	}
@@ -541,13 +561,13 @@ func TestFetchQueryFamilyRollupsKeepsDifferentTablesSeparate(t *testing.T) {
 	conn := &fakeConn{rows: newFakeRows(
 		[]any{
 			uint64(100), "SELECT id FROM app.users WHERE tenant_id = ? LIMIT ?",
-			uint64(12), float64(150), float64(220), uint64(2048), float64(1200), float64(9000),
+			uint64(12), uint64(12), uint64(0), float64(150), float64(220), []int64{0}, []uint64{0}, uint64(2048), float64(1200), float64(9000),
 			[]string{"api"}, []string{"clickhouse-go"}, []string{"app.users"},
 			now.Add(-3 * time.Hour), now,
 		},
 		[]any{
 			uint64(200), "SELECT id FROM app.orders WHERE tenant_id = ? LIMIT ?",
-			uint64(11), float64(90), float64(140), uint64(512), float64(800), float64(6000),
+			uint64(11), uint64(10), uint64(1), float64(90), float64(140), []int64{60}, []uint64{1}, uint64(512), float64(800), float64(6000),
 			[]string{"api"}, []string{"clickhouse-go"}, []string{"app.orders"},
 			now.Add(-90 * time.Minute), now.Add(-30 * time.Minute),
 		},

@@ -2,12 +2,25 @@
 # Use bd merge for beads JSONL files
 .beads/issues.jsonl merge=beads
 
+# Internal orchestration and task state must never enter the public release
+# archive. These files contain private-repository workflow, issue, and operator
+# context even when they contain no credentials.
+.beads export-ignore
+.beads/** export-ignore
+ai export-ignore
+ai/** export-ignore
+.github/ISSUE_TEMPLATE/agent-task.yml export-ignore
+.github/PULL_REQUEST_TEMPLATE/agent-change.md export-ignore
+.github/workflows/claude.yml export-ignore
+.github/workflows/claude-code-review.yml export-ignore
+
 # Internal-only paths — never published to the public click-dog repo.
 # `git archive` honors export-ignore, so the clean-slate bootstrap and
-# scripts/publish-to-public.sh both drop these from the public tree. Only
-# user-facing docs (the mkdocs site) ship; development docs, business/strategy
-# notes, and specs stay private. See
+# scripts/publish-to-public.sh both drop these from the public tree. The site,
+# development docs, business/strategy notes, and specs stay private. See
 # docs/development/specs/open-source-clean-slate-migration.md.
+# Keep the narrower development-doc rule explicit even while `docs/**` below
+# excludes the whole site, so a future public-site change cannot expose runbooks.
 docs/development export-ignore
 docs/development/** export-ignore
 openspec export-ignore
@@ -19,18 +32,27 @@ openspec/** export-ignore
 scripts/publish-to-public.sh export-ignore
 scripts/publish-to-public_test.sh export-ignore
 scripts/import-public-pr.sh export-ignore
+scripts/verify-public-boundary.sh export-ignore
+scripts/check-public.sh export-ignore
+scripts/site-status.sh export-ignore
+scripts/site-docs-source.sh export-ignore
+scripts/site-docs-source_test.sh export-ignore
+scripts/lib/site-docs-behind.sh export-ignore
+scripts/lib/site-docs-behind_test.sh export-ignore
+Makefile.internal export-ignore
+scripts/bd-local.sh export-ignore
 
 # The docs site (click-dog.com) is internal-only: it publishes from this
 # private repo via .github/workflows/site.yml (see
 # docs/development/docs-publishing.md). The site is NOT open source —
-# nothing site-related ships in the public archive. docs/CNAME and
-# docs/assets/social-card.* are covered by docs/**. The site.yml pattern
-# intentionally pre-dates the file (it lands in a sibling PR).
+# nothing site-related ships in the public archive. docs/CNAME is covered by
+# docs/**; the landing templates and their assets live under www/.
 docs export-ignore
 docs/** export-ignore
-overrides export-ignore
-overrides/** export-ignore
+www export-ignore
+www/** export-ignore
 mkdocs.yml export-ignore
 requirements-docs.txt export-ignore
+scripts/check-site-escape.sh export-ignore
 .github/workflows/docs.yml export-ignore
 .github/workflows/site.yml export-ignore

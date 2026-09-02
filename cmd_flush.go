@@ -38,7 +38,7 @@ Usage:
 
 Flags:
 `)
-		fs.PrintDefaults()
+		printFlagDefaults(errOut, fs)
 	}
 
 	if err := fs.Parse(args); err != nil {

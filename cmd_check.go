@@ -47,7 +47,7 @@ func runCheck(args []string, out, errOut io.Writer) int {
 	// config parse, ClickHouse ping, and exporter connectivity. It exists for
 	// tests and emergency scripting and is intentionally absent from the usage
 	// text so operators get full readiness by default. Automation that only
-	// needs config safety should use `click-dog -validate` (offline) instead of
+	// needs config safety should use `click-dog validate` (offline) instead of
 	// depending on this flag.
 	quick := fs.Bool("quick", false, "")
 
@@ -62,14 +62,11 @@ the ClickHouse data plane the Datadog dashboards depend on: span/query log
 readability and grants, recent spans, duration thresholds, clickhouse.query_id
 presence, query_log enrichment join, and normalized_query_hash support. Data
 gaps warn; missing required tables/grants fail. For an offline, config-only
-check use `+"`click-dog -validate`"+` instead.
+check use `+"`click-dog validate`"+` instead.
 
 Flags:
-  -config string
-      Path to configuration file (default %q)
-  -lookback duration
-      Lookback window for recent-data readiness checks (default 24h)
-`, config.DefaultConfigFlag)
+`)
+		printFlagDefaults(errOut, fs)
 	}
 
 	if err := fs.Parse(args); err != nil {

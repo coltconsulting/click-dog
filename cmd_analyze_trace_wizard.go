@@ -76,7 +76,7 @@ func runAnalyzeTraceWizard(in io.Reader, out, errOut io.Writer, src traceDrilldo
 
 	// Flag parity: fold the collected choices onto the non-interactive defaults
 	// and run the identical report pipeline. A guided pick resolves to a
-	// query-id (exactly what -query-id would supply), so the drilldown re-reads
+	// query-id (exactly what --query-id would supply), so the drilldown re-reads
 	// the query-log row by ID and the report path is byte-for-byte the same as
 	// the scriptable equivalent.
 	opts := base
@@ -142,7 +142,7 @@ func promptTraceSource(w *wizPrompter, out, errOut io.Writer) string {
 // collectTraceWizardOther collects an explicit identity for the `other` source:
 // query-id, trace-id, or normalized-query-hash. Exactly one identity is
 // required; the prompt re-asks until one is given (or stdin closes). This is the
-// guided equivalent of `analyze trace -source other -<identity>`.
+// guided equivalent of `analyze trace --source other -<identity>`.
 func collectTraceWizardOther(w *wizPrompter, out, errOut io.Writer) (analyzeTraceWizardInput, bool) {
 	for {
 		_, _ = fmt.Fprint(out, "Identity kind (query-id/trace-id/normalized-query-hash) [query-id]: ")
@@ -188,11 +188,11 @@ func collectTraceWizardOther(w *wizPrompter, out, errOut io.Writer) (analyzeTrac
 	}
 }
 
-// collectTraceWizardSearch collects a -match string, runs the candidate search
+// collectTraceWizardSearch collects a --match string, runs the candidate search
 // for the chosen source (recent over query_log, or current over
 // system.processes), shows the bounded list, and lets the operator select one.
 // The selected candidate's query-id is carried as the resolved QueryID so the
-// drilldown runs the identical path as a direct -query-id. Returns false when
+// drilldown runs the identical path as a direct --query-id. Returns false when
 // the search yields no candidates (guidance printed) or stdin closes.
 func collectTraceWizardSearch(w *wizPrompter, out, errOut io.Writer, src traceDrilldownSource, base analyzeTraceOptions, source string) (analyzeTraceWizardInput, bool) {
 	matchPrompt := "Match (case-insensitive substring; empty lists recent)"
@@ -206,7 +206,7 @@ func collectTraceWizardSearch(w *wizPrompter, out, errOut io.Writer, src traceDr
 
 	// Run the same bounded search the non-interactive path uses. The window /
 	// timeout / candidate-limit come from the base options so the wizard honors
-	// the same -lookback / -timeout / -candidate-limit the flags expose.
+	// the same --lookback / --timeout / --candidate-limit the flags expose.
 	ctx, cancel := context.WithTimeout(context.Background(), base.Timeout)
 	defer cancel()
 	end := time.Now().UTC().Truncate(time.Second)
@@ -270,7 +270,7 @@ func collectTraceWizardSearch(w *wizPrompter, out, errOut io.Writer, src traceDr
 // needed to drill in.
 func promptTraceCandidatePick(w *wizPrompter, out, errOut io.Writer, candidates []analysis.QueryCandidate) (analysis.QueryCandidate, bool) {
 	if len(candidates) == 0 {
-		_, _ = fmt.Fprintln(out, "No candidates matched; widen -lookback or adjust the match string, then re-run.")
+		_, _ = fmt.Fprintln(out, "No candidates matched; widen --lookback or adjust the match string, then re-run.")
 		return analysis.QueryCandidate{}, false
 	}
 
@@ -320,7 +320,7 @@ func promptTraceCandidatePick(w *wizPrompter, out, errOut io.Writer, candidates 
 
 // promptTraceFanout asks which fan-out views to include. trace is always
 // implied (the report exists to produce it); stats and similar default on/off
-// to match the non-interactive -fanout default (trace,stats); findings defaults
+// to match the non-interactive --fanout default (trace,stats); findings defaults
 // off because it runs the full analysis registry inline. Returns false only on
 // a closed stdin.
 func promptTraceFanout(w *wizPrompter, out, errOut io.Writer) (fanoutSet, bool) {

@@ -77,7 +77,7 @@ type Asset struct {
 
 // GitHubClient fetches release information from the GitHub API.
 type GitHubClient struct {
-	HTTPClient     *http.Client // Short timeout for API calls (LatestRelease, FetchVerifiedChecksums)
+	HTTPClient     *http.Client // Short timeout for API calls and release asset metadata
 	DownloadClient *http.Client // No timeout — large downloads are bounded by LimitReader instead
 	Owner          string
 	Repo           string
@@ -335,36 +335,87 @@ func (g *GitHubClient) fetchSmallAsset(release *Release, name string) ([]byte, e
 	return data, nil
 }
 
-// FetchVerifiedChecksums downloads checksums.txt and its cosign-keyless
-// signature pair (checksums.txt.sig + checksums.txt.pem) from the release,
-// verifies the signature against the click-dog release workflow identity,
-// and returns the parsed filename → hex-SHA256 map.
-//
-// Requires the cosign CLI on PATH. Fails closed on any error: missing
-// cosign, missing assets, or verification failure all return an error
-// with no map. Callers must NOT fall back to unverified checksums.
-func (g *GitHubClient) FetchVerifiedChecksums(release *Release) (map[string]string, error) {
-	cosignPath, err := exec.LookPath("cosign")
-	if err != nil {
-		return nil, fmt.Errorf("cosign not found on PATH (install from https://docs.sigstore.dev/cosign/installation/): %w", err)
-	}
+// ReleaseVerificationMode records how the checksum manifest was trusted.
+// The archive's exact SHA-256 is verified separately by the caller in every
+// mode; these values describe publisher authentication of the manifest.
+type ReleaseVerificationMode string
 
+const (
+	ReleaseVerificationSigned        ReleaseVerificationMode = "signed"
+	ReleaseVerificationNoCosign      ReleaseVerificationMode = "checksum-no-cosign"
+	ReleaseVerificationCosignIgnored ReleaseVerificationMode = "checksum-cosign-ignored"
+)
+
+// ReleaseChecksums is the parsed release manifest plus its authentication mode.
+type ReleaseChecksums struct {
+	Entries map[string]string
+	Mode    ReleaseVerificationMode
+}
+
+// ErrCosignVerification marks a signed-verification attempt that failed. It
+// lets the CLI explain that it did not silently downgrade to checksum-only and
+// name the explicit dangerous override an operator may choose on a later run.
+var ErrCosignVerification = errors.New("cosign verification failed")
+
+// FetchReleaseChecksums downloads and parses checksums.txt. When Cosign is on
+// PATH, it also downloads the keyless signature pair and authenticates the
+// manifest against the click-dog release workflow identity. A failed Cosign
+// attempt is fatal and never downgrades automatically. If Cosign is absent, or
+// dangerouslyIgnoreCosign is explicitly true, the checksum manifest is
+// returned with a mode that callers must report prominently.
+func (g *GitHubClient) FetchReleaseChecksums(release *Release, dangerouslyIgnoreCosign bool) (ReleaseChecksums, error) {
+	var result ReleaseChecksums
 	checksumsBytes, err := g.fetchSmallAsset(release, "checksums.txt")
 	if err != nil {
-		return nil, fmt.Errorf("release %s missing checksums: %w", release.TagName, err)
+		return result, fmt.Errorf("release %s missing checksums: %w", release.TagName, err)
 	}
+
+	cosignPath := ""
+	if dangerouslyIgnoreCosign {
+		result.Mode = ReleaseVerificationCosignIgnored
+	} else {
+		path, lookErr := exec.LookPath("cosign")
+		switch {
+		case lookErr == nil:
+			cosignPath = path
+			result.Mode = ReleaseVerificationSigned
+		case errors.Is(lookErr, exec.ErrNotFound):
+			result.Mode = ReleaseVerificationNoCosign
+		default:
+			return ReleaseChecksums{}, fmt.Errorf("locating cosign: %w", lookErr)
+		}
+	}
+
+	if cosignPath != "" {
+		if err := g.authenticateChecksumManifest(release, checksumsBytes, cosignPath); err != nil {
+			return ReleaseChecksums{}, fmt.Errorf("%w: %v", ErrCosignVerification, err)
+		}
+	}
+
+	checksums, err := parseChecksumLines(checksumsBytes)
+	if err != nil {
+		return ReleaseChecksums{}, err
+	}
+	if len(checksums) == 0 {
+		return ReleaseChecksums{}, fmt.Errorf("checksums.txt for release %s is empty", release.TagName)
+	}
+	result.Entries = checksums
+	return result, nil
+}
+
+func (g *GitHubClient) authenticateChecksumManifest(release *Release, checksumsBytes []byte, cosignPath string) error {
 	sigBytes, err := g.fetchSmallAsset(release, "checksums.txt.sig")
 	if err != nil {
-		return nil, fmt.Errorf("release %s missing cosign signature: %w", release.TagName, err)
+		return fmt.Errorf("release %s missing cosign signature: %w", release.TagName, err)
 	}
 	certBytes, err := g.fetchSmallAsset(release, "checksums.txt.pem")
 	if err != nil {
-		return nil, fmt.Errorf("release %s missing cosign certificate: %w", release.TagName, err)
+		return fmt.Errorf("release %s missing cosign certificate: %w", release.TagName, err)
 	}
 
 	tmpDir, err := os.MkdirTemp("", "click-dog-cosign-*")
 	if err != nil {
-		return nil, fmt.Errorf("creating temp dir for verification: %w", err)
+		return fmt.Errorf("creating temp dir for verification: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
@@ -380,25 +431,11 @@ func (g *GitHubClient) FetchVerifiedChecksums(release *Release) (map[string]stri
 		{certPath, certBytes},
 	} {
 		if err := os.WriteFile(e.path, e.data, 0600); err != nil {
-			return nil, fmt.Errorf("writing %s: %w", e.path, err)
+			return fmt.Errorf("writing %s: %w", e.path, err)
 		}
 	}
 
-	if err := verifyCosignBlob(cosignPath, checksumsPath, sigPath, certPath, cosignVerifyTimeout); err != nil {
-		return nil, err
-	}
-
-	checksums, err := parseChecksumLines(checksumsBytes)
-	if err != nil {
-		return nil, err
-	}
-	if len(checksums) == 0 {
-		// A signed-but-empty checksums.txt would otherwise leak through as
-		// "no checksum found for X" in cmd_selfupdate.go — confusing for an
-		// operator. Surface the real cause here.
-		return nil, fmt.Errorf("checksums.txt for release %s is empty", release.TagName)
-	}
-	return checksums, nil
+	return verifyCosignBlob(cosignPath, checksumsPath, sigPath, certPath, cosignVerifyTimeout)
 }
 
 // verifyCosignBlob runs `cosign verify-blob` with the identity pinned to

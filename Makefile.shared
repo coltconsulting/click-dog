@@ -1,0 +1,338 @@
+# Targets that work in any clone of this project. See Makefile for layout.
+
+.PHONY: check check-fast check-deep check-release \
+       check-fmt check-lint check-shell check-workflows check-vuln check-spec check-k8s \
+       check-config check-tidy \
+       test test-race test-scripts test-docs-contract \
+       test-integration test-integration-up test-integration-down \
+       build build-all build-amd64 build-arm64 \
+       build-site build-docker build-docker-multiarch \
+       print-version print-tag \
+       fmt tidy clean run dev-setup
+
+check-fast: check-fmt test ## Fast local gate (format + unit tests)
+
+check: check-fmt test test-scripts check-lint check-shell check-workflows check-tidy build check-spec ## Normal PR-equivalent local gate
+
+# Deep local verification. Requires the complete toolchain, Docker, network
+# access, and permission to bind local sockets.
+check-deep: check test-race check-vuln build-site check-k8s check-config test-integration ## Deep gate (adds race, vuln, docs, k8s, integration, export tree)
+
+# Everything check-deep proves, plus the artifacts a release actually ships and
+# the git state a tag requires.
+check-release: ## Pre-tag gate: check-deep + release builds + clean master
+	@echo "==> Release checks"
+	@echo ""
+	@if [ -n "$$(git status --porcelain)" ]; then \
+		echo "FAIL: working tree is dirty"; git status --short; exit 1; \
+	fi
+	@echo "  [ok] working tree clean"
+	@BRANCH=$$(git rev-parse --abbrev-ref HEAD); \
+	if [ "$$BRANCH" != "master" ] && [ "$$BRANCH" != "main" ]; then \
+		echo "FAIL: not on master/main (on $$BRANCH)"; exit 1; \
+	fi
+	@echo "  [ok] on $$(git rev-parse --abbrev-ref HEAD)"
+	@$(MAKE) --no-print-directory check-deep
+	@echo "==> Building release artifacts"
+	@$(MAKE) --no-print-directory build-all
+	@$(MAKE) --no-print-directory build-docker
+	@echo ""
+	@echo "==> All release checks passed. Ready to tag."
+
+# Fail (don't fix) if any Go file is not gofmt-clean.
+# Used by CI and the gates so formatting drift can never reach master.
+check-fmt:
+	@diff=$$(git ls-files -co --exclude-standard -z -- '*.go' | \
+		xargs -0r sh -c 'for path do [ ! -f "$$path" ] || gofmt -l "$$path" || exit; done' sh) || { \
+		echo "FAIL: gofmt could not inspect the Go source tree"; \
+		exit 1; \
+	}; \
+	if [ -n "$$diff" ]; then \
+		echo "FAIL: the following Go files are not gofmt-clean:"; \
+		echo "$$diff" | sed 's/^/  /'; \
+		echo ""; \
+		echo "Run 'make fmt' to fix."; \
+		exit 1; \
+	fi
+
+check-lint: ## Run golangci-lint
+	@command -v "$(GOLANGCI_LINT)" >/dev/null 2>&1 || { echo "golangci-lint not installed; run: make dev-setup"; exit 1; }
+	@mkdir -p "$(AGENT_CACHE_DIR)/go-build" "$(AGENT_CACHE_DIR)/go-mod" "$(AGENT_CACHE_DIR)/golangci-lint"
+	GOCACHE="$(AGENT_CACHE_DIR)/go-build" GOMODCACHE="$(AGENT_CACHE_DIR)/go-mod" GOLANGCI_LINT_CACHE="$(AGENT_CACHE_DIR)/golangci-lint" $(GOLANGCI_LINT) run
+
+# The release gates, the installer, and the publish tooling are all shell, so
+# it is the one language here whose bugs ship straight to an operator. Gated at
+# `warning` and above: `style` and `info` are advisory, and a lint nobody can
+# keep green stops being a gate.
+check-shell: ## Run shellcheck over the tracked shell sources
+	@command -v "$(SHELLCHECK)" >/dev/null 2>&1 || { echo "shellcheck not installed; run: make dev-setup"; exit 1; }
+	@if git rev-parse --git-dir >/dev/null 2>&1; then \
+		git ls-files -z -- '*.sh'; \
+	else \
+		find . -name .git -prune -o -path ./.agent-cache -prune -o -path ./target -prune -o -name '*.sh' -print0; \
+	fi | xargs -0r "$(SHELLCHECK)" -x --severity=warning
+
+check-workflows:
+	@command -v "$(ACTIONLINT)" >/dev/null 2>&1 || { echo "actionlint not installed; run: make dev-setup"; exit 1; }
+	$(ACTIONLINT)
+
+# Run the same vulnerability scan that CI enforces.
+check-vuln: ## Run govulncheck
+	@command -v "$(GOVULNCHECK)" >/dev/null 2>&1 || { echo "govulncheck not installed; run: make dev-setup"; exit 1; }
+	@mkdir -p "$(AGENT_CACHE_DIR)/go-build" "$(AGENT_CACHE_DIR)/go-mod"
+	GOCACHE="$(AGENT_CACHE_DIR)/go-build" GOMODCACHE="$(AGENT_CACHE_DIR)/go-mod" $(GOVULNCHECK) ./...
+
+# --all covers the change deltas under openspec/changes/ as well as the specs
+# tree; a malformed delta otherwise surfaces only at post-merge `openspec archive`.
+check-spec:
+	@if [ ! -d openspec ]; then \
+		echo "skipping OpenSpec validation (internal spec tree absent)"; \
+	elif ! command -v "$(OPENSPEC)" >/dev/null 2>&1; then \
+		echo "openspec not installed; run: make dev-setup"; exit 1; \
+	else \
+		"$(OPENSPEC)" validate --all --strict; \
+	fi
+
+# Validate k8s manifests: render kustomize + schema check via kubeconform
+check-k8s:
+	@command -v kubectl >/dev/null 2>&1 || { echo "kubectl not installed; it renders deploy/kubernetes/ (see: make doctor)"; exit 1; }
+	@command -v "$(KUBECONFORM)" >/dev/null 2>&1 || { echo "kubeconform not installed; run: make dev-setup"; exit 1; }
+	@echo "==> Rendering kustomize..."
+	@kubectl kustomize deploy/kubernetes/ > /dev/null
+	@echo "  [ok] kustomize renders cleanly"
+	@echo "==> Validating schemas..."
+	@kubectl kustomize deploy/kubernetes/ | $(KUBECONFORM) -summary -strict
+	@echo "  [ok] all resources valid"
+
+# The shipped example config must still parse against the current schema. The
+# example is committed and its placeholders already validate, so a failure here
+# is drift between the two, not an environment quirk — report it as one. The
+# validator's env-expansion warnings are expected and do not affect its status.
+check-config:
+	@out="$$(go run -ldflags="-s -w" . validate --config config.yaml.example 2>&1)" || { \
+		echo "FAIL: config.yaml.example does not validate against the current schema:"; \
+		echo "$$out" | sed 's/^/  /'; \
+		exit 1; \
+	}; \
+	echo "  [ok] config.yaml.example validates"
+
+# go.mod/go.sum must already match the imports. Catches the drift that appears
+# when someone adds an import and forgets `make tidy`.
+check-tidy:
+	@out="$$(go mod tidy -diff 2>&1)" || { \
+		echo "FAIL: go.mod/go.sum are out of sync with the source imports,"; \
+		echo "      or the module graph could not be resolved. Output:"; \
+		echo "$$out" | sed 's/^/  /'; \
+		echo ""; \
+		echo "      If this is drift, run 'make tidy' and commit the result."; \
+		exit 1; \
+	}
+
+test: ## Run unit tests
+	go test ./...
+
+test-race: ## Run unit tests with the race detector
+	go test -race ./...
+
+# The docs/site contract tests — the tests, in any package, that read the
+# files ci.yml's paths-ignore treats as "not code" (docs/**, www/**, **/*.md,
+# mkdocs.yml). docs.yml runs this slice on docs-only PRs, which otherwise
+# skip the Go test job entirely, so a docs edit cannot regress a guarded
+# contract unchecked. Any test whose name contains "Docs" is picked up
+# automatically; a docs-contract test named differently must be added to the
+# roster below or docs-only PRs will not run it.
+DOCS_CONTRACT_RUN := Docs|^Test(CommercialSupport|SupportPage|Readme|InstallerBootstrap|Home|DeliveryContract|KubernetesExample|DatadogDashboardCatalog|DatadogManualImport|ExportedUserActivity|AuditedOperatorContracts|ConfigSourceComments|DomainLanguage|SiteAssets|ImagePins|Wizard_ParityWithProfileTemplates)
+
+test-docs-contract: ## Run only the docs/site contract tests (docs.yml gate)
+	go test -run '$(DOCS_CONTRACT_RUN)' ./...
+
+# Shell test suites, shared by `make check` and CI (ci.yml) so a single source
+# gates them everywhere. Internal boundary/publish scripts are export-ignored,
+# so the public archive skips those checks.
+test-scripts: ## Run the installer, release-tooling, and boundary shell suites
+	bash deploy/install_test.sh
+	bash scripts/next-release-tag_test.sh
+	bash scripts/release-channel_test.sh
+	bash scripts/lib/build-export-tree_test.sh
+	@# Internal-only suites are guarded: this file ships publicly, and an
+	@# unconditional call to an export-ignored script fails the public tree.
+	@if [ -f scripts/lib/site-docs-behind_test.sh ]; then \
+		bash scripts/lib/site-docs-behind_test.sh; \
+	else \
+		echo "skipping site docs-behind tests (internal-only; absent from the public archive)"; \
+	fi
+	@if [ -f scripts/site-docs-source_test.sh ]; then \
+		bash scripts/site-docs-source_test.sh; \
+	else \
+		echo "skipping site docs-source tests (internal-only; absent from the public archive)"; \
+	fi
+	@if [ -x scripts/verify-public-boundary.sh ]; then \
+		bash scripts/verify-public-boundary.sh; \
+	else \
+		echo "skipping public-boundary tests (internal-only; absent from the public archive)"; \
+	fi
+	@if [ -f scripts/publish-to-public_test.sh ]; then \
+		bash scripts/publish-to-public_test.sh; \
+	else \
+		echo "skipping publish-gate tests (internal-only; absent from the public archive)"; \
+	fi
+
+# Start the 3-node ClickHouse cluster + OTEL collector
+test-integration-up:
+	docker compose -f testing/docker-compose.integration.yml up -d
+	@echo "Waiting for services..."
+	@ready=0; \
+	for i in $$(seq 1 60); do \
+		docker exec clickhouse-int-1 clickhouse-client -q "SELECT 1" 2>/dev/null && \
+		docker exec clickhouse-int-2 clickhouse-client -q "SELECT 1" 2>/dev/null && \
+		docker exec clickhouse-int-3 clickhouse-client -q "SELECT 1" 2>/dev/null && \
+		{ ready=1; break; }; \
+		sleep 2; \
+	done; \
+	if [ "$$ready" -ne 1 ]; then \
+		echo "FAIL: integration ClickHouse cluster did not become ready"; \
+		docker compose -f testing/docker-compose.integration.yml ps; \
+		docker compose -f testing/docker-compose.integration.yml logs --tail=40; \
+		exit 1; \
+	fi
+	@echo "Integration cluster ready"
+	@echo "  ClickHouse nodes: localhost:19000, localhost:19001, localhost:19002"
+	@echo "  Keeper:           localhost:19181, localhost:19182, localhost:19183"
+	@echo "  OTEL Collector:   localhost:14317"
+
+# Stop the integration cluster
+test-integration-down:
+	docker compose -f testing/docker-compose.integration.yml down -v
+
+# All-in-one with teardown guaranteed on success, failure, or interruption.
+# Runs every `integration`-tagged test, including the TestDegradation suite.
+test-integration: ## Start cluster, run integration tests, always tear down (needs Docker)
+	@set -eu; \
+	cleanup() { trap - EXIT INT TERM; $(MAKE) --no-print-directory test-integration-down; }; \
+	trap cleanup EXIT INT TERM; \
+	$(MAKE) --no-print-directory test-integration-up; \
+	go test -v -race -tags integration -timeout 300s ./...
+
+# Build the binary with version injected
+build: ## Build the binary for the current platform (version injected)
+	CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=$(VERSION)" -o click-dog
+
+# Build for all release platforms (linux only)
+build-all: build-amd64 build-arm64 ## Build linux amd64 + arm64 release binaries
+
+build-amd64:
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.version=$(VERSION)" -o click-dog-linux-amd64
+
+build-arm64:
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w -X main.version=$(VERSION)" -o click-dog-linux-arm64
+
+build-site: ## Build the documentation site into target/ (strict)
+	@if [ ! -f mkdocs.yml ]; then \
+		echo "skipping docs build (internal site sources absent)"; \
+	elif ! command -v "$(MKDOCS)" >/dev/null 2>&1; then \
+		echo "mkdocs not installed; run: make dev-setup"; exit 1; \
+	else \
+		"$(MKDOCS)" build --strict --site-dir target; \
+		MKDOCS="$(MKDOCS)" scripts/check-site-escape.sh; \
+	fi
+
+build-docker: build ## Build the Docker image for the current platform
+	docker build --build-arg TARGETPLATFORM=. -t $(DOCKER_REPO):$(DOCKER_TAG) .
+
+# Multi-platform images cannot be loaded into the classic Docker daemon.
+# By default this writes an OCI archive; release-docker-manual overrides the
+# output to push the manifest list to $(DOCKER_REPO):$(DOCKER_TAG).
+build-docker-multiarch:
+	$(MAKE) build-all
+	set -e; \
+	trap '$(RM) -r .docker-buildx' EXIT; \
+	$(RM) -r .docker-buildx; \
+	mkdir -p .docker-buildx/linux/amd64 .docker-buildx/linux/arm64; \
+	cp Dockerfile .docker-buildx/Dockerfile; \
+	cp click-dog-linux-amd64 .docker-buildx/linux/amd64/click-dog; \
+	cp click-dog-linux-arm64 .docker-buildx/linux/arm64/click-dog; \
+	docker buildx build --platform linux/amd64,linux/arm64 --output "$(DOCKER_MULTIARCH_OUTPUT)" -t $(DOCKER_REPO):$(DOCKER_TAG) .docker-buildx
+
+print-version: ## Print the version string `build` stamps into the binary
+	@echo "$(VERSION)"
+
+# All three, because the useful question is "what would each channel cut?",
+# and answering it should not need a flag. The loop exists so a refusal from
+# next-release-tag.sh fails the target: substituting it straight into printf
+# would print a blank tag and exit 0.
+print-tag: ## Print the next tag for each release channel
+	@for channel in alpha beta ga; do \
+		tag="$$(scripts/next-release-tag.sh "$$channel" "$(v)")" || exit 1; \
+		printf '  %-6s %s\n' "$$channel" "$$tag"; \
+	done
+
+run: ## Run locally against config.yaml
+	@test -f config.yaml || { \
+		echo "no config.yaml here. Generate one with:"; \
+		echo "    go run . init              # or: go run . init --wizard"; \
+		echo "    cp config.yaml.example config.yaml"; \
+		exit 1; }
+	go run . -config config.yaml
+
+# Both fmt and check-fmt operate on tracked/untracked, non-ignored Go files
+# rather than packages, so build-tagged files like integration_helpers_test.go
+# are covered while workspace-local tool caches remain excluded. If they
+# diverged a contributor could hit the CI gate, run `make fmt`, see no change,
+# and be stuck.
+#
+# Future: enabling the gofmt linter in a .golangci.yml would fold this gate
+# into the existing golangci-lint job and remove the need for a separate target.
+fmt: ## Format all Go files (gofmt -w)
+	@git ls-files -co --exclude-standard -z -- '*.go' | \
+		xargs -0r sh -c 'for path do [ ! -f "$$path" ] || gofmt -w "$$path" || exit; done' sh
+
+tidy: ## Update go.mod/go.sum to match imports (mutating)
+	go mod tidy
+
+clean: ## Remove built binaries and site output
+	rm -f click-dog click-dog-linux-* click-dog-darwin-*
+	rm -rf target/ site/
+
+dev-setup: ## Install the pinned repository-managed development tools
+	@mkdir -p "$(LOCAL_TOOLS_BIN)" "$(AGENT_CACHE_DIR)/go-build" "$(AGENT_CACHE_DIR)/go-mod"
+	curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/$(GOLANGCI_LINT_VERSION)/install.sh" | sh -s -- -b "$(LOCAL_TOOLS_BIN)" "$(GOLANGCI_LINT_VERSION)"
+	GOBIN="$(LOCAL_TOOLS_BIN)" GOCACHE="$(AGENT_CACHE_DIR)/go-build" GOMODCACHE="$(AGENT_CACHE_DIR)/go-mod" go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
+	GOBIN="$(LOCAL_TOOLS_BIN)" GOCACHE="$(AGENT_CACHE_DIR)/go-build" GOMODCACHE="$(AGENT_CACHE_DIR)/go-mod" go install github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
+	GOBIN="$(LOCAL_TOOLS_BIN)" GOCACHE="$(AGENT_CACHE_DIR)/go-build" GOMODCACHE="$(AGENT_CACHE_DIR)/go-mod" go install github.com/yannh/kubeconform/cmd/kubeconform@$(KUBECONFORM_VERSION)
+	@# shellcheck is a Haskell binary released as a tarball, not a Go module.
+	@# Staged in a temporary file and moved into place only once it answers
+	@# --version. A recipe runs under a plain sh with no -e and no pipefail, so
+	@# writing the download straight to the destination would truncate a working
+	@# shellcheck before the transfer started and still exit 0 if it failed.
+	@os="$$(uname -s | tr '[:upper:]' '[:lower:]')"; \
+	case "$$(uname -m)" in \
+		arm64|aarch64) arch=aarch64 ;; \
+		x86_64|amd64)  arch=x86_64 ;; \
+		*) echo "no pinned shellcheck build for $$(uname -m); install it from your package manager"; exit 1 ;; \
+	esac; \
+	staged="$(LOCAL_TOOLS_BIN)/.shellcheck.$$$$"; \
+	trap 'rm -f "$$staged" "$$staged.tar.xz"' EXIT INT TERM; \
+	curl -sSfL "https://github.com/koalaman/shellcheck/releases/download/$(SHELLCHECK_VERSION)/shellcheck-$(SHELLCHECK_VERSION).$$os.$$arch.tar.xz" -o "$$staged.tar.xz" \
+		&& tar -xJ -O -f "$$staged.tar.xz" "shellcheck-$(SHELLCHECK_VERSION)/shellcheck" > "$$staged" \
+		&& chmod +x "$$staged" \
+		&& "$$staged" --version >/dev/null 2>&1 \
+		&& mv -f "$$staged" "$(LOCAL_TOOLS_BIN)/shellcheck" \
+		|| { echo "FAIL: could not install pinned shellcheck $(SHELLCHECK_VERSION) for $$os.$$arch"; exit 1; }
+	@if [ -f .beads/issues.jsonl ]; then \
+		GOBIN="$(LOCAL_TOOLS_BIN)" GOCACHE="$(AGENT_CACHE_DIR)/go-build" GOMODCACHE="$(AGENT_CACHE_DIR)/go-mod" go install github.com/steveyegge/beads/cmd/bd@v$(BD_VERSION); \
+	else \
+		echo "skipping bd install (internal tracker absent)"; \
+	fi
+	GOCACHE="$(AGENT_CACHE_DIR)/go-build" GOMODCACHE="$(AGENT_CACHE_DIR)/go-mod" go mod download
+	@if [ -d openspec ]; then \
+		npm install --ignore-scripts --no-audit --no-fund --prefix "$(AGENT_CACHE_DIR)/npm" @fission-ai/openspec@$(OPENSPEC_VERSION); \
+	else \
+		echo "skipping OpenSpec install (internal spec tree absent)"; \
+	fi
+	@if [ -f requirements-docs.txt ]; then \
+		python3 -m venv "$(AGENT_CACHE_DIR)/venv"; \
+		"$(AGENT_CACHE_DIR)/venv/bin/pip" install -r requirements-docs.txt; \
+	else \
+		echo "skipping MkDocs install (internal site sources absent)"; \
+	fi
+	@echo "Pinned tools installed under $(AGENT_CACHE_DIR). Run 'make doctor' to inspect external prerequisites."

@@ -1,0 +1,94 @@
+clickdog issues.
+
+collectd issues:
+
+site:
+  need a bit more contrast on the backgrounds of the text blocks [Image #1]
+
+   before putting it up we need some commercial plugs - book a session / request commercial
+  support - simple banner top of site and docs pages, smaller banner bottom of each ?
+
+
+  To Ai sloppy - "Point it at ClickHouse. Pick your sinks. Run."  we should also show the most
+  minimal sensible config - dont need log level - and then give them an option to see an
+  advanced config
+
+
+docs:
+
+  whats the point of the less?  curl -fsSL
+  https://github.com/coltconsulting/click-dog/releases/latest/download/install.sh -o install.sh
+  less install.sh
+  sudo bash install.sh
+
+  can we checksum or something install.sh how to protect??
+
+
+  "and installing the binary + systemd unit (the quickstart always installs and enables the
+  unit; it is optional only on the install.sh install path via --systemd).  "  huh its optional
+  if we choose it??
+
+  "click-dog -validate -config /etc/click-dog/click-dog.yaml
+  click-dog check -config /etc/click-dog/click-dog.yaml"
+
+  -validate but not -check?
+
+  should guided install be 'standard' install? or should we have standard and guided?
+
+  "Prometheus scrape listener" - hmm not sure about scrape
+
+  "For Datadog, create all three packaged Application Query Analysis, Exported User Activity,
+  and Click-Dog: Health dashboards"
+
+  ". See Value" - too sloppy.
+
+  "Notification delivery is explicit: add -notify only after configuring an analysis_findings
+  webhook or Datadog Events destination. "  -notify?,
+
+  why do we put -fail-on warning  in the example? seems noise?
+  -baseline vs -save-baseline ?? ugh
+
+  one systemd service on a host, one sidecar per ClickHouse node - arent these both many to many
+
+  "download it again with the Quick Start curl command first." - make Quick Start a link
+
+  do we need all this?
+    <clickhouse>
+        <opentelemetry_span_log>
+            <engine>
+                ENGINE = MergeTree
+                PARTITION BY toYYYYMM(finish_date)
+                ORDER BY (finish_date, finish_time_us, trace_id)
+            </engine>
+            <database>system</database>
+            <table>opentelemetry_span_log</table>
+            <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        </opentelemetry_span_log>
+     </clickhouse>
+
+     we have quick start then prerequisites?
+
+   "Click-Dog sends spans via gRPC to any OTEL-compatible endpoint on port 4317. "  uh is 4317 magic?
+
+    requires the cosign CLI on the host  - we should recommend not require
+
+    install method should lead with use case not method.
+
+    "The default dedup_cache_size: 10000 uses approximately 1 MiB" uh wot?
+
+    why "License and contributing¶" at bottom of install.
+
+    gmail send as support@click-dog.com  - lets get rid of info just support. and bin the rest. oh and sales@click-dog.com 
+
+
+    Fast Path¶
+Enable OTLP gRPC on the Datadog Agent.  - how?
+
+Configure the Datadog Agent¶ - whats the default here?
+
+we should prob link to datadog here??
+make clear each fragment what systema and where it is.
+
+
+
+

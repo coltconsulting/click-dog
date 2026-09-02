@@ -10,7 +10,7 @@ The Click-Dog source code is licensed under the [Apache License 2.0](LICENSE). A
 
 You may, without seeking permission:
 
-- Refer to "Click-Dog" in factual, descriptive contexts — for example, a blog post comparing observability tools, a tutorial showing how to install Click-Dog, or a bug report.
+- Refer to "Click-Dog" in factual, descriptive contexts, such as a comparison of observability tools, an installation tutorial, or a bug report.
 - State that your software is built on, integrates with, or is compatible with Click-Dog, provided you do not imply endorsement or affiliation.
 - Use the name in academic papers, conference talks, and similar non-commercial contexts.
 
@@ -26,6 +26,6 @@ If you fork the Click-Dog source code under the Apache 2.0 license, your fork mu
 
 ## Contact
 
-For trademark licensing inquiries, contact <colin.taylor@gmail.com>.
+For trademark licensing inquiries, contact <support@click-dog.com>.
 
 This notice is informational and does not create any contractual rights. Trademark rights are determined by applicable law.

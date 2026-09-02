@@ -8,7 +8,7 @@ metadata:
 data:
   click-dog.yaml: |
     clickhouse:
-      host: {{ .ClickHouseHost }}
+      host: {{ yamlScalar .ClickHouseHost }}
       port: 9000
       database: default
       username: ${CLICKHOUSE_USERNAME}
@@ -21,12 +21,12 @@ data:
       # Both fields are required — use_cluster_queries with an empty cluster is a
       # no-op that reads only the single pod the Service routes to.
       use_cluster_queries: true
-      cluster: {{ .ClickHouseCluster }}
+      cluster: {{ yamlScalar .ClickHouseCluster }}
 {{- end }}
 
     exporters:
       otel:
-        - collector_address: {{ .CollectorAddress }}
+        - collector_address: {{ yamlScalar .CollectorAddress }}
           service_name: click-dog-monitor
 
     monitor:

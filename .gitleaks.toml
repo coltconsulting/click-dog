@@ -7,13 +7,26 @@ useDefault = true
 # The query analyzers in internal/analysis/ define metric thresholds with
 # snake_case struct-key literals, e.g. key: "p95_duration_ms"
 # (internal/analysis/resource_hog.go:67), which trip the built-in generic-api-key
-# rule on the entropy of the value. Scope the exemption to that package only —
-# it holds pure query-stat analysis logic and never credentials — rather than
-# allowlisting the snake_case value shape repo-wide. gitleaks `paths` exempts at
-# the file level, so a real secret ANYWHERE ELSE (and a snake_case value outside
-# this package) is still caught.
+# rule on the entropy of the value. The exemption is bounded on two axes so it
+# stays as narrow as the false positive it exists for:
+#
+#   targetRules — only generic-api-key is silenced. Every other rule still
+#     applies inside this package, so a real AWS key, GitHub token, or private
+#     key here is caught. Rule scoping is what bounds the exemption within the
+#     package; a path-only allowlist cannot, because "every .go file except
+#     _test.go" is not expressible in gitleaks' Go RE2 path patterns (no
+#     lookaround) — and a test fixture is the likeliest way a real credential
+#     would land in this package.
+#   paths — only internal/analysis, which holds pure query-stat analysis logic
+#     and never credentials, rather than allowlisting the snake_case value
+#     shape repo-wide. It covers the package rather than named files so a new
+#     analyzer inherits the exemption without another edit.
+#
+# A real secret anywhere else in the tree, and a snake_case value outside this
+# package, are unaffected.
 [[allowlists]]
 description = "internal/analysis metric-key literals (analyzer logic, no credentials)"
+targetRules = ["generic-api-key"]
 paths = [
   '''internal/analysis/.*\.go$''',
 ]

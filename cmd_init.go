@@ -105,7 +105,7 @@ func flagDescriptionForProfile() string {
 // The new seed flags added for install.sh's benefit (--ch-port, --ch-secure,
 // --ch-user, --otel-secure, --splunk-hec-endpoint, --ha-keeper) are
 // intentionally NOT in this set. They pre-fill defaults but do not suppress
-// the short prompt — a TTY invocation of `click-dog init -ch-secure` still
+// the short prompt — a TTY invocation of `click-dog init --ch-secure` still
 // asks for host / collector / service / profile so the four most-edited
 // values don't silently take their localhost defaults. install.sh always
 // pipes a non-TTY stdin so prompt suppression is moot for the scripted path.
@@ -122,8 +122,8 @@ func valueFlagsExplicitlySet(fs *flag.FlagSet) bool {
 
 // flagWasSet reports whether the named flag was passed on the command line
 // (vs. left at its default). Used to decide whether the wizard's port
-// auto-flip (9000 → 9440 when -ch-secure) should fire: skip the flip if the
-// user explicitly set -ch-port, so they get exactly what they asked for.
+// auto-flip (9000 → 9440 when --ch-secure) should fire: skip the flip if the
+// user explicitly set --ch-port, so they get exactly what they asked for.
 func flagWasSet(fs *flag.FlagSet, name string) bool {
 	set := false
 	fs.Visit(func(f *flag.Flag) {
@@ -138,7 +138,7 @@ func runInit(args []string, out, errOut io.Writer) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(errOut)
 	chHost := fs.String("ch-host", "localhost", "ClickHouse host")
-	chPort := fs.Int("ch-port", 9000, "ClickHouse port (default 9000, or 9440 if -ch-secure and -ch-port is not given)")
+	chPort := fs.Int("ch-port", 9000, "ClickHouse port (default 9000, or 9440 if --ch-secure and --ch-port is not given)")
 	chSecure := fs.Bool("ch-secure", false, "Use TLS for the ClickHouse connection")
 	chUser := fs.String("ch-user", "default", "ClickHouse username (install.sh quickstart overrides to its dedicated monitoring user)")
 	chPasswordFile := fs.String("ch-password-file", "", "Emit clickhouse.password_file: <path> instead of password: ${CLICKHOUSE_PASSWORD} (file-based secret)")
@@ -168,7 +168,7 @@ Splunk HEC, and HA.
 
 Flags:
 `, formatProfilesHelp())
-		fs.PrintDefaults()
+		printFlagDefaults(errOut, fs)
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -218,7 +218,12 @@ Flags:
 	a.CHPasswordFile = *chPasswordFile
 	content := renderWizardYAML(a)
 
-	if err := os.WriteFile(*output, []byte(content), 0600); err != nil {
+	// writePrivateFile, not os.WriteFile: --force overwrites an existing config,
+	// and os.WriteFile would leave a pre-existing file on its current (possibly
+	// world-readable) mode. This is the file operators go on to fill with
+	// credentials — install.sh chmods it 640 and the Ansible playbook writes
+	// 0600 — so a rewrite must reassert the mode rather than inherit one.
+	if err := writePrivateFile(*output, []byte(content), 0600); err != nil {
 		_, _ = fmt.Fprintf(errOut, "Error writing config: %v\n", err)
 		return 1
 	}
@@ -245,9 +250,9 @@ Flags:
 
 // buildAnswersFromFlags converts the parsed flag values into a wizardAnswers
 // struct ready for renderWizardYAML. The port auto-flip (9000 → 9440 when
-// -ch-secure is set and -ch-port wasn't explicit) matches the wizard's
+// --ch-secure is set and --ch-port wasn't explicit) matches the wizard's
 // interactive default-flip — both surfaces present the same "TLS implies
-// 9440" assumption, with -ch-port available as the override.
+// 9440" assumption, with --ch-port available as the override.
 func buildAnswersFromFlags(fs *flag.FlagSet, profile, chHost string, chPort int, chSecure bool, chUser, collector, service string, otelSecure bool, splunkHEC, haKeeper string) wizardAnswers {
 	port := chPort
 	if chSecure && !flagWasSet(fs, "ch-port") {

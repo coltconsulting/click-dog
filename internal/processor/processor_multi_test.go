@@ -110,6 +110,47 @@ func TestExportSpans_MultiExporter_PartialFailureSurfacesError(t *testing.T) {
 	}
 }
 
+func TestExportSpansWithDeadline_ShapesBeforeMultiExporterFanOut(t *testing.T) {
+	assertSafe := func(_ context.Context, spans []model.OpenTelemetrySpan) ([]model.SpanKey, error) {
+		if len(spans) != 1 {
+			t.Fatalf("received %d spans, want 1", len(spans))
+		}
+		if _, ok := spans[0].Attributes["db.statement"]; ok {
+			t.Fatal("sink received raw db.statement before fan-out")
+		}
+		if spans[0].Attributes["query_log.normalized_query"] != "SELECT ?" {
+			t.Fatal("sink did not receive the safe normalized representation")
+		}
+		return []model.SpanKey{model.KeyOf(spans[0])}, nil
+	}
+	left := &mockExporter{exportSpansFunc: assertSafe}
+	right := &mockExporter{exportSpansFunc: assertSafe}
+	multi := export.NewMultiExporter([]model.SpanExporter{left, right}, []string{"otel", "splunk"})
+	cfg := &config.Config{Filters: config.FiltersConfig{QueryTextMode: config.QueryTextModeNormalizedOnly}}
+	qf, err := filter.NewQueryFilter(cfg.Filters)
+	if err != nil {
+		t.Fatalf("NewQueryFilter: %v", err)
+	}
+	span := model.OpenTelemetrySpan{
+		TraceID: uuid.MustParse("33333333-3333-3333-3333-333333333333"),
+		SpanID:  3,
+		Attributes: map[string]string{
+			"db.statement":               "SELECT 123",
+			"query_log.normalized_query": "SELECT ?",
+		},
+	}
+	result, err := ExportSpansWithDeadline(context.Background(), cfg, multi, qf, []model.OpenTelemetrySpan{span})
+	if err != nil {
+		t.Fatalf("ExportSpansWithDeadline: %v", err)
+	}
+	if result.TotalAccepted != 1 || left.exportSpansCalls != 1 || right.exportSpansCalls != 1 {
+		t.Fatalf("fan-out result = %+v, calls=%d/%d", result, left.exportSpansCalls, right.exportSpansCalls)
+	}
+	if span.Attributes["db.statement"] == "" {
+		t.Fatal("privacy boundary mutated the processor's input span")
+	}
+}
+
 // The cycle metrics + circuit breaker logic in processor.go is keyed
 // purely off `err != nil`; this test proves the composition by feeding
 // the partial-failure error from MultiExporter into the same helpers

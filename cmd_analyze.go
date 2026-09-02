@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -9,20 +11,34 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"time"
 
 	"github.com/coltconsulting/click-dog/internal/analysis"
 	"github.com/coltconsulting/click-dog/internal/clickhouse"
 	"github.com/coltconsulting/click-dog/internal/config"
+	"github.com/coltconsulting/click-dog/internal/datadog"
 	"github.com/coltconsulting/click-dog/internal/model"
 	"github.com/coltconsulting/click-dog/internal/processor"
+	"github.com/coltconsulting/click-dog/internal/queryfamily"
+	"github.com/coltconsulting/click-dog/internal/webhook"
 )
 
 // defaultAnalysisSpanSampleLimit is the auto span sample size, capped down to
 // monitor.max_spans_per_cycle so the default analysis cost stays aligned with
 // the operator's existing span-ingestion posture.
 const defaultAnalysisSpanSampleLimit = 1000
+
+const analysisPolicyExitCode = 3
+
+type analysisFailOn string
+
+const (
+	failOnNone     analysisFailOn = "none"
+	failOnCritical analysisFailOn = "critical"
+	failOnWarning  analysisFailOn = "warning"
+)
 
 const analyzeUsage = `click-dog analyze — local, read-only query analysis reports
 
@@ -68,6 +84,10 @@ type analyzeQueriesOptions struct {
 	FamilyLimit        int
 	SpanSampleLimit    int
 	QueryPreviewLength int
+	BaselinePath       string
+	SaveBaselinePath   string
+	FailOn             analysisFailOn
+	Notify             bool
 }
 
 func runAnalyzeQueries(args []string, out, errOut io.Writer) int {
@@ -83,6 +103,10 @@ func runAnalyzeQueries(args []string, out, errOut io.Writer) int {
 	familyLimit := fs.Int("family-limit", 200, "Exact normalized groups fetched before rollup")
 	spanSampleLimit := fs.Int("span-sample-limit", 0, "Max spans sampled for attribution and coverage (0 = auto)")
 	previewLength := fs.Int("query-preview-length", 500, "Max normalized-query preview length")
+	baselinePath := fs.String("baseline", "", "Compare this window with an analysis.baseline.v1 artifact")
+	saveBaselinePath := fs.String("save-baseline", "", "Atomically save this window as an analysis.baseline.v1 artifact")
+	failOn := fs.String("fail-on", string(failOnNone), "Policy threshold: none, critical, or warning (threshold exit = 3)")
+	notify := fs.Bool("notify", false, "Synchronously notify every enabled analysis_findings destination")
 
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(errOut, `click-dog analyze queries — deterministic local query analysis
@@ -96,12 +120,15 @@ attribution gaps, user/client/host skew, and coverage prerequisites. No
 exporter connections are opened and nothing is written to ClickHouse. Config
 loading still expands env vars and reads configured *_file secret fields.
 
+Use --save-baseline to capture an explicit known-good window, or --baseline to
+compare a later non-overlapping window without modifying the artifact.
+
 JSON reports are operational artifacts: normalized SQL and dimension values
 can reveal schema and ownership shape, so treat reports like logs/traces.
 
 Flags:
 `)
-		fs.PrintDefaults()
+		printFlagDefaults(errOut, fs)
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -114,15 +141,29 @@ Flags:
 		return 2
 	}
 	if *format != "table" && *format != "json" {
-		_, _ = fmt.Fprintf(errOut, "click-dog analyze queries: invalid -format %q (want table or json)\n", *format)
+		_, _ = fmt.Fprintf(errOut, "click-dog analyze queries: invalid --format %q (want table or json)\n", *format)
 		return 2
 	}
 	if *lookback <= 0 {
-		_, _ = fmt.Fprintf(errOut, "click-dog analyze queries: -lookback must be positive\n")
+		_, _ = fmt.Fprintf(errOut, "click-dog analyze queries: --lookback must be positive\n")
 		return 2
 	}
 	if *timeout <= 0 {
-		_, _ = fmt.Fprintf(errOut, "click-dog analyze queries: -timeout must be positive\n")
+		_, _ = fmt.Fprintf(errOut, "click-dog analyze queries: --timeout must be positive\n")
+		return 2
+	}
+	if *baselinePath != "" && *saveBaselinePath != "" {
+		_, _ = fmt.Fprintln(errOut, "click-dog analyze queries: --baseline and --save-baseline are mutually exclusive")
+		return 2
+	}
+	parsedFailOn, err := parseAnalysisFailOn(*failOn)
+	if err != nil {
+		_, _ = fmt.Fprintf(errOut, "click-dog analyze queries: %v\n", err)
+		return 2
+	}
+	parsedOpts := analyzeQueriesOptions{BaselinePath: *baselinePath, SaveBaselinePath: *saveBaselinePath}
+	if err := validateAnalysisArtifactPaths(parsedOpts, *output); err != nil {
+		_, _ = fmt.Fprintf(errOut, "click-dog analyze queries: %v\n", err)
 		return 2
 	}
 
@@ -149,6 +190,10 @@ Flags:
 		FamilyLimit:        *familyLimit,
 		SpanSampleLimit:    *spanSampleLimit,
 		QueryPreviewLength: *previewLength,
+		BaselinePath:       *baselinePath,
+		SaveBaselinePath:   *saveBaselinePath,
+		FailOn:             parsedFailOn,
+		Notify:             *notify,
 	}
 	return analyzeQueriesWithSource(reader, cfg, resolvedPath, opts, *format, *output, out, errOut)
 }
@@ -157,6 +202,16 @@ Flags:
 // Split from runAnalyzeQueries so tests can drive the full report path with a
 // fake source instead of a live ClickHouse.
 func analyzeQueriesWithSource(src queryAnalysisSource, cfg *config.Config, resolvedPath string, opts analyzeQueriesOptions, format, outputPath string, out, errOut io.Writer) int {
+	return analyzeQueriesWithSourceAndDestinations(src, cfg, resolvedPath, opts, format, outputPath, out, errOut, analysisNotificationDestinations)
+}
+
+type analysisNotificationDestinationFactory func(*config.Config) ([]analysisNotificationDestination, error)
+
+func analyzeQueriesWithSourceAndDestinations(src queryAnalysisSource, cfg *config.Config, resolvedPath string, opts analyzeQueriesOptions, format, outputPath string, out, errOut io.Writer, destinationFactory analysisNotificationDestinationFactory) int {
+	if err := validateAnalysisArtifactPaths(opts, outputPath); err != nil {
+		_, _ = fmt.Fprintf(errOut, "click-dog analyze queries: %v\n", err)
+		return 2
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
 	defer cancel()
 
@@ -168,9 +223,39 @@ func analyzeQueriesWithSource(src queryAnalysisSource, cfg *config.Config, resol
 		_, _ = fmt.Fprintf(errOut, "click-dog analyze queries: %v\n", err)
 		return 1
 	}
+	compatibility := buildBaselineCompatibility(cfg, opts, input.Coverage)
+	if opts.BaselinePath != "" {
+		baseline, err := analysis.LoadBaseline(opts.BaselinePath)
+		if err != nil {
+			_, _ = fmt.Fprintf(errOut, "click-dog analyze queries: load baseline: %v\n", err)
+			return 1
+		}
+		comparison := analysis.BuildBaselineComparison(input, baseline, compatibility)
+		input.Comparison = &comparison
+	}
+	if opts.SaveBaselinePath != "" {
+		if !input.Coverage.NormalizedQuerySupported || !input.Coverage.QueryFamilyRollupsSupported {
+			_, _ = fmt.Fprintln(errOut, "click-dog analyze queries: build baseline: normalized query-family rollups are required")
+			return 1
+		}
+		baseline, err := analysis.BuildBaseline(input, end, compatibility)
+		if err != nil {
+			_, _ = fmt.Fprintf(errOut, "click-dog analyze queries: build baseline: %v\n", err)
+			return 1
+		}
+		if err := analysis.WriteBaselineAtomic(opts.SaveBaselinePath, baseline); err != nil {
+			_, _ = fmt.Fprintf(errOut, "click-dog analyze queries: write baseline: %v\n", err)
+			return 1
+		}
+		_, _ = fmt.Fprintf(errOut, "baseline %s saved to %s\n", baseline.BaselineID, opts.SaveBaselinePath)
+	}
 
 	warnings := append(append(append([]string{}, cfg.DeprecationWarnings...), cfg.EnvWarnings...), cfg.ValidationWarnings...)
-	report := analysis.BuildReport(ctx, analysis.NewRegistry(), input, end, warnings)
+	registry := analysis.NewRegistry()
+	if input.Comparison != nil {
+		registry = analysis.NewRegistryWithRegression()
+	}
+	report := analysis.BuildReport(ctx, registry, input, end, warnings)
 
 	rendered, err := renderAnalysisReport(report, format)
 	if err != nil {
@@ -179,7 +264,7 @@ func analyzeQueriesWithSource(src queryAnalysisSource, cfg *config.Config, resol
 	}
 
 	// Env/deprecation warnings print above human table output; JSON already
-	// carries them in report metadata. With -output, stdout stays quiet, so
+	// carries them in report metadata. With --output, stdout stays quiet, so
 	// the warnings go to stderr instead.
 	if format == "table" && len(report.Warnings) > 0 {
 		if outputPath == "" {
@@ -198,7 +283,158 @@ func analyzeQueriesWithSource(src queryAnalysisSource, cfg *config.Config, resol
 		_, _ = fmt.Fprintf(errOut, "click-dog analyze queries: write report: %v\n", err)
 		return 1
 	}
+
+	if opts.Notify {
+		summary, err := analysis.BuildNotificationSummary(report, input.Comparison)
+		if err != nil {
+			_, _ = fmt.Fprintf(errOut, "Notification: failed to build privacy summary: %v\n", err)
+			return 1
+		}
+		destinations, err := destinationFactory(cfg)
+		if err != nil {
+			_, _ = fmt.Fprintf(errOut, "Notification: %v\n", err)
+			return 1
+		}
+		if len(destinations) == 0 {
+			_, _ = fmt.Fprintln(errOut, "Notification: no destination is enabled for analysis_findings; enable webhook with that event or datadog_events")
+			return 1
+		}
+		if deliverAnalysisNotifications(ctx, summary, destinations, errOut) {
+			return 1
+		}
+	}
+
+	failOn := opts.FailOn
+	if failOn == "" {
+		failOn = failOnNone
+	}
+	if analysisPolicyReached(report, failOn) {
+		_, _ = fmt.Fprintf(errOut, "Policy: FAIL (--fail-on %s)\n", failOn)
+		return analysisPolicyExitCode
+	}
+	if failOn != failOnNone {
+		_, _ = fmt.Fprintf(errOut, "Policy: PASS (--fail-on %s)\n", failOn)
+	}
 	return 0
+}
+
+func parseAnalysisFailOn(value string) (analysisFailOn, error) {
+	switch analysisFailOn(value) {
+	case failOnNone, failOnCritical, failOnWarning:
+		return analysisFailOn(value), nil
+	default:
+		return "", fmt.Errorf("invalid --fail-on %q (want none, critical, or warning)", value)
+	}
+}
+
+func analysisPolicyReached(report analysis.AnalysisReport, failOn analysisFailOn) bool {
+	for _, finding := range report.Findings {
+		switch failOn {
+		case failOnCritical:
+			if finding.Severity == analysis.SeverityCritical {
+				return true
+			}
+		case failOnWarning:
+			if finding.Severity == analysis.SeverityCritical || finding.Severity == analysis.SeverityWarning {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+type analysisNotificationDestination struct {
+	name string
+	send func(context.Context, analysis.NotificationSummary) error
+}
+
+func analysisNotificationDestinations(cfg *config.Config) ([]analysisNotificationDestination, error) {
+	var destinations []analysisNotificationDestination
+	wh := webhook.NewWebhookNotifier(cfg.Webhook)
+	if wh.Handles(webhook.EventAnalysisFindings) {
+		destinations = append(destinations, analysisNotificationDestination{
+			name: "webhook",
+			send: wh.NotifyAnalysis,
+		})
+	}
+	if cfg.DatadogEvents.Enabled {
+		client, err := datadog.NewEventClient(cfg.DatadogEvents)
+		if err != nil {
+			return nil, fmt.Errorf("invalid Datadog Events destination: %v", err)
+		}
+		destinations = append(destinations, analysisNotificationDestination{
+			name: "datadog_events",
+			send: client.Send,
+		})
+	}
+	return destinations, nil
+}
+
+// deliverAnalysisNotifications returns true when any destination failed. It
+// never stops after a failure: every configured destination gets an outcome.
+func deliverAnalysisNotifications(ctx context.Context, summary analysis.NotificationSummary, destinations []analysisNotificationDestination, errOut io.Writer) bool {
+	failed := false
+	for _, destination := range destinations {
+		if summary.EligibleFindingCount == 0 {
+			_, _ = fmt.Fprintf(errOut, "Notification: %s skipped (no eligible findings)\n", destination.name)
+			continue
+		}
+		if err := destination.send(ctx, summary); err != nil {
+			_, _ = fmt.Fprintf(errOut, "Notification: %s failed: %v\n", destination.name, err)
+			failed = true
+			continue
+		}
+		if destination.name == "datadog_events" {
+			_, _ = fmt.Fprintln(errOut, "Notification: datadog_events accepted by intake (monitor evaluation and notification are not confirmed)")
+		} else {
+			_, _ = fmt.Fprintf(errOut, "Notification: %s sent\n", destination.name)
+		}
+	}
+	return failed
+}
+
+func validateAnalysisArtifactPaths(opts analyzeQueriesOptions, outputPath string) error {
+	if opts.BaselinePath != "" && opts.SaveBaselinePath != "" {
+		return fmt.Errorf("--baseline and --save-baseline are mutually exclusive")
+	}
+	if outputPath == "" {
+		return nil
+	}
+	artifacts := []struct {
+		flag string
+		path string
+	}{
+		{flag: "--baseline", path: opts.BaselinePath},
+		{flag: "--save-baseline", path: opts.SaveBaselinePath},
+	}
+	for _, artifact := range artifacts {
+		if artifact.path != "" && sameAnalysisArtifactPath(artifact.path, outputPath) {
+			return fmt.Errorf("%s and --output must refer to different files", artifact.flag)
+		}
+	}
+	return nil
+}
+
+func sameAnalysisArtifactPath(a, b string) bool {
+	canonical := func(path string) string {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return filepath.Clean(path)
+		}
+		if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
+			return resolved
+		}
+		if parent, err := filepath.EvalSymlinks(filepath.Dir(absolute)); err == nil {
+			return filepath.Join(parent, filepath.Base(absolute))
+		}
+		return filepath.Clean(absolute)
+	}
+	if canonical(a) == canonical(b) {
+		return true
+	}
+	aInfo, aErr := os.Stat(a)
+	bInfo, bErr := os.Stat(b)
+	return aErr == nil && bErr == nil && os.SameFile(aInfo, bInfo)
 }
 
 // queryAnalysisSource is the implementation seam between the command/input
@@ -318,6 +554,54 @@ func buildAnalysisReportConfig(cfg *config.Config, resolvedPath string, opts ana
 		SpanSampleLimit:    opts.SpanSampleLimit,
 		QueryPreviewLength: opts.QueryPreviewLength,
 	}
+}
+
+func buildBaselineCompatibility(cfg *config.Config, opts analyzeQueriesOptions, coverage analysis.CoverageSummary) analysis.BaselineCompatibility {
+	minExecutions := opts.MinExecutions
+	if minExecutions == 0 {
+		minExecutions = 1
+	}
+	familyLimit := opts.FamilyLimit
+	if familyLimit <= 0 {
+		familyLimit = 200
+	}
+	previewLength := opts.QueryPreviewLength
+	if previewLength <= 0 {
+		previewLength = queryfamily.DefaultMaxPreviewLength
+	}
+	return analysis.BaselineCompatibility{
+		FamilyAlgorithmVersion:    queryfamily.AlgorithmVersion,
+		SimilarityThreshold:       queryfamily.DefaultSimilarityThreshold,
+		FilterFingerprint:         analysisUserFilterFingerprint(cfg.Filters.WhitelistUsers, cfg.Filters.BlacklistUsers),
+		MinExecutions:             minExecutions,
+		FamilyLimit:               familyLimit,
+		QueryPreviewLength:        previewLength,
+		NormalizedQuerySupported:  coverage.NormalizedQuerySupported,
+		QueryFamilyRollupsSupport: coverage.QueryFamilyRollupsSupported,
+	}
+}
+
+func analysisUserFilterFingerprint(whitelist, blacklist []string) string {
+	whitelist = sortedUniqueAnalysisFilters(whitelist)
+	blacklist = sortedUniqueAnalysisFilters(blacklist)
+	canonical, _ := json.Marshal(struct {
+		Whitelist []string `json:"whitelist"`
+		Blacklist []string `json:"blacklist"`
+	}{Whitelist: whitelist, Blacklist: blacklist})
+	sum := sha256.Sum256(canonical)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func sortedUniqueAnalysisFilters(values []string) []string {
+	values = append([]string(nil), values...)
+	sort.Strings(values)
+	unique := values[:0]
+	for _, value := range values {
+		if len(unique) == 0 || unique[len(unique)-1] != value {
+			unique = append(unique, value)
+		}
+	}
+	return unique
 }
 
 // resolveAnalysisSpanSampleLimit returns the effective span sample size: an
@@ -568,11 +852,18 @@ func renderAnalysisReport(report analysis.AnalysisReport, format string) (string
 }
 
 // writeAnalysisOutput writes the rendered report to stdout, or to outputPath
-// with 0600 permissions on create.
+// as a 0600 file.
+//
+// Reports carry the material query-text mode exists to bound — normalized query
+// previews plus user, client hostname, and client address dimension values — so
+// the mode is part of the artifact's contract, not a create-time nicety.
+// writePrivateFile enforces it on every run: re-running analyze into a path a
+// deploy step or log shipper already created 0644 rewrites it 0600 rather than
+// inheriting the permissive mode, and a symlink at that path fails closed.
 func writeAnalysisOutput(rendered, outputPath string, out io.Writer) error {
 	if outputPath == "" {
 		_, err := io.WriteString(out, rendered)
 		return err
 	}
-	return os.WriteFile(outputPath, []byte(rendered), 0o600)
+	return writePrivateFile(outputPath, []byte(rendered), 0o600)
 }

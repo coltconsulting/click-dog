@@ -26,7 +26,10 @@
 #   -k HOSTS         Keeper hosts for HA, comma-separated (install only)
 #   -x PROXY         HTTPS proxy for binary download
 #   -C CMD           clickhouse-client command/path (default: clickhouse-client)
-#                    e.g. -C "clickhouse-client -u admin --password secret"
+#                    e.g. -C "clickhouse-client -u admin". A docker-exec
+#                    wrapper must add `-e CLICKHOUSE_PASSWORD` (by name, with
+#                    no value) so command-scoped credentials cross into the
+#                    container without appearing in host process arguments.
 #   -f PATH          Use this pre-rendered click-dog.yaml instead of having
 #                    install.sh render one (install only). Pair with the
 #                    output of `click-dog init --wizard` from a laptop.
@@ -35,8 +38,11 @@
 #                    clickhouse.clickhouse.svc.cluster.local — not localhost)
 #   --cluster NAME   ClickHouse cluster name for kubernetes; enables cluster()
 #                    reads across all shards
-#   --prerelease     When -v is unset, resolve the newest pre-release
+#   --prerelease     When -v is unset, resolve the newest PUBLIC pre-release
 #                    (alpha/beta) instead of the latest GA release
+#   --dangerously-ignore-cosign
+#                    Deliberately skip cosign even when it is installed. The
+#                    archive SHA-256 is still required and verified.
 #   --systemd        Create + enable systemd unit (install only)
 #   -h               Show this help
 #
@@ -83,8 +89,10 @@ CONFIG_FROM_FILE=""
 HTTPS_PROXY_FLAG=""
 VERSION=""
 # When set (via --prerelease) and no -v is given, resolve_version picks the
-# newest release INCLUDING alpha/beta prereleases instead of the latest GA.
+# newest explicitly public prerelease instead of the latest GA. Private alpha
+# releases in click-dog-internal are intentionally not resolved here.
 PRERELEASE="false"
+DANGEROUSLY_IGNORE_COSIGN="false"
 SYSTEMD="false"
 OUTPUT_DIR=""
 CLICKHOUSE_TLS="true"
@@ -147,6 +155,7 @@ while [[ $# -gt 0 ]]; do
         --ch-host)  CLICKHOUSE_HOST="${2:-}"; shift ;;
         --cluster)  CLICKHOUSE_CLUSTER="${2:-}"; shift ;;
         --prerelease) PRERELEASE="true" ;;
+        --dangerously-ignore-cosign) DANGEROUSLY_IGNORE_COSIGN="true" ;;
         *)          ARGS+=("$1") ;;
     esac
     shift
@@ -455,16 +464,19 @@ COSIGN_OIDC_ISSUER='https://token.actions.githubusercontent.com'
 # wrapper in shell makes the behavior deterministic regardless of
 # which `timeout` is on PATH.
 #
-# Security note: this knob cannot weaken the fail-closed guarantee. It
-# only changes when verification gives up, not whether a missing-or-bad
-# signature is accepted. cosign verify-blob's nonzero exit (signature
-# mismatch, identity mismatch, unparseable cert, …) is treated the same
-# whether or not `timeout` wraps it. Setting this very low can cause
-# false-positive timeouts on slow networks (annoying, still fails
-# closed); disabling it via 0/empty drops hang protection but cosign
-# still runs and verifies. Future readers: do not remove this var
-# thinking it's a bypass vector. It is not.
+# Security note: cosign is optional for installation, but when it is present
+# verification remains fail closed. This knob only changes when that
+# verification gives up; it never turns a bad signature into a checksum-only
+# success. Setting it very low can cause false-positive timeouts on slow
+# networks; disabling it via 0/empty drops hang protection but cosign still
+# runs and verifies.
 COSIGN_VERIFY_TIMEOUT_S="${COSIGN_VERIFY_TIMEOUT_S:-60}"
+
+# Set by verify_release_archive after all selected verification succeeds.
+# Values: signed, checksum-no-cosign, checksum-cosign-ignored, or provided.
+# Callers use this single result for completion messages; a failed verifier
+# leaves it empty so no success claim can be printed accidentally.
+RELEASE_VERIFICATION_MODE=""
 
 # sha256_file <path>
 # Print the hex SHA256 of <path> on stdout. Returns nonzero if no SHA256
@@ -481,114 +493,140 @@ sha256_file() {
     fi
 }
 
-# verify_archive_signed_checksums <verify_dir> <archive_path> <archive_name>
+# verify_release_archive <verify_dir> <archive_path> <archive_name> <cosign_path> <checksum_reason>
 #
-# Verifies a release archive against the cosign-signed checksums.txt for
-# the release. The verify_dir must already contain checksums.txt,
-# checksums.txt.sig, and checksums.txt.pem (downloaded by the caller).
+# Always verifies a release archive against checksums.txt. A non-empty
+# cosign_path authenticates that manifest against the pinned release-workflow
+# identity; the verify_dir must then contain checksums.txt.sig and
+# checksums.txt.pem as well. When cosign_path is empty, checksum_reason must be
+# either "missing" or "ignored" so the warning states why authentication was
+# skipped.
 #
 # Steps:
-#   1. Verify cosign keyless signature on checksums.txt against the pinned
-#      release-workflow identity and OIDC issuer. A stolen GITHUB_TOKEN
-#      alone cannot forge this signature.
-#   2. Look up the archive's SHA256 entry in the now-trusted checksums.txt.
-#   3. Compute the archive's SHA256 and compare.
+#   1. If available, verify the cosign keyless signature on checksums.txt
+#      against the pinned release-workflow identity and OIDC issuer.
+#   2. Look up the archive's exact SHA256 entry in checksums.txt.
+#   3. Compute the archive's SHA256 and compare it.
 #
-# Returns 0 only on full verification. Fails closed (nonzero, with a clear
-# error to stderr) on:
-#   - cosign or sha256sum/shasum not on PATH
-#   - any of the three verification assets missing or empty
-#   - cosign verify-blob failure
+# Returns 0 only when the checksum matches and, if cosign is installed, the
+# manifest signature is valid. Fails closed (nonzero, with a clear error to
+# stderr) on:
+#   - sha256sum/shasum not on PATH
+#   - checksums.txt missing or empty
+#   - cosign present but its signature assets are missing or verification fails
 #   - archive name absent from checksums.txt
 #   - archive hash mismatch
 #
 # Callers MUST treat any nonzero return as fatal and abort before
 # extracting the archive.
-verify_archive_signed_checksums() {
+verify_release_archive() {
     local verify_dir="$1"
     local archive_path="$2"
     local archive_name="$3"
+    local cosign_path="$4"
+    local checksum_reason="$5"
+    local verification_mode=""
+
+    RELEASE_VERIFICATION_MODE=""
 
     local checksums="$verify_dir/checksums.txt"
     local sig="$verify_dir/checksums.txt.sig"
     local cert="$verify_dir/checksums.txt.pem"
 
-    if ! command -v cosign &>/dev/null; then
-        echo "Error: cosign not found on PATH." >&2
-        echo "  Required to verify the signed release checksums." >&2
-        echo "  Install: https://docs.sigstore.dev/cosign/installation/" >&2
-        echo "  Or supply a pre-downloaded binary with -b /path/to/click-dog." >&2
-        return 1
-    fi
     if ! command -v sha256sum &>/dev/null && ! command -v shasum &>/dev/null; then
         echo "Error: neither sha256sum nor shasum found on PATH." >&2
         echo "  Required to verify the release archive checksum." >&2
         return 1
     fi
 
-    local f
-    for f in "$checksums" "$sig" "$cert"; do
-        if [[ ! -s "$f" ]]; then
-            echo "Error: missing or empty release verification asset: ${f##*/}" >&2
-            echo "  The release must publish checksums.txt, checksums.txt.sig," >&2
-            echo "  and checksums.txt.pem. Refusing to install an unverified release." >&2
-            return 1
-        fi
-    done
+    if [[ ! -s "$checksums" ]]; then
+        echo "Error: missing or empty release verification asset: checksums.txt" >&2
+        echo "  Refusing to install an archive without a release checksum." >&2
+        return 1
+    fi
 
     if [[ ! -f "$archive_path" ]]; then
         echo "Error: archive not found at $archive_path" >&2
         return 1
     fi
 
-    # Step 1: cosign keyless signature on checksums.txt. The pinned identity
-    # ties the signature to the click-dog release workflow on a release tag.
-    # Wrapped with `timeout` so a slow/blocked Rekor or Fulcio fails closed
-    # quickly instead of hanging the installer. `timeout` exits 124 on
-    # deadline; we surface that with a Sigstore-egress-specific message so
-    # operators behind a firewall know what to fix.
-    local cosign_args=(verify-blob
-        --certificate "$cert"
-        --signature "$sig"
-        --certificate-identity-regexp "$COSIGN_IDENTITY_REGEXP"
-        --certificate-oidc-issuer "$COSIGN_OIDC_ISSUER"
-        "$checksums")
-    local cosign_output rc=0
-    # Skip the wrapper if `timeout` is missing OR the cap was explicitly
-    # disabled via 0/empty — see COSIGN_VERIFY_TIMEOUT_S declaration for
-    # why we don't pass 0 through to `timeout`. install.sh's auto-download
-    # path is Linux-only at the OS check above, so the no-`timeout`
-    # branch should only be reached on hosts missing coreutils.
-    if command -v timeout &>/dev/null \
-            && [[ -n "$COSIGN_VERIFY_TIMEOUT_S" && "$COSIGN_VERIFY_TIMEOUT_S" != "0" ]]; then
-        cosign_output=$(timeout "$COSIGN_VERIFY_TIMEOUT_S" cosign "${cosign_args[@]}" 2>&1) || rc=$?
-    else
-        cosign_output=$(cosign "${cosign_args[@]}" 2>&1) || rc=$?
-    fi
-    if [[ $rc -ne 0 ]]; then
-        if [[ $rc -eq 124 ]]; then
-            echo "Error: cosign verify-blob timed out after ${COSIGN_VERIFY_TIMEOUT_S}s" >&2
-            echo "  Sigstore Rekor/Fulcio appears unreachable from this host." >&2
-            echo "  Open egress to rekor.sigstore.dev and fulcio.sigstore.dev," >&2
-            echo "  or pre-verify on a host with sigstore access and use -b." >&2
+    # Step 1 (recommended): authenticate checksums.txt when cosign is
+    # available. Missing cosign is not an installation blocker: the exact
+    # archive hash is still checked below, with an explicit warning that a
+    # same-origin checksum does not authenticate the publisher.
+    if [[ -n "$cosign_path" ]]; then
+        local f
+        for f in "$sig" "$cert"; do
+            if [[ ! -s "$f" ]]; then
+                echo "Error: missing or empty release verification asset: ${f##*/}" >&2
+                echo "  cosign is installed, so signed verification must succeed." >&2
+                echo "  Refusing to silently downgrade to checksum-only verification." >&2
+                return 1
+            fi
+        done
+
+        # The pinned identity ties the signature to the click-dog release
+        # workflow on a release tag. Bound the call so blocked Sigstore egress
+        # does not hang the installer.
+        local cosign_args=(verify-blob
+            --certificate "$cert"
+            --signature "$sig"
+            --certificate-identity-regexp "$COSIGN_IDENTITY_REGEXP"
+            --certificate-oidc-issuer "$COSIGN_OIDC_ISSUER"
+            "$checksums")
+        local cosign_output rc=0
+        if command -v timeout &>/dev/null \
+                && [[ -n "$COSIGN_VERIFY_TIMEOUT_S" && "$COSIGN_VERIFY_TIMEOUT_S" != "0" ]]; then
+            cosign_output=$(timeout "$COSIGN_VERIFY_TIMEOUT_S" "$cosign_path" "${cosign_args[@]}" 2>&1) || rc=$?
         else
-            echo "Error: cosign verify-blob failed for checksums.txt" >&2
-            echo "  Signature does not match the pinned click-dog release workflow." >&2
-            echo "  Refusing to install an unverified release." >&2
+            cosign_output=$("$cosign_path" "${cosign_args[@]}" 2>&1) || rc=$?
         fi
-        if [[ -n "$cosign_output" ]]; then
-            echo "  cosign output: $cosign_output" >&2
+        if [[ $rc -ne 0 ]]; then
+            if [[ $rc -eq 124 ]]; then
+                echo "Error: cosign verify-blob timed out after ${COSIGN_VERIFY_TIMEOUT_S}s" >&2
+                echo "  Sigstore Rekor/Fulcio appears unreachable from this host." >&2
+                echo "  Open egress to rekor.sigstore.dev and fulcio.sigstore.dev," >&2
+                echo "  or pre-verify on a host with sigstore access and use -b." >&2
+            else
+                echo "Error: cosign verify-blob failed for checksums.txt" >&2
+                echo "  Signature does not match the pinned click-dog release workflow." >&2
+                echo "  Refusing to install an unverified release." >&2
+            fi
+            if [[ -n "$cosign_output" ]]; then
+                echo "  cosign output: $cosign_output" >&2
+            fi
+            echo "  To retry with checksum-only verification, rerun with" >&2
+            echo "  --dangerously-ignore-cosign." >&2
+            return 1
         fi
-        return 1
+        verification_mode="signed"
+    else
+        case "$checksum_reason" in
+            ignored)
+                echo "DANGER: --dangerously-ignore-cosign set; publisher authentication is disabled." >&2
+                echo "  Continuing only after the release archive SHA-256 matches." >&2
+                verification_mode="checksum-cosign-ignored"
+                ;;
+            missing)
+                echo "Warning: cosign not found; continuing with checksum verification only." >&2
+                echo "  This detects download corruption but does not authenticate the publisher." >&2
+                echo "  Official installation docs: https://docs.sigstore.dev/cosign/system_config/installation/" >&2
+                verification_mode="checksum-no-cosign"
+                ;;
+            *)
+                echo "Error: internal verification mode is invalid: $checksum_reason" >&2
+                return 1
+                ;;
+        esac
     fi
 
-    # Step 2: archive entry must exist in the now-trusted checksums.txt.
+    # Step 2: archive entry must exist in checksums.txt.
     # awk match on exact filename (field 2) avoids any prefix/suffix tricks.
     local expected_hash
     expected_hash=$(awk -v name="$archive_name" '$2 == name {print $1; exit}' "$checksums")
     if [[ -z "$expected_hash" || ${#expected_hash} -ne 64 ]]; then
-        echo "Error: $archive_name not found in signed checksums.txt." >&2
-        echo "  Refusing to install an archive missing from trusted release metadata." >&2
+        echo "Error: $archive_name not found in release checksums.txt." >&2
+        echo "  Refusing to install an archive missing from release metadata." >&2
         return 1
     fi
 
@@ -606,7 +644,26 @@ verify_archive_signed_checksums() {
         return 1
     fi
 
+    RELEASE_VERIFICATION_MODE="$verification_mode"
     return 0
+}
+
+print_release_verification_summary() {
+    local prefix="${1:-}"
+    case "$RELEASE_VERIFICATION_MODE" in
+        signed)
+            echo "${prefix}Publisher signature: verified with cosign; archive SHA-256 matched."
+            ;;
+        checksum-no-cosign)
+            echo "${prefix}Publisher signature: not verified (cosign unavailable); archive SHA-256 matched." >&2
+            ;;
+        checksum-cosign-ignored)
+            echo "${prefix}DANGER: publisher signature deliberately skipped; archive SHA-256 matched." >&2
+            ;;
+        provided)
+            echo "${prefix}Binary source: operator-provided (-b); automatic release verification skipped."
+            ;;
+    esac
 }
 
 # ── GitHub auth (env only, never in any process's argv) ─────────
@@ -837,6 +894,7 @@ _resolve_binary_cleanup() {
 }
 
 resolve_binary() {
+    RELEASE_VERIFICATION_MODE=""
     if [[ -n "$BINARY" ]]; then
         if [[ ! -f "$BINARY" ]]; then
             echo "Error: binary not found at $BINARY"
@@ -853,6 +911,7 @@ resolve_binary() {
                 exit 1
             fi
         fi
+        RELEASE_VERIFICATION_MODE="provided"
         return 0
     fi
 
@@ -910,11 +969,9 @@ resolve_binary() {
         exit 1
     fi
 
-    # Fetch trusted release metadata: checksums.txt and its cosign keyless
-    # signature pair (.sig + .pem). All three are required — the installer
-    # verifies the signature on checksums.txt against the pinned release
-    # workflow identity before trusting any hash inside it, and aborts
-    # before extraction on any verification failure.
+    # Always fetch the checksum manifest. If cosign is available, also fetch
+    # its keyless signature pair and authenticate the manifest before trusting
+    # the archive hash. Missing cosign is allowed but clearly reported.
     local verify_dir
     if ! verify_dir=$(mktemp -d "$download_dir/verify.XXXXXX" 2>/dev/null); then
         echo "Error: failed to create temp dir for release verification" >&2
@@ -923,24 +980,43 @@ resolve_binary() {
     fi
     _RESOLVE_BINARY_VERIFY_DIR="$verify_dir"
     local f
-    for f in checksums.txt checksums.txt.sig checksums.txt.pem; do
-        if ! download_release_asset "$release_json" "$f" "$verify_dir/$f"; then
-            echo "Error: failed to download $f for v${VERSION}" >&2
-            echo "  Required to verify the release signature." >&2
-            rm -rf "$download_dir"
-            exit 1
-        fi
-    done
+    if ! download_release_asset "$release_json" "checksums.txt" "$verify_dir/checksums.txt"; then
+        echo "Error: failed to download checksums.txt for v${VERSION}" >&2
+        echo "  Required to verify the release archive checksum." >&2
+        rm -rf "$download_dir"
+        exit 1
+    fi
 
-    echo "Verifying signed release checksums..."
-    if ! verify_archive_signed_checksums "$verify_dir" "$archive_tmp" "$archive_name"; then
+    local cosign_path=""
+    local checksum_reason="missing"
+    if [[ "$DANGEROUSLY_IGNORE_COSIGN" == "true" ]]; then
+        checksum_reason="ignored"
+    elif cosign_path=$(command -v cosign 2>/dev/null); then
+        checksum_reason=""
+    fi
+
+    if [[ -n "$cosign_path" ]]; then
+        for f in checksums.txt.sig checksums.txt.pem; do
+            if ! download_release_asset "$release_json" "$f" "$verify_dir/$f"; then
+                echo "Error: failed to download $f for v${VERSION}" >&2
+                echo "  cosign is installed, so signed verification must succeed." >&2
+                rm -rf "$download_dir"
+                exit 1
+            fi
+        done
+        echo "Verifying signed release checksums..."
+    else
+        echo "Verifying release archive checksum..."
+    fi
+
+    if ! verify_release_archive "$verify_dir" "$archive_tmp" "$archive_name" "$cosign_path" "$checksum_reason"; then
         rm -f "$archive_tmp"
         rm -rf "$verify_dir"
         exit 1
     fi
     rm -rf "$verify_dir"
     _RESOLVE_BINARY_VERIFY_DIR=""
-    echo "Release signature verified — archive matches signed checksums.txt"
+    print_release_verification_summary
 
     # Extract binary
     if ! tar xzf "$archive_tmp" -C "$download_dir" click-dog; then
@@ -1066,6 +1142,7 @@ do_install() {
         systemctl is-active click-dog >/dev/null
     fi
 
+    print_release_verification_summary
     echo "Install complete."
 }
 
@@ -1140,6 +1217,7 @@ do_update() {
     sleep 2
     systemctl is-active click-dog >/dev/null
 
+    print_release_verification_summary
     echo "Update complete."
 }
 
@@ -1521,6 +1599,21 @@ _span_log_client_has_auth() {
     esac
 }
 
+# Warn when a docker-exec wrapper would drop a command-scoped password at the
+# container boundary. `docker exec -e CLICKHOUSE_PASSWORD` copies the value
+# from this process's environment without putting the secret itself in argv.
+_warn_clickhouse_client_password_forwarding() {
+    case " $1 " in
+        *" docker exec "*) ;;
+        *) return 0 ;;
+    esac
+    case " $1 " in
+        *" -e CLICKHOUSE_PASSWORD "*|*" --env CLICKHOUSE_PASSWORD "*|*" --env=CLICKHOUSE_PASSWORD "*) return 0 ;;
+    esac
+    echo "  WARNING: -C uses docker exec without forwarding CLICKHOUSE_PASSWORD." >&2
+    echo "           Add: docker exec -e CLICKHOUSE_PASSWORD ... clickhouse-client" >&2
+}
+
 # Default query runner: invoke $CLICKHOUSE_CLIENT for the SQL string. Word-split
 # $CLICKHOUSE_CLIENT intentionally (it may carry host/port/auth flags).
 #
@@ -1543,8 +1636,10 @@ _span_log_default_runner() {
         return
     fi
     if [[ -n "${CLICKHOUSE_PASSWORD:-}" ]]; then
+        # clickhouse-client reads CLICKHOUSE_PASSWORD natively. Supplying it
+        # only in the child environment keeps the secret out of /proc/*/cmdline.
         # shellcheck disable=SC2086
-        $CLICKHOUSE_CLIENT -u "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" -q "$sql"
+        CLICKHOUSE_PASSWORD="$CLICKHOUSE_PASSWORD" $CLICKHOUSE_CLIENT -u "$CLICKHOUSE_USER" -q "$sql"
         return
     fi
     # shellcheck disable=SC2086
@@ -1810,6 +1905,7 @@ do_quickstart() {
                         echo "  Service was not running before update — leaving stopped."
                         echo "  Start with: systemctl start click-dog"
                     fi
+                    print_release_verification_summary "  "
                     echo ""
                     return
                     ;;
@@ -2005,6 +2101,9 @@ OTELXML
         echo ""
         echo "  Using existing credentials (user: ${CLICKHOUSE_USER}, password from env)"
         echo "  Skipping ClickHouse user setup."
+        if ! _span_log_client_has_auth "$CLICKHOUSE_CLIENT"; then
+            _warn_clickhouse_client_password_forwarding "$CLICKHOUSE_CLIENT"
+        fi
     else
         local mon_pass=""
         local reusing_password="false"
@@ -2025,6 +2124,7 @@ OTELXML
             [[ ${#mon_pass} -ge 16 ]] || { echo "Error: failed to generate password"; exit 1; }
         fi
         CLICKHOUSE_PASSWORD="$mon_pass"
+        _warn_clickhouse_client_password_forwarding "$CLICKHOUSE_CLIENT"
 
         # Generate SHA256 hash (used by both SQL and XML user config)
         local pass_hash=""
@@ -2066,7 +2166,10 @@ OTELXML
         local probed="false"
         if command -v ${CLICKHOUSE_CLIENT%% *} &>/dev/null; then
             probed="true"
-            if $CLICKHOUSE_CLIENT -u "$CLICKHOUSE_USER" --password "$mon_pass" -q "SELECT 1" &>/dev/null; then
+            # Use clickhouse-client's password environment variable so the
+            # generated credential is never exposed in the process argv. A
+            # docker-exec -C wrapper must forward it with `-e CLICKHOUSE_PASSWORD`.
+            if CLICKHOUSE_PASSWORD="$mon_pass" $CLICKHOUSE_CLIENT -u "$CLICKHOUSE_USER" -q "SELECT 1" &>/dev/null; then
                 user_can_auth="true"
             fi
         fi
@@ -2087,7 +2190,7 @@ OTELXML
         if [[ "$auth_decision" == "ok" ]]; then
             # User authenticates. Verify it can read BOTH required tables
             # instead of assuming SELECT 1 implies access.
-            if $CLICKHOUSE_CLIENT -u "$CLICKHOUSE_USER" --password "$mon_pass" --multiquery < "$verify_sql" &>/dev/null; then
+            if CLICKHOUSE_PASSWORD="$mon_pass" $CLICKHOUSE_CLIENT -u "$CLICKHOUSE_USER" --multiquery < "$verify_sql" &>/dev/null; then
                 echo "  Existing ClickHouse user '${CLICKHOUSE_USER}' authenticates and can read"
                 echo "  system.opentelemetry_span_log and system.query_log — nothing to do."
                 echo "  Password: /etc/click-dog/.secret"
@@ -2275,8 +2378,9 @@ OTELXML
                         echo "  Retrying as '${ch_admin}' on '${ch_addr}' (attempt ${attempt}/2)..."
                         # Password via CLICKHOUSE_PASSWORD env (command-scoped) so it
                         # never appears in ps / /proc/<pid>/cmdline. Empty = no
-                        # password. (For a "docker exec" client this env won't cross
-                        # into the container — put the auth in -C for that case.)
+                        # password. A "docker exec" -C wrapper must include
+                        # `-e CLICKHOUSE_PASSWORD` to copy this command-scoped value
+                        # into the container without exposing it in host argv.
                         if CLICKHOUSE_PASSWORD="$ch_admin_pass" "${admin_cli[@]}" --multiquery < "$setup_sql" >/dev/null 2>&1; then
                             echo "  Done."
                             run_ok="true"
@@ -2292,7 +2396,7 @@ OTELXML
                     echo "  ──────────────────────────────────────────────────────"
                     echo ""
                     echo "  Saved to: ${setup_sql}"
-                    echo "  Run with: clickhouse-client --host HOST -u ADMIN --password ... --multiquery < ${setup_sql}"
+                    echo "  Run with: CLICKHOUSE_PASSWORD=... clickhouse-client --host HOST -u ADMIN --multiquery < ${setup_sql}"
                     echo ""
                     read -rp "  Press Enter once done..."
                     break
@@ -2486,6 +2590,7 @@ OTELXML
             rm -f "${clickhouse_setup_tempfiles[@]}"
         fi
         echo "  click-dog is running."
+        print_release_verification_summary "  "
         echo "════════════════════════════════════════════════════════════"
         echo ""
         local docs_url="https://click-dog.com"

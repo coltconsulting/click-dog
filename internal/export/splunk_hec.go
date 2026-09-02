@@ -69,8 +69,12 @@ func NewSplunkHECExporter(cfg config.SplunkHECConfig) (*SplunkHECExporter, error
 		maxQueryLength = 100000
 	}
 
+	// MinVersion is Go's current client default, stated explicitly so the floor
+	// is a property of this config rather than of the toolchain. Not a behavior
+	// change; see internal/export/otel.go for the same note.
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
+			MinVersion:         tls.VersionTLS12,
 			InsecureSkipVerify: cfg.InsecureSkipVerify,
 		},
 	}
@@ -159,7 +163,6 @@ func (s *SplunkHECExporter) ExportQuery(ctx context.Context, log model.QueryLog)
 		"click_dog_source":  "query_log",
 		"query_id":          log.QueryID,
 		"query_kind":        log.QueryKind,
-		"query":             TruncateQuery(log.Query, s.maxQueryLength),
 		"query_duration_ms": log.QueryDurationMs,
 		"user":              log.User,
 		"client_name":       log.ClientName,
@@ -172,6 +175,9 @@ func (s *SplunkHECExporter) ExportQuery(ctx context.Context, log model.QueryLog)
 		"result_rows":       log.ResultRows,
 		"result_bytes":      log.ResultBytes,
 		"memory_usage":      log.MemoryUsage,
+	}
+	if query := TruncateQuery(log.Query, s.maxQueryLength); query != "" {
+		eventData["query"] = query
 	}
 
 	if len(log.DatabasesVisited) > 0 {

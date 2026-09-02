@@ -30,8 +30,13 @@ go.work
 # Integration test output
 testing/otel-output/*.jsonl
 
-# MkDocs build output
+# MkDocs build output. site/ is the pre-rename name, kept ignored so a stale
+# directory in an existing clone cannot dirty the tree.
+target/
 site/
+
+# check-site-escape.sh probe dirs; only a killed run leaves one behind
+docs/escape-probe.*
 
 # Docker buildx scratch context
 .docker-buildx/
@@ -45,6 +50,7 @@ site/
 
 # AI
 .claude/
+.agent-cache/
 # ai/ orchestration workspace: only ai/prompts/ (and ai/README.md) are
 # committed; per-session decision/finding/context files stay local.
 ai/decisions/

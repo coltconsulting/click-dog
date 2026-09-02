@@ -15,7 +15,7 @@ Specifically, the following are NOT yet stable:
   * Exported Go types and function signatures in internal/ packages
     (these are internal/ to begin with, but calling them from tests or
     forks means breakage is on you)
-  * CLI subcommand behavior (flush, check, init, test-span,
+  * CLI subcommand behavior (flush, check, init, test, test-span,
     create-dashboards, self-update)
 
 What is relatively stable:

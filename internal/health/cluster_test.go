@@ -434,13 +434,20 @@ func TestClusterz_NoHTTPSelfLoop(t *testing.T) {
 func TestClusterz_PeerTimeout(t *testing.T) {
 	// A peer that never responds must be marked unreachable after the
 	// configured deadline rather than blocking the whole /clusterz
-	// response indefinitely. The handler waits on r.Context().Done() so
-	// the goroutine exits as soon as the cluster's per-peer deadline
-	// fires (no fixed-sleep race against t.Cleanup).
+	// response indefinitely. The handler normally exits when the cluster's
+	// per-peer deadline cancels the request; releaseHandler guarantees that
+	// test cleanup remains bounded if the server does not observe cancellation.
+	releaseHandler := make(chan struct{})
 	slow := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
+		select {
+		case <-r.Context().Done():
+		case <-releaseHandler:
+		}
 	}))
-	t.Cleanup(slow.Close)
+	t.Cleanup(func() {
+		close(releaseHandler)
+		slow.Close()
+	})
 
 	src := stubClusterSource{leader: true, peers: []string{hostPort(t, slow.URL)}}
 	srv := newTestServer(&fakePinger{healthy: true}, &fakeSource{cbState: "closed"})
