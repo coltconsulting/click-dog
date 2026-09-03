@@ -314,6 +314,7 @@ func TestRenderWizardYAML_LoadsForEveryCombination(t *testing.T) {
 // change that intentionally triggers a deprecation warning doesn't fail
 // this test for an unrelated reason.
 func TestWizard_ParityWithProfileTemplates(t *testing.T) {
+	requireInternalSource(t, "docs/examples")
 	for _, profile := range []string{"production", "minimal", "paranoid"} {
 		t.Run(profile, func(t *testing.T) {
 			a := wizardAnswers{
@@ -400,6 +401,7 @@ func extractBlacklistQueries(block string) []string {
 // this a copy could silently diverge from production. Assert every source
 // carries the identical list, in the same order.
 func TestBlacklistOpsConsistentAcrossProfiles(t *testing.T) {
+	requireInternalSource(t, "docs/examples")
 	prod := extractBlacklistOps(monitorSectionForProfile("production"))
 	if len(prod) == 0 {
 		t.Fatal("no ops extracted from production block — the rendered format changed; update extractBlacklistOps")
