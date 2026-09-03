@@ -14,7 +14,6 @@ func publicDocFiles(t *testing.T) []string {
 	t.Helper()
 
 	files := []string{"README.md", "CONTRIBUTING.md"}
-	internalSources := internalSourcesPresent(t)
 	for _, root := range []string{"docs", "overrides"} {
 		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 			if err != nil {
@@ -33,9 +32,6 @@ func publicDocFiles(t *testing.T) []string {
 			return nil
 		})
 		if err != nil {
-			if os.IsNotExist(err) && !internalSources && publicSourceTree(t) {
-				continue
-			}
 			t.Fatalf("walk %s: %v", root, err)
 		}
 	}
@@ -135,7 +131,6 @@ func TestKeeperStartupDocs_QualifyFailurePaths(t *testing.T) {
 }
 
 func TestFailoverDocs_KeepLookbackRecoveryConditional(t *testing.T) {
-	requireInternalSource(t, "docs")
 	files := []string{
 		"docs/configuration.md",
 		"docs/operating.md",
@@ -173,7 +168,6 @@ func TestFailoverDocs_KeepLookbackRecoveryConditional(t *testing.T) {
 }
 
 func TestInstallDocs_DoNotPinCommandExamplesToOneRelease(t *testing.T) {
-	requireInternalSource(t, "docs/install.md")
 	data, err := os.ReadFile("docs/install.md")
 	if err != nil {
 		t.Fatal(err)
@@ -205,7 +199,6 @@ func TestKubernetesExample_DefinesReadonly2Profile(t *testing.T) {
 }
 
 func TestAnalyzeQueriesDocs_ListEveryFlag(t *testing.T) {
-	requireInternalSource(t, "docs/query-analysis.md")
 	var out, errOut bytes.Buffer
 	if code := runAnalyzeQueries([]string{"-help"}, &out, &errOut); code != 0 {
 		t.Fatalf("analyze queries -help exit code = %d, want 0", code)
@@ -225,7 +218,6 @@ func TestAnalyzeQueriesDocs_ListEveryFlag(t *testing.T) {
 }
 
 func TestDatadogDashboardCatalog_DocumentedFromQueryAnalysis(t *testing.T) {
-	requireInternalSource(t, "docs/query-analysis.md")
 	want := map[string]string{
 		"query":    "datadog-query-analysis.json",
 		"activity": "datadog-user-activity.json",
@@ -283,9 +275,6 @@ func TestDatadogDashboardCatalog_InstallSurfacesDocumentAllThree(t *testing.T) {
 	}
 	for _, surface := range surfaces {
 		t.Run(surface.path, func(t *testing.T) {
-			if strings.HasPrefix(surface.path, "docs/") {
-				requireInternalSource(t, surface.path)
-			}
 			data, err := os.ReadFile(surface.path)
 			if err != nil {
 				t.Fatal(err)
@@ -322,7 +311,6 @@ func TestDatadogDashboardCatalog_InstallSurfacesDocumentAllThree(t *testing.T) {
 }
 
 func TestDatadogActivityCompatibilityDocs_DescribeDependentWidgetDegradation(t *testing.T) {
-	requireInternalSource(t, "docs")
 	requiredByPath := map[string][]string{
 		"docs/query-analysis.md": {
 			"Other query-log attributes remain on eligible enriched spans",
@@ -363,9 +351,6 @@ func TestDatadogActivityCompatibilityDocs_DescribeDependentWidgetDegradation(t *
 func TestDatadogManualImport_ListsEveryShippedDashboardFile(t *testing.T) {
 	for _, path := range []string{"docs/integrations/datadog.md", "dashboards/README.md"} {
 		t.Run(path, func(t *testing.T) {
-			if strings.HasPrefix(path, "docs/") {
-				requireInternalSource(t, path)
-			}
 			docs, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatal(err)
@@ -396,8 +381,6 @@ func TestDatadogManualImport_ListsEveryShippedDashboardFile(t *testing.T) {
 }
 
 func TestExportedUserActivity_WebsiteCopyKeepsOperationalBoundary(t *testing.T) {
-	requireInternalSource(t, "overrides/home.html")
-	requireInternalSource(t, "docs/overview.md")
 	home, err := os.ReadFile("overrides/home.html")
 	if err != nil {
 		t.Fatal(err)
@@ -424,7 +407,6 @@ func TestExportedUserActivity_WebsiteCopyKeepsOperationalBoundary(t *testing.T) 
 }
 
 func TestResilienceDocs_UseCurrentBackoffLogFormat(t *testing.T) {
-	requireInternalSource(t, "docs")
 	for _, path := range []string{"docs/resilience.md", "docs/troubleshooting.md"} {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -437,7 +419,6 @@ func TestResilienceDocs_UseCurrentBackoffLogFormat(t *testing.T) {
 }
 
 func TestAuditedOperatorContracts_AreDocumented(t *testing.T) {
-	requireInternalSource(t, "docs")
 	required := map[string][]string{
 		"docs/configuration.md": {
 			"omitting `monitor:` is not a valid scheduled-mode config",
@@ -509,7 +490,6 @@ func TestConfigSourceComments_DoNotRestoreStaleSemantics(t *testing.T) {
 }
 
 func TestHomeTerminalTranscript_UsesCurrentOutput(t *testing.T) {
-	requireInternalSource(t, "overrides/home.html")
 	data, err := os.ReadFile("overrides/home.html")
 	if err != nil {
 		t.Fatal(err)
