@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/coltconsulting/click-dog/internal/testutil"
 )
 
 func TestParseChecksumLines(t *testing.T) {
@@ -362,6 +364,18 @@ func TestCosignIdentityRegexpMatchesDocs(t *testing.T) {
 	// verifiers would be checking a different signer identity than
 	// self-update — false assurance. Lock the two together.
 	docsPath := filepath.Join("..", "..", "docs", "install.md")
+	if _, err := os.Stat(docsPath); os.IsNotExist(err) {
+		public, publicErr := testutil.IsPublicSourceTree(filepath.Join("..", ".."))
+		if publicErr != nil {
+			t.Fatalf("identify public source tree: %v", publicErr)
+		}
+		if !public {
+			t.Fatalf("%s is missing outside the public source tree", docsPath)
+		}
+		t.Skip("docs is not included in the public source archive")
+	} else if err != nil {
+		t.Fatalf("stat %s: %v", docsPath, err)
+	}
 	docs, err := os.ReadFile(docsPath)
 	if err != nil {
 		t.Fatalf("read %s: %v", docsPath, err)
