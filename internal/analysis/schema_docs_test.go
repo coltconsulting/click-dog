@@ -9,12 +9,9 @@ import (
 	"sort"
 	"strings"
 	"testing"
-
-	"github.com/coltconsulting/click-dog/internal/testutil"
 )
 
 func TestDocsAnalysisSchemasMatchGoContract(t *testing.T) {
-	requireDocsTree(t)
 	reportSchema := readDocsSchema(t, "analysis-report-v1.schema.json")
 	findingSchema := readDocsSchema(t, "analysis-finding-v1.schema.json")
 
@@ -34,7 +31,6 @@ func TestDocsAnalysisSchemasMatchGoContract(t *testing.T) {
 }
 
 func TestDocsAnalysisReportExampleMatchesGoContract(t *testing.T) {
-	requireDocsTree(t)
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), "docs", "examples", "analysis-report-redacted.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -80,26 +76,6 @@ func TestDocsAnalysisReportExampleMatchesGoContract(t *testing.T) {
 		if finding.SchemaVersion != FindingSchemaVersion {
 			t.Fatalf("finding[%d] schema_version = %q, want %q", i, finding.SchemaVersion, FindingSchemaVersion)
 		}
-	}
-}
-
-func requireDocsTree(t *testing.T) {
-	t.Helper()
-	root := repoRoot(t)
-	path := filepath.Join(root, "docs")
-	if _, err := os.Stat(path); err == nil {
-		return
-	} else if os.IsNotExist(err) {
-		public, publicErr := testutil.IsPublicSourceTree(root)
-		if publicErr != nil {
-			t.Fatalf("identify public source tree: %v", publicErr)
-		}
-		if !public {
-			t.Fatal("docs tree is missing outside the public source tree")
-		}
-		t.Skip("docs is not included in the public source archive")
-	} else {
-		t.Fatalf("stat docs tree: %v", err)
 	}
 }
 

@@ -7,7 +7,6 @@ import (
 )
 
 func TestSpanAttributesDocs_NormalizedQueryContract(t *testing.T) {
-	requireInternalSource(t, "docs/span-attributes.md")
 	data, err := os.ReadFile("docs/span-attributes.md")
 	if err != nil {
 		t.Fatalf("reading span attributes docs: %v", err)
