@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/coltconsulting/click-dog/internal/analysis"
+	"github.com/coltconsulting/click-dog/internal/model"
 	"github.com/coltconsulting/click-dog/internal/processor"
 )
 
@@ -54,23 +55,20 @@ func TestIntegration_FetchSlowQueriesInRange(t *testing.T) {
 	conn := waitForClickHouse(t, 1, 30*time.Second)
 	defer conn.Close()
 
-	// Seed 3 slow queries (~1.5s each)
-	seedSlowQueries(t, conn, 3, 1500)
+	fixture := seedSlowQueryFixture(t, conn, 3, 1500)
 
 	reader := newCHReader(t, 1)
 	defer reader.Close()
 
 	ctx := context.Background()
-	startTime := time.Now().Add(-5 * time.Minute)
-	endTime := time.Now()
-
-	queries, err := reader.FetchSlowQueriesInRange(ctx, 1000, 0, 100000, startTime, endTime, 100)
+	queries, err := reader.FetchSlowQueriesInRange(ctx, 1000, 0, 100000, fixture.WindowStart, fixture.WindowEnd, 100)
 	if err != nil {
 		t.Fatalf("FetchSlowQueriesInRange failed: %v", err)
 	}
 
-	if len(queries) < 3 {
-		t.Errorf("Expected at least 3 slow queries, got %d", len(queries))
+	queries = exactFixtureQueries(t, queries, fixture)
+	if len(queries) != len(fixture.QueryIDs) {
+		t.Fatalf("exact queries = %d, want %d", len(queries), len(fixture.QueryIDs))
 	}
 
 	for _, q := range queries {
@@ -141,29 +139,18 @@ func TestIntegration_FetchOpenTelemetrySpans(t *testing.T) {
 	conn := waitForClickHouse(t, 1, 30*time.Second)
 	defer conn.Close()
 
-	// Seed traced queries that generate spans
-	seedTracedQueries(t, conn, 5)
+	fixture := seedTracedQueryFixture(t, conn, 5)
 
 	reader := newCHReader(t, 1)
 	defer reader.Close()
 
 	ctx := context.Background()
-	spans, err := reader.FetchOpenTelemetrySpans(ctx, 1, 0, 0, 0, 10*time.Minute, 100)
+	spans, err := reader.FetchOpenTelemetrySpans(ctx, 1, 0, 0, 0, 10*time.Minute, 1000)
 	if err != nil {
 		t.Fatalf("FetchOpenTelemetrySpans failed: %v", err)
 	}
 
-	if len(spans) == 0 {
-		// Debug: check if the span log table has any rows at all
-		var count uint64
-		if err := conn.QueryRow(ctx, "SELECT count() FROM system.opentelemetry_span_log").Scan(&count); err != nil {
-			t.Logf("Debug: failed to query span log count: %v", err)
-		} else {
-			t.Logf("Debug: system.opentelemetry_span_log has %d total rows", count)
-		}
-		t.Fatal("Expected spans from ClickHouse opentelemetry_span_log")
-	}
-	t.Logf("Fetched %d spans from node 1", len(spans))
+	spans = exactFixtureSpans(t, spans, fixture)
 
 	// Verify span fields are populated
 	for _, span := range spans {
@@ -183,33 +170,36 @@ func TestIntegration_FetchSpans_DurationFilters(t *testing.T) {
 	conn := waitForClickHouse(t, 1, 30*time.Second)
 	defer conn.Close()
 
-	// Seed a mix: some fast, some slow
-	seedSlowQueries(t, conn, 2, 500)  // fast (0.5s)
-	seedSlowQueries(t, conn, 2, 2000) // slow (2s)
-
-	reader := newCHReader(t, 1)
-	defer reader.Close()
+	fast := seedTracedQueryFixtureWithDuration(t, conn, 2, 100*time.Millisecond)
+	slow := seedTracedQueryFixtureWithDuration(t, conn, 2, 1700*time.Millisecond)
 
 	ctx := context.Background()
 
-	// Fetch with high min duration -- should only return the slow ones
-	spans, err := reader.FetchOpenTelemetrySpans(ctx, 1500, 0, 0, 0, 10*time.Minute, 100)
+	filteredReader := newCHReader(t, 1)
+	defer filteredReader.Close()
+	spans, err := filteredReader.FetchOpenTelemetrySpans(ctx, 1500, 0, 0, 0, 10*time.Minute, 1000)
 	if err != nil {
 		t.Fatalf("FetchOpenTelemetrySpans failed: %v", err)
 	}
+	filteredTraces := traceIDsOf(spans)
+	for _, traceID := range slow.TraceIDs {
+		if !filteredTraces[traceID] {
+			t.Errorf("slow trace %s missing from min-duration result", traceID)
+		}
+	}
+	for _, traceID := range fast.TraceIDs {
+		if filteredTraces[traceID] {
+			t.Errorf("fast trace %s incorrectly passed min-duration filter", traceID)
+		}
+	}
 
-	// Every returned span's trace should have at least one span >= 1500ms
-	t.Logf("Fetched %d spans with minTraceDuration=1500ms", len(spans))
-
-	// Verify we get fewer spans than without filter
-	allSpans, err := reader.FetchOpenTelemetrySpans(ctx, 1, 0, 0, 0, 10*time.Minute, 100)
+	allReader := newCHReader(t, 1)
+	defer allReader.Close()
+	allSpans, err := allReader.FetchOpenTelemetrySpans(ctx, 1, 0, 0, 0, 10*time.Minute, 1000)
 	if err != nil {
 		t.Fatalf("FetchOpenTelemetrySpans (all) failed: %v", err)
 	}
-
-	if len(spans) >= len(allSpans) && len(allSpans) > 0 {
-		t.Logf("Filtered spans (%d) should be <= all spans (%d)", len(spans), len(allSpans))
-	}
+	exactFixtureSpans(t, allSpans, fast, slow)
 }
 
 // TestIntegration_FetchSpans_RespectsSpanCap pins issue #91: the limit
@@ -225,22 +215,31 @@ func TestIntegration_FetchSpans_RespectsSpanCap(t *testing.T) {
 	// small cap configured below. Each ClickHouse-traced query typically
 	// emits several internal spans (parse, plan, execute, ...), so 5
 	// traces produces well above 3 total spans.
-	seedTracedQueries(t, conn, 5)
+	fixture := seedTracedQueryFixture(t, conn, 5)
 
-	reader := newCHReader(t, 1)
-	defer reader.Close()
+	uncappedReader := newCHReader(t, 1)
+	defer uncappedReader.Close()
 
 	ctx := context.Background()
 	const spanCap = 3
-	spans, err := reader.FetchOpenTelemetrySpans(ctx, 1, 0, 0, 0, 10*time.Minute, spanCap)
+	eligible, err := uncappedReader.FetchOpenTelemetrySpans(ctx, 1, 0, 0, 0, 10*time.Minute, 1000)
+	if err != nil {
+		t.Fatalf("uncapped FetchOpenTelemetrySpans failed: %v", err)
+	}
+	if got := len(exactFixtureSpans(t, eligible, fixture)); got <= spanCap {
+		t.Fatalf("eligible fixture spans = %d, want more than cap %d", got, spanCap)
+	}
+
+	cappedReader := newCHReader(t, 1)
+	defer cappedReader.Close()
+	spans, err := cappedReader.FetchOpenTelemetrySpans(ctx, 1, 0, 0, 0, 10*time.Minute, spanCap)
 	if err != nil {
 		t.Fatalf("FetchOpenTelemetrySpans failed: %v", err)
 	}
 
-	if len(spans) > spanCap {
-		t.Errorf("max_spans_per_cycle=%d violated: got %d spans (must be <= %d)", spanCap, len(spans), spanCap)
+	if len(spans) != spanCap {
+		t.Errorf("max_spans_per_cycle=%d returned %d spans, want exactly %d with excess eligible rows", spanCap, len(spans), spanCap)
 	}
-	t.Logf("Span cap honored: requested <= %d, fetched %d", spanCap, len(spans))
 }
 
 func TestIntegration_FetchSpans_EmptyResult(t *testing.T) {
@@ -271,49 +270,30 @@ func TestIntegration_FetchQueryLogByQueryIDs(t *testing.T) {
 
 	// Seed traced queries — these generate both span_log and query_log entries
 	// sharing the same query_id.
-	seedTracedQueries(t, conn, 3)
+	fixture := seedTracedQueryFixture(t, conn, 3)
 
 	reader := newCHReader(t, 1)
 	defer reader.Close()
 
 	ctx := context.Background()
 
-	// First fetch spans to get the query IDs from span attributes
-	spans, err := reader.FetchOpenTelemetrySpans(ctx, 1, 0, 0, 0, 10*time.Minute, 100)
-	if err != nil {
-		t.Fatalf("FetchOpenTelemetrySpans failed: %v", err)
-	}
-	if len(spans) == 0 {
-		t.Fatal("Expected spans from ClickHouse — cannot test enrichment without spans")
-	}
-
-	// Collect unique query IDs from span attributes
-	queryIDs := processor.UniqueQueryIDs(spans)
-	t.Logf("Found %d spans across %d unique query_ids", len(spans), len(queryIDs))
-	if len(queryIDs) == 0 {
-		t.Fatal("No clickhouse.query_id attributes found on spans")
-	}
-
 	// Fetch enrichment data
-	queryLogMap, err := reader.FetchQueryLogByQueryIDs(ctx, queryIDs, 2)
+	queryLogMap, err := reader.FetchQueryLogByQueryIDs(ctx, fixture.QueryIDs, 2)
 	if err != nil {
 		t.Fatalf("FetchQueryLogByQueryIDs failed: %v", err)
 	}
 
-	if len(queryLogMap) == 0 {
-		var count uint64
-		if err := conn.QueryRow(ctx, "SELECT count() FROM system.query_log WHERE event_date >= today() - 1").Scan(&count); err != nil {
-			t.Logf("Debug: query_log count query failed: %v", err)
-		} else {
-			t.Logf("Debug: system.query_log has %d rows in last 2 days", count)
-		}
-		t.Fatal("Expected query_log enrichment data for at least some query_ids")
+	if len(queryLogMap) != len(fixture.QueryIDs) {
+		t.Fatalf("enrichment rows = %d, want exact fixture count %d", len(queryLogMap), len(fixture.QueryIDs))
 	}
 
-	t.Logf("Enriched %d/%d query_ids with query_log metadata", len(queryLogMap), len(queryIDs))
-
 	// Verify enrichment fields are populated
-	for qid, ql := range queryLogMap {
+	for _, qid := range fixture.QueryIDs {
+		ql, ok := queryLogMap[qid]
+		if !ok {
+			t.Errorf("missing exact query ID %s", qid)
+			continue
+		}
 		if ql.QueryID == "" {
 			t.Errorf("query_id %s: QueryID should not be empty", qid)
 		}
@@ -334,7 +314,7 @@ func TestIntegration_EnrichSpanPipeline(t *testing.T) {
 	conn := waitForClickHouse(t, 1, 30*time.Second)
 	defer conn.Close()
 
-	seedTracedQueries(t, conn, 2)
+	fixture := seedTracedQueryFixture(t, conn, 2)
 
 	reader := newCHReader(t, 1)
 	defer reader.Close()
@@ -342,55 +322,41 @@ func TestIntegration_EnrichSpanPipeline(t *testing.T) {
 	ctx := context.Background()
 
 	// Fetch spans
-	spans, err := reader.FetchOpenTelemetrySpans(ctx, 1, 0, 0, 0, 10*time.Minute, 100)
+	spans, err := reader.FetchOpenTelemetrySpans(ctx, 1, 0, 0, 0, 10*time.Minute, 1000)
 	if err != nil {
 		t.Fatalf("FetchOpenTelemetrySpans failed: %v", err)
 	}
-	if len(spans) == 0 {
-		t.Fatal("Expected spans")
-	}
+	spans = exactFixtureSpans(t, spans, fixture)
 
 	// Enrich
-	queryIDs := processor.UniqueQueryIDs(spans)
-	if len(queryIDs) == 0 {
-		t.Fatal("No query_ids found on spans")
-	}
-	queryLogMap, err := reader.FetchQueryLogByQueryIDs(ctx, queryIDs, 2)
+	queryLogMap, err := reader.FetchQueryLogByQueryIDs(ctx, fixture.QueryIDs, 2)
 	if err != nil {
 		t.Fatalf("FetchQueryLogByQueryIDs failed: %v", err)
 	}
 
-	enriched := 0
+	enrichedQueryIDs := make(map[string]bool, len(fixture.QueryIDs))
 	for i := range spans {
 		if qid := spans[i].Attributes["clickhouse.query_id"]; qid != "" {
 			if ql, ok := queryLogMap[qid]; ok {
 				processor.EnrichSpanFromQueryLog(&spans[i], ql, 100000)
-				enriched++
+				enrichedQueryIDs[qid] = true
+				if spans[i].Attributes["query_log.query_id"] != qid {
+					t.Errorf("query %s: enriched query_log.query_id = %q", qid, spans[i].Attributes["query_log.query_id"])
+				}
+				if spans[i].Attributes["query_log.user"] == "" {
+					t.Errorf("query %s: query_log.user should not be empty", qid)
+				}
+				if spans[i].Attributes["query_log.memory_usage"] == "" {
+					t.Errorf("query %s: query_log.memory_usage should be set", qid)
+				}
 			}
 		}
 	}
 
-	if enriched == 0 {
-		t.Fatal("Expected at least some spans to be enriched")
-	}
-	t.Logf("Enriched %d/%d spans", enriched, len(spans))
-
-	// Verify enriched attributes exist on at least one span
-	found := false
-	for _, span := range spans {
-		if _, ok := span.Attributes["query_log.query_id"]; ok {
-			found = true
-			if span.Attributes["query_log.user"] == "" {
-				t.Error("query_log.user should not be empty on enriched span")
-			}
-			if span.Attributes["query_log.memory_usage"] == "" {
-				t.Error("query_log.memory_usage should be set on enriched span")
-			}
-			break
+	for _, queryID := range fixture.QueryIDs {
+		if !enrichedQueryIDs[queryID] {
+			t.Errorf("fixture query %s had no enriched span", queryID)
 		}
-	}
-	if !found {
-		t.Error("No span had query_log.query_id attribute after enrichment")
 	}
 }
 
@@ -426,27 +392,24 @@ func TestIntegration_ClusterQueries_FetchSlowQueries(t *testing.T) {
 	}
 
 	// Seed slow queries on each node
-	seedSlowQueriesOnAllNodes(t, conns, 2, 1500)
+	fixtures := seedSlowQueryFixturesOnAllNodes(t, conns, 2, 1500)
 
 	// Create a cluster-aware reader connected to node 1
 	reader := newClusterCHReader(t, 1, "test_cluster")
 	defer reader.Close()
 
 	ctx := context.Background()
-	startTime := time.Now().Add(-5 * time.Minute)
-	endTime := time.Now()
+	startTime, endTime := fixtureBounds(fixtures)
 
 	queries, err := reader.FetchSlowQueriesInRange(ctx, 1000, 0, 100000, startTime, endTime, 100)
 	if err != nil {
 		t.Fatalf("Cluster FetchSlowQueriesInRange failed: %v", err)
 	}
 
-	// With cluster() function we should see queries from all 3 nodes
-	// Each node had 2 queries seeded = at least 6 total
-	t.Logf("Cluster query returned %d slow queries", len(queries))
-
-	if len(queries) < 6 {
-		t.Errorf("Expected at least 6 slow queries across cluster, got %d", len(queries))
+	want := queryIDsFromFixtures(fixtures)
+	got := queryIDSet(t, queries, want)
+	if len(got) != len(want) {
+		t.Errorf("cluster query IDs = %v, want every fixture ID %v", got, want)
 	}
 }
 
@@ -456,25 +419,21 @@ func TestIntegration_ClusterQueries_FetchSpans(t *testing.T) {
 		defer c.Close()
 	}
 
-	// Seed traced queries on each node
+	fixtures := make([]tracedQueryFixture, 0, len(conns))
 	for _, conn := range conns {
-		seedTracedQueries(t, conn, 3)
+		fixtures = append(fixtures, seedTracedQueryFixture(t, conn, 3))
 	}
 
 	reader := newClusterCHReader(t, 1, "test_cluster")
 	defer reader.Close()
 
 	ctx := context.Background()
-	spans, err := reader.FetchOpenTelemetrySpans(ctx, 1, 0, 0, 0, 10*time.Minute, 100)
+	spans, err := reader.FetchOpenTelemetrySpans(ctx, 1, 0, 0, 0, 10*time.Minute, 1000)
 	if err != nil {
 		t.Fatalf("Cluster FetchOpenTelemetrySpans failed: %v", err)
 	}
 
-	t.Logf("Cluster query returned %d spans", len(spans))
-
-	if len(spans) == 0 {
-		t.Fatal("Expected spans from cluster query")
-	}
+	spans = exactFixtureSpans(t, spans, fixtures...)
 
 	// Verify spans come from multiple hostnames
 	hostnames := make(map[string]int)
@@ -483,8 +442,8 @@ func TestIntegration_ClusterQueries_FetchSpans(t *testing.T) {
 	}
 	t.Logf("Spans by hostname: %v", hostnames)
 
-	if len(hostnames) < 2 {
-		t.Errorf("Expected spans from multiple hosts in cluster query, got hosts: %v", hostnames)
+	if len(hostnames) != len(conns) {
+		t.Errorf("fixture spans came from %d hostnames, want all %d nodes: %v", len(hostnames), len(conns), hostnames)
 	}
 }
 
@@ -495,7 +454,7 @@ func TestIntegration_ClusterQueries_VsLocalQueries(t *testing.T) {
 	}
 
 	// Seed on all nodes
-	seedSlowQueriesOnAllNodes(t, conns, 2, 1500)
+	fixtures := seedSlowQueryFixturesOnAllNodes(t, conns, 2, 1500)
 
 	// Local reader (node 1 only)
 	localReader := newCHReader(t, 1)
@@ -506,8 +465,7 @@ func TestIntegration_ClusterQueries_VsLocalQueries(t *testing.T) {
 	defer clusterReader.Close()
 
 	ctx := context.Background()
-	startTime := time.Now().Add(-5 * time.Minute)
-	endTime := time.Now()
+	startTime, endTime := fixtureBounds(fixtures)
 
 	localQueries, err := localReader.FetchSlowQueriesInRange(ctx, 1000, 0, 100000, startTime, endTime, 100)
 	if err != nil {
@@ -519,12 +477,15 @@ func TestIntegration_ClusterQueries_VsLocalQueries(t *testing.T) {
 		t.Fatalf("Cluster FetchSlowQueriesInRange failed: %v", err)
 	}
 
-	t.Logf("Local queries: %d, Cluster queries: %d", len(localQueries), len(clusterQueries))
-
-	// Cluster should return more (or equal) results than local-only
-	if len(clusterQueries) < len(localQueries) {
-		t.Errorf("Cluster queries (%d) should return >= local queries (%d)",
-			len(clusterQueries), len(localQueries))
+	wantLocal := stringSet(fixtures[0].QueryIDs)
+	wantCluster := queryIDsFromFixtures(fixtures)
+	gotLocal := queryIDSet(t, localQueries, wantCluster)
+	gotCluster := queryIDSet(t, clusterQueries, wantCluster)
+	if !sameStringSet(gotLocal, wantLocal) {
+		t.Errorf("local fixture query IDs = %v, want %v", gotLocal, wantLocal)
+	}
+	if !sameStringSet(gotCluster, wantCluster) {
+		t.Errorf("cluster fixture query IDs = %v, want %v", gotCluster, wantCluster)
 	}
 }
 
@@ -535,22 +496,86 @@ func TestIntegration_EachNodeHasOwnQueryLog(t *testing.T) {
 	}
 
 	// Seed on only node 2
-	seedSlowQueries(t, conns[1], 3, 1500)
+	fixture := seedSlowQueryFixture(t, conns[1], 3, 1500)
 
 	// Query node 2 locally -- should find them
 	reader2 := newCHReader(t, 2)
 	defer reader2.Close()
 
 	ctx := context.Background()
-	startTime := time.Now().Add(-5 * time.Minute)
-	endTime := time.Now()
-
-	node2Queries, err := reader2.FetchSlowQueriesInRange(ctx, 1000, 0, 100000, startTime, endTime, 100)
+	node2Queries, err := reader2.FetchSlowQueriesInRange(ctx, 1000, 0, 100000, fixture.WindowStart, fixture.WindowEnd, 100)
 	if err != nil {
 		t.Fatalf("Node 2 FetchSlowQueriesInRange failed: %v", err)
 	}
 
-	if len(node2Queries) < 3 {
-		t.Errorf("Node 2 should have at least 3 slow queries, got %d", len(node2Queries))
+	got := queryIDSet(t, node2Queries, stringSet(fixture.QueryIDs))
+	if len(got) != len(fixture.QueryIDs) {
+		t.Errorf("node 2 fixture query IDs = %v, want %v", got, fixture.QueryIDs)
 	}
+}
+
+func traceIDsOf(spans []model.OpenTelemetrySpan) map[uuid.UUID]bool {
+	result := make(map[uuid.UUID]bool)
+	for _, span := range spans {
+		result[span.TraceID] = true
+	}
+	return result
+}
+
+func fixtureBounds(fixtures []slowQueryFixture) (time.Time, time.Time) {
+	start := fixtures[0].WindowStart
+	end := fixtures[0].WindowEnd
+	for _, fixture := range fixtures[1:] {
+		if fixture.WindowStart.Before(start) {
+			start = fixture.WindowStart
+		}
+		if fixture.WindowEnd.After(end) {
+			end = fixture.WindowEnd
+		}
+	}
+	return start, end
+}
+
+func stringSet(values []string) map[string]struct{} {
+	result := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		result[value] = struct{}{}
+	}
+	return result
+}
+
+func queryIDsFromFixtures(fixtures []slowQueryFixture) map[string]struct{} {
+	result := make(map[string]struct{})
+	for _, fixture := range fixtures {
+		for _, queryID := range fixture.QueryIDs {
+			result[queryID] = struct{}{}
+		}
+	}
+	return result
+}
+
+func queryIDSet(t *testing.T, queries []model.QueryLog, allowed map[string]struct{}) map[string]struct{} {
+	t.Helper()
+	result := make(map[string]struct{})
+	for _, query := range queries {
+		if _, ok := allowed[query.QueryID]; ok {
+			if _, duplicate := result[query.QueryID]; duplicate {
+				t.Errorf("reader returned fixture query %s more than once", query.QueryID)
+			}
+			result[query.QueryID] = struct{}{}
+		}
+	}
+	return result
+}
+
+func sameStringSet(left, right map[string]struct{}) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for value := range left {
+		if _, ok := right[value]; !ok {
+			return false
+		}
+	}
+	return true
 }

@@ -814,6 +814,9 @@ func TestValidate_RedactQueries_InvalidRegex(t *testing.T) {
 	if !strings.Contains(err.Error(), "redact_queries[0].pattern is invalid regex") {
 		t.Errorf("error should mention invalid regex, got: %v", err)
 	}
+	if strings.Contains(err.Error(), "requires at least one valid") {
+		t.Errorf("invalid regex should not also report a missing-rule error, got: %v", err)
+	}
 }
 
 func TestValidate_UserLists_RejectEmptyEntries(t *testing.T) {
@@ -893,6 +896,46 @@ func TestValidate_UserFilter_RequiresEnrichment(t *testing.T) {
 				t.Errorf("error should mention enrichment requirement, got: %v", err)
 			}
 		})
+	}
+}
+
+// The IP whitelist carries the same enrichment dependency as the user filters:
+// span-log rows have no client address, so scheduled mode resolves it through
+// query_log. Without enrichment every span resolves to "" and the whitelist
+// drops the entire cycle, which is the exact failure the user-filter rule
+// above exists to prevent.
+func TestValidate_IPWhitelist_RequiresEnrichment(t *testing.T) {
+	disabled := false
+	cfg := validConfig()
+	cfg.Filters.WhitelistIPs = []string{"10.0.0.0/8"}
+	cfg.Monitor.EnrichFromQueryLog = &disabled
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("whitelist_ips without query_log enrichment should fail validation")
+	}
+	if !strings.Contains(err.Error(), "filters.whitelist_ips requires query_log enrichment") {
+		t.Errorf("error should name the enrichment requirement, got: %v", err)
+	}
+}
+
+func TestValidate_IPWhitelist_PassesWithEnrichmentEnabled(t *testing.T) {
+	enabled := true
+	cfg := validConfig()
+	cfg.Filters.WhitelistIPs = []string{"10.0.0.0/8"}
+	cfg.Monitor.EnrichFromQueryLog = &enabled
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("IP whitelist with enrichment enabled should pass, got: %v", err)
+	}
+}
+
+// Enrichment defaults to on, so the common config — a whitelist and no
+// explicit enrich_from_query_log — must not trip the new rule.
+func TestValidate_IPWhitelist_PassesOnDefaultEnrichment(t *testing.T) {
+	cfg := validConfig()
+	cfg.Filters.WhitelistIPs = []string{"10.0.0.0/8"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("IP whitelist with default enrichment should pass, got: %v", err)
 	}
 }
 
@@ -1375,6 +1418,9 @@ func TestValidate_WebhookURLRequiresHTTPOrHTTPSWithHost(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tt.substr) {
 				t.Fatalf("expected error containing %q, got: %v", tt.substr, err)
 			}
+			if strings.Contains(err.Error(), tt.url) {
+				t.Fatalf("webhook validation error leaked URL: %v", err)
+			}
 		})
 	}
 }
@@ -1412,6 +1458,43 @@ func TestValidate_ClickHouseClusterName_UnsafeIdentifier(t *testing.T) {
 			}
 			if tt.wantErr && err != nil && !strings.Contains(err.Error(), "clickhouse.cluster") {
 				t.Errorf("error should mention clickhouse.cluster, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestConfigValidation_QueryTextMode(t *testing.T) {
+	tests := []struct {
+		name    string
+		mode    QueryTextMode
+		rules   []RedactionRule
+		wantErr string
+	}{
+		{name: "raw", mode: QueryTextModeRaw},
+		{name: "redacted", mode: QueryTextModeRedacted, rules: []RedactionRule{{Pattern: `'[^']*'`}}},
+		{name: "normalized only", mode: QueryTextModeNormalizedOnly},
+		{name: "normalized only ignores stale rules", mode: QueryTextModeNormalizedOnly, rules: []RedactionRule{{Pattern: `[invalid(`}}},
+		{name: "none", mode: QueryTextModeNone},
+		{name: "none ignores stale rules", mode: QueryTextModeNone, rules: []RedactionRule{{Pattern: `[invalid(`}}},
+		{name: "ambiguous normalized rejected", mode: "normalized", wantErr: "normalized_only"},
+		{name: "unknown rejected", mode: "scrubbed", wantErr: "query_text_mode"},
+		{name: "redacted requires rules", mode: QueryTextModeRedacted, wantErr: "requires at least one valid"},
+		{name: "rules rejected under raw", mode: QueryTextModeRaw, rules: []RedactionRule{{Pattern: `secret`}}, wantErr: "only used when"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Filters.QueryTextMode = tt.mode
+			cfg.Filters.RedactQueries = tt.rules
+			err := cfg.Validate()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Validate: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Validate error = %v, want substring %q", err, tt.wantErr)
 			}
 		})
 	}

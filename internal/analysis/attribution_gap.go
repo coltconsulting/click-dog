@@ -59,6 +59,7 @@ func (a *attributionGapAnalyzer) Analyze(_ context.Context, input AnalysisInput)
 		findings = append(findings, Finding{
 			ID:                    FindingID(a.Name(), "family", family.FamilyID, input.Window.Start, family.MemberHashesSorted),
 			Analyzer:              a.Name(),
+			ConditionScope:        "family",
 			Severity:              SeverityWarning,
 			Confidence:            1.0,
 			Title:                 attributionGapTitle(attr, appLow, nameLow),

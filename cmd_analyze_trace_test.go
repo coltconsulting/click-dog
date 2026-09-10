@@ -241,7 +241,7 @@ func makeSpan(traceID uuid.UUID, spanID, parent uint64, op string, startUs, fini
 // ---------------------------------------------------------------------------
 
 func TestRunAnalyze_TraceVerbDispatches(t *testing.T) {
-	// An invalid -source value is rejected as a usage error (exit 2) before any
+	// An invalid --source value is rejected as a usage error (exit 2) before any
 	// config load — proves dispatch reached runAnalyzeTrace rather than the
 	// unknown-command path. (With Phase 2, -source recent is the default and a
 	// bare `trace` is a valid invocation, so it no longer fails on usage.)
@@ -250,7 +250,7 @@ func TestRunAnalyze_TraceVerbDispatches(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
-	if !strings.Contains(errOut.String(), "invalid -source") {
+	if !strings.Contains(errOut.String(), "invalid --source") {
 		t.Errorf("stderr missing invalid-source rejection:\n%s", errOut.String())
 	}
 }
@@ -283,7 +283,7 @@ func TestAnalyzeTrace_BadFormatExits2(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
-	if !strings.Contains(errOut.String(), "invalid -format") {
+	if !strings.Contains(errOut.String(), "invalid --format") {
 		t.Errorf("stderr missing invalid-format message:\n%s", errOut.String())
 	}
 }
@@ -304,7 +304,7 @@ func TestAnalyzeTrace_SourceOtherWithoutIdentityExits2(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
-	if !strings.Contains(errOut.String(), "-source other requires an identity flag") {
+	if !strings.Contains(errOut.String(), "--source other requires an identity flag") {
 		t.Errorf("stderr missing required-identity message:\n%s", errOut.String())
 	}
 }
@@ -552,6 +552,37 @@ func TestAnalyzeTrace_OutputPathWrites0600(t *testing.T) {
 	}
 }
 
+// TestAnalyzeTrace_OutputReassertsModeOnExistingFile is the drilldown half of
+// the report-permission contract; see the queries-side test for the rationale.
+func TestAnalyzeTrace_OutputReassertsModeOnExistingFile(t *testing.T) {
+	traceID := uuid.New()
+	src := &fakeTraceSource{
+		traceIDs: []string{traceID.String()},
+		spans:    []model.OpenTelemetrySpan{makeSpan(traceID, 1, 0, "Query", 1_000_000, 2_000_000)},
+	}
+	path := filepath.Join(t.TempDir(), "trace.json")
+	if err := os.WriteFile(path, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := analyzeTraceWithSource(src, testTraceConfig(), "", defaultTraceOptions(), "json", path, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, errOut.String())
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("report perms after overwriting an existing file = %o, want 600", perm)
+	}
+}
+
 func TestAnalyzeTrace_TableOutputIsCompact(t *testing.T) {
 	traceID := uuid.New()
 	src := &fakeTraceSource{
@@ -616,7 +647,7 @@ func TestResolveTraceSource_Table(t *testing.T) {
 		{name: "current with identity becomes other", source: "current", queryID: "q1", wantSource: "other"},
 		{name: "other with identity", source: "other", traceID: "t1", wantSource: "other"},
 		{name: "other without identity errors", source: "other", wantErr: "requires an identity flag"},
-		{name: "unknown rejected", source: "bogus", wantErr: "invalid -source"},
+		{name: "unknown rejected", source: "bogus", wantErr: "invalid --source"},
 		{name: "hash counts as identity", source: "recent", hash: "123", wantSource: "other"},
 	}
 	for _, tt := range tests {
@@ -651,7 +682,7 @@ func TestParseFanout_Table(t *testing.T) {
 		{name: "stray commas", spec: "trace,,stats,", want: fanoutSet{Trace: true, Stats: true}},
 		{name: "findings accepted", spec: "trace,findings", want: fanoutSet{Trace: true, Findings: true}},
 		{name: "all views", spec: "stats,similar,findings", want: fanoutSet{Trace: true, Stats: true, Similar: true, Findings: true}},
-		{name: "unknown rejected", spec: "trace,bogus", wantErr: "invalid -fanout view"},
+		{name: "unknown rejected", spec: "trace,bogus", wantErr: "invalid --fanout view"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -693,7 +724,7 @@ func TestAnalyzeTrace_FanoutFindingsAccepted(t *testing.T) {
 	if code == 2 {
 		t.Fatalf("findings must be accepted, not a usage error; got exit 2:\n%s", errOut.String())
 	}
-	if strings.Contains(errOut.String(), "invalid -fanout") || strings.Contains(errOut.String(), "not supported") {
+	if strings.Contains(errOut.String(), "invalid --fanout") || strings.Contains(errOut.String(), "not supported") {
 		t.Errorf("findings should not be rejected at parse:\n%s", errOut.String())
 	}
 }
@@ -1085,7 +1116,7 @@ func TestAnalyzeTrace_InvalidNormalizedHashExits1(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("invalid hash should fail the search step (exit 1), got %d", code)
 	}
-	if !strings.Contains(errOut.String(), "invalid -normalized-query-hash") {
+	if !strings.Contains(errOut.String(), "invalid --normalized-query-hash") {
 		t.Errorf("stderr should explain the bad hash:\n%s", errOut.String())
 	}
 }

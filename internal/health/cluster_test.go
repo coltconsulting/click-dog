@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -22,11 +23,17 @@ type stubClusterSource struct {
 }
 
 // pingerFunc adapts a function to the Pinger interface. Used by the
-// parallelism test, which needs a pinger that blocks for a controlled
-// duration without inventing yet another struct type.
+// parallelism test, which needs a pinger that blocks behind a controlled
+// release without inventing yet another struct type.
 type pingerFunc func(ctx context.Context) bool
 
 func (f pingerFunc) IsHealthy(ctx context.Context) bool { return f(ctx) }
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
 func (s stubClusterSource) IsLeader() bool  { return s.leader }
 func (s stubClusterSource) Peers() []string { return s.peers }
@@ -434,13 +441,20 @@ func TestClusterz_NoHTTPSelfLoop(t *testing.T) {
 func TestClusterz_PeerTimeout(t *testing.T) {
 	// A peer that never responds must be marked unreachable after the
 	// configured deadline rather than blocking the whole /clusterz
-	// response indefinitely. The handler waits on r.Context().Done() so
-	// the goroutine exits as soon as the cluster's per-peer deadline
-	// fires (no fixed-sleep race against t.Cleanup).
+	// response indefinitely. The handler normally exits when the cluster's
+	// per-peer deadline cancels the request; releaseHandler guarantees that
+	// test cleanup remains bounded if the server does not observe cancellation.
+	releaseHandler := make(chan struct{})
 	slow := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
+		select {
+		case <-r.Context().Done():
+		case <-releaseHandler:
+		}
 	}))
-	t.Cleanup(slow.Close)
+	t.Cleanup(func() {
+		close(releaseHandler)
+		slow.Close()
+	})
 
 	src := stubClusterSource{leader: true, peers: []string{hostPort(t, slow.URL)}}
 	srv := newTestServer(&fakePinger{healthy: true}, &fakeSource{cbState: "closed"})
@@ -554,54 +568,85 @@ func TestClusterz_CanceledRequest_DoesNotPoisonCache(t *testing.T) {
 }
 
 func TestClusterz_SelfAndPeersRunInParallel(t *testing.T) {
-	// Regression for the sixth-pass review: the self-check runs in a
-	// goroutine alongside peer fanout, NOT sequentially before it. If
-	// self ran first, total latency would be selfDelay + peerDelay;
-	// when they're parallel it's max(selfDelay, peerDelay) plus a
-	// modest overhead. Pinning the parallel arrangement matters because
-	// the self-check has its own readyTimeout (2s) and isn't naturally
-	// bounded by peer_timeout_ms — so a slow ClickHouse ping would
-	// stack on top of the peer fanout if these were sequential.
-	const armDelay = 150 * time.Millisecond
+	// Both arms announce that they started, then wait on the same release
+	// channel. The handler can finish only after the test has observed both
+	// announcements, so this proves the self-check and peer fanout overlap
+	// without relying on scheduler speed or wall-clock duration.
+	started := make(chan string, 2)
+	release := make(chan struct{})
 
-	// Pinger that blocks until the context fires or armDelay elapses.
-	slowPinger := pingerFunc(func(ctx context.Context) bool {
+	blockingPinger := pingerFunc(func(ctx context.Context) bool {
+		started <- "self"
 		select {
 		case <-ctx.Done():
 			return false
-		case <-time.After(armDelay):
+		case <-release:
 			return true
 		}
 	})
 
-	// Peer that responds 200 after armDelay (deterministic delay; the
-	// httptest.Server itself does no extra buffering).
-	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	blockingPeer := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		started <- "peer"
 		select {
-		case <-r.Context().Done():
-			return
-		case <-time.After(armDelay):
+		case <-req.Context().Done():
+			return nil, req.Context().Err()
+		case <-release:
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body: io.NopCloser(strings.NewReader(
+					`{"status":"ready","checks":{"circuit_breaker":"closed"}}`,
+				)),
+				Request: req,
+			}, nil
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ready","checks":{"circuit_breaker":"closed"}}`))
-	}))
-	t.Cleanup(peer.Close)
+	})
 
 	self := "self:8686"
-	src := stubClusterSource{leader: true, peers: []string{self, hostPort(t, peer.URL)}}
-	srv := NewServer(slowPinger, &fakeSource{cbState: "closed"}, "test")
-	srv.readyTimeout = 5 * armDelay // cap, but never exercised since the pinger returns first
+	peer := "peer:8686"
+	src := stubClusterSource{leader: true, peers: []string{self, peer}}
+	srv := NewServer(blockingPinger, &fakeSource{cbState: "closed"}, "test")
 	srv.EnableCluster(ClusterConfig{
 		Source:      src,
 		Self:        self,
-		PeerTimeout: 5 * armDelay,
+		PeerTimeout: time.Second,
 	})
+	srv.cluster.client = &http.Client{Transport: blockingPeer}
 
-	start := time.Now()
 	req := httptest.NewRequest(http.MethodGet, "/clusterz", nil)
 	w := httptest.NewRecorder()
-	srv.clusterz(w, req)
-	elapsed := time.Since(start)
+	done := make(chan struct{})
+	go func() {
+		srv.clusterz(w, req)
+		close(done)
+	}()
+
+	gotStarted := make(map[string]bool, 2)
+	var startFailure string
+	for range 2 {
+		select {
+		case arm := <-started:
+			gotStarted[arm] = true
+		case <-time.After(time.Second):
+			startFailure = "self-check and peer fanout did not both start before release"
+		}
+		if startFailure != "" {
+			break
+		}
+	}
+	close(release)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("clusterz did not finish after releasing both arms")
+	}
+	if startFailure != "" {
+		t.Fatal(startFailure)
+	}
+	if !gotStarted["self"] || !gotStarted["peer"] {
+		t.Fatalf("started arms = %v, want self and peer", gotStarted)
+	}
 
 	// Sanity: both arms completed.
 	if w.Code != http.StatusOK {
@@ -610,15 +655,6 @@ func TestClusterz_SelfAndPeersRunInParallel(t *testing.T) {
 	got := decodeCluster(t, w.Body.Bytes())
 	if got.Summary.Total != 2 || got.Summary.Healthy != 2 {
 		t.Fatalf("summary = %+v, want {2,2,0,0}", got.Summary)
-	}
-
-	// Ceiling: serial would take ~2*armDelay = 300ms. Parallel is
-	// armDelay (150ms) + scheduling overhead. The threshold sits
-	// halfway between, which catches the regression while staying
-	// CI-safe even on slow runners.
-	maxParallel := armDelay + armDelay/2 // 1.5 * armDelay = 225ms
-	if elapsed > maxParallel {
-		t.Errorf("clusterz took %v with two %v arms — want <%v (parallel); serial bound is %v", elapsed, armDelay, maxParallel, 2*armDelay)
 	}
 }
 

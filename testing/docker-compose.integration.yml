@@ -15,6 +15,8 @@ services:
       - "19000:9000"    # Native protocol
       - "18123:8123"    # HTTP interface
       - "19181:9181"    # Keeper (ZK-compatible)
+      - "18686:8686"    # click-dog health, integration_nodes_test.go
+      - "19090:9090"    # click-dog metrics
     volumes:
       - ./config/clickhouse/tracing.xml:/etc/clickhouse-server/config.d/tracing.xml:ro
       - ./config/clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
@@ -43,6 +45,8 @@ services:
       - "19001:9000"
       - "18124:8123"
       - "19182:9181"
+      - "18687:8686"    # click-dog health, integration_nodes_test.go
+      - "19091:9090"    # click-dog metrics
     volumes:
       - ./config/clickhouse/tracing.xml:/etc/clickhouse-server/config.d/tracing.xml:ro
       - ./config/clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
@@ -71,6 +75,8 @@ services:
       - "19002:9000"
       - "18125:8123"
       - "19183:9181"
+      - "18688:8686"    # click-dog health, integration_nodes_test.go
+      - "19092:9090"    # click-dog metrics
     volumes:
       - ./config/clickhouse/tracing.xml:/etc/clickhouse-server/config.d/tracing.xml:ro
       - ./config/clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro

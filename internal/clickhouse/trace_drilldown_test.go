@@ -427,12 +427,12 @@ func TestRecentQueryCandidatesBuilder_HashSkippedWhenNormalizedUnsupported(t *te
 
 func TestFetchRecentQueryCandidates_ScansRows(t *testing.T) {
 	now := time.Date(2026, 6, 15, 0, 30, 0, 0, time.UTC)
-	// queryLogSelect carries the raw query column; the candidate search scans
-	// it but the command never emits it (only the bounded normalized preview).
+	// queryLogSelect carries the raw query column for backfill, but the
+	// candidate API must clear it and return only the normalized preview.
 	conn := &fakeConn{rows: newFakeRows([]any{
 		"qid-1", "QueryFinish", now, uint64(1500), "SELECT * FROM events WHERE id = 7",
 		uint64(987654321), "SELECT * FROM events WHERE id = ?",
-		"default", "clickhouse-go", "app-1", "10.0.0.1",
+		"default", "clickhouse-go", "app-1", "10.0.0.1", "10.0.0.1",
 		[]string{"default"}, []string{"default.events"}, int32(0),
 		uint64(100), uint64(200), uint64(0), uint64(0), uint64(10), uint64(20), uint64(300),
 	})}
@@ -459,6 +459,9 @@ func TestFetchRecentQueryCandidates_ScansRows(t *testing.T) {
 	}
 	if rows[0].NormalizedQuery != "SELECT * FROM events WHERE id = ?" {
 		t.Errorf("normalized preview = %q", rows[0].NormalizedQuery)
+	}
+	if rows[0].Query != "" {
+		t.Errorf("raw query = %q, want it cleared at the candidate API boundary", rows[0].Query)
 	}
 }
 

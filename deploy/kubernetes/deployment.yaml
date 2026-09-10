@@ -5,7 +5,7 @@
 # (ha.keeper.hosts in configmap.yaml). A
 # node-local topology should be a sidecar inside the ClickHouse pod (where
 # localhost reaches ClickHouse), not this standalone Deployment — see
-# docs/kubernetes-clickhouse.md §3.
+# docs/kubernetes.md.
 #
 # Rollout note (upgrading from pre-health-endpoints releases): the probes moved
 # from the metrics port (:9090 /health) to a dedicated health port (:8686

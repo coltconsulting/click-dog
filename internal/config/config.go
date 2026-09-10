@@ -72,6 +72,45 @@ func validateWebhookURL(raw string) string {
 	return ""
 }
 
+// ValidateDatadogSite accepts a strict DNS hostname without encoding
+// Datadog's evolving site catalogue. The site is trusted operator
+// configuration; structural validation prevents URL-authority smuggling
+// through userinfo, ports, paths, IP literals, or encoded delimiters while
+// preserving the existing dashboard-provisioning support for future and
+// custom Datadog sites.
+func ValidateDatadogSite(raw string) (string, error) {
+	site := strings.ToLower(strings.TrimSpace(raw))
+	if site == "" || len(site) > 253 || strings.HasSuffix(site, ".") || !strings.Contains(site, ".") || net.ParseIP(site) != nil {
+		return "", errors.New("must be a Datadog hostname")
+	}
+	for _, label := range strings.Split(site, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return "", errors.New("must be a valid DNS hostname")
+		}
+		for _, ch := range label {
+			if (ch < 'a' || ch > 'z') && (ch < '0' || ch > '9') && ch != '-' {
+				return "", errors.New("must be a valid DNS hostname")
+			}
+		}
+	}
+	return site, nil
+}
+
+var datadogTagValuePattern = regexp.MustCompile(`^[A-Za-z0-9_.:/-]+$`)
+
+// ValidateDatadogTagValue returns a safe validation message for an explicitly
+// configured low-cardinality Datadog event tag. It is exported so the direct
+// Events client constructor enforces the same rules as Config.Validate.
+func ValidateDatadogTagValue(field, value string) string {
+	if strings.TrimSpace(value) == "" {
+		return field + " is required when datadog_events is enabled"
+	}
+	if len(value) > 200 || !datadogTagValuePattern.MatchString(value) {
+		return field + " must be at most 200 characters using only letters, numbers, dot, underscore, colon, slash, or hyphen"
+	}
+	return ""
+}
+
 // expandEnvVars replaces ${VAR} or $VAR patterns with environment variable values
 // If the environment variable is not set, it returns an empty string
 func expandEnvVars(s string) string {
@@ -177,18 +216,19 @@ func unresolvedEnvRefs(data []byte) []string {
 }
 
 type Config struct {
-	ClickHouse  ClickHouseConfig  `yaml:"clickhouse"`
-	Exporters   ExportersConfig   `yaml:"exporters"` // OTEL gRPC + Splunk HEC sinks
-	Monitor     MonitorConfig     `yaml:"monitor"`
-	Filters     FiltersConfig     `yaml:"filters"`
-	HA          HAConfig          `yaml:"ha"`
-	LogLevel    string            `yaml:"log_level"`    // debug, info, warn, error (default: info)
-	LogFile     string            `yaml:"log_file"`     // Optional log file path (if empty, logs to stderr only)
-	LogFormat   string            `yaml:"log_format"`   // text or json (default: text)
-	LogRotation LogRotationConfig `yaml:"log_rotation"` // Log rotation settings; validated even when log_file is empty
-	Metrics     MetricsConfig     `yaml:"metrics"`      // Prometheus metrics endpoint
-	Health      HealthConfig      `yaml:"health"`       // HTTP health endpoints (/healthz, /readyz, /status)
-	Webhook     WebhookConfig     `yaml:"webhook"`      // Webhook notifications for critical events
+	ClickHouse    ClickHouseConfig    `yaml:"clickhouse"`
+	Exporters     ExportersConfig     `yaml:"exporters"` // OTEL gRPC + Splunk HEC sinks
+	Monitor       MonitorConfig       `yaml:"monitor"`
+	Filters       FiltersConfig       `yaml:"filters"`
+	HA            HAConfig            `yaml:"ha"`
+	LogLevel      string              `yaml:"log_level"`      // debug, info, warn, error (default: info)
+	LogFile       string              `yaml:"log_file"`       // Optional log file path (if empty, logs to stderr only)
+	LogFormat     string              `yaml:"log_format"`     // text or json (default: text)
+	LogRotation   LogRotationConfig   `yaml:"log_rotation"`   // Log rotation settings; validated even when log_file is empty
+	Metrics       MetricsConfig       `yaml:"metrics"`        // Prometheus metrics endpoint
+	Health        HealthConfig        `yaml:"health"`         // HTTP health endpoints (/healthz, /readyz, /status)
+	Webhook       WebhookConfig       `yaml:"webhook"`        // Webhook notifications for selected operational and analysis events
+	DatadogEvents DatadogEventsConfig `yaml:"datadog_events"` // Optional Datadog Event Management destination for analysis findings
 
 	// DeprecationWarnings holds warnings for deprecated config fields found
 	// during loading. Not part of the YAML schema — populated by LoadConfig.
@@ -330,13 +370,33 @@ type HealthClusterConfig struct {
 	Peers         []string `yaml:"peers"`           // Static peer list, e.g. ["node-0:8686", "node-1:8686"]
 }
 
-// WebhookConfig configures outbound webhook notifications on critical events.
+// WebhookConfig configures outbound webhook notifications on selected events.
 // Compatible with Slack incoming webhooks — sends JSON with a "text" field.
 type WebhookConfig struct {
 	Enabled  bool     `yaml:"enabled"`   // Enable webhook notifications (default: false)
 	URL      string   `yaml:"url"`       // Webhook URL (e.g. Slack incoming webhook)
 	TimeoutS int      `yaml:"timeout_s"` // HTTP timeout in seconds (default: 10)
 	Events   []string `yaml:"events"`    // Events to notify on (default: all)
+}
+
+const (
+	DefaultDatadogEventsTimeoutS = 10
+	MaxDatadogEventsTimeoutS     = 60
+)
+
+// DatadogEventsConfig configures the separate Datadog Events API v2
+// destination used only by explicit analysis notification runs. These
+// credentials are independent of OTLP exporter configuration.
+type DatadogEventsConfig struct {
+	Enabled            bool   `yaml:"enabled"`
+	Site               string `yaml:"site"`
+	APIKey             string `yaml:"api_key"`
+	APIKeyFile         string `yaml:"api_key_file"`
+	ApplicationKey     string `yaml:"application_key"`
+	ApplicationKeyFile string `yaml:"application_key_file"`
+	TimeoutS           int    `yaml:"timeout_s"`
+	Environment        string `yaml:"environment"`
+	Service            string `yaml:"service"`
 }
 
 type MonitorConfig struct {
@@ -439,7 +499,20 @@ type RedactionRule struct {
 	Replacement string `yaml:"replacement"` // Replacement text (default: "[REDACTED]")
 }
 
+// QueryTextMode controls which representation of SQL query text may cross the
+// final export boundary. The empty value is treated as raw for Config values
+// constructed directly in tests; LoadConfig always resolves it explicitly.
+type QueryTextMode string
+
+const (
+	QueryTextModeRaw            QueryTextMode = "raw"
+	QueryTextModeRedacted       QueryTextMode = "redacted"
+	QueryTextModeNormalizedOnly QueryTextMode = "normalized_only"
+	QueryTextModeNone           QueryTextMode = "none"
+)
+
 type FiltersConfig struct {
+	QueryTextMode       QueryTextMode   `yaml:"query_text_mode"`      // Exported SQL representation: raw, redacted, normalized_only, or none (default: raw)
 	WhitelistOperations []string        `yaml:"whitelist_operations"` // Operation names to include, supports * wildcard (e.g., "DB::Interpreter*::execute()")
 	BlacklistOperations []string        `yaml:"blacklist_operations"` // Operation name substrings to exclude at SQL level (e.g., "MergeTreeIndex", "VFSWrite"). Uses LIKE '%value%' matching.
 	WhitelistIPs        []string        `yaml:"whitelist_ips"`        // IP addresses to include (if set, only these are allowed)
@@ -449,11 +522,23 @@ type FiltersConfig struct {
 	RedactQueries       []RedactionRule `yaml:"redact_queries"`       // Regex-based redaction rules applied to query text before export
 }
 
+// EffectiveQueryTextMode returns the privacy mode after applying the
+// compatibility default used by directly constructed Config values.
+func (f FiltersConfig) EffectiveQueryTextMode() QueryTextMode {
+	if f.QueryTextMode == "" {
+		if len(f.RedactQueries) > 0 {
+			return QueryTextModeRedacted
+		}
+		return QueryTextModeRaw
+	}
+	return f.QueryTextMode
+}
+
 // DefaultConfigPath is the conventional system-install config location.
 const DefaultConfigPath = "/etc/click-dog/click-dog.yaml"
 
 // DefaultConfigFlag is the sentinel flag default used by all subcommands.
-// ResolveConfigPath uses this to detect "user didn't pass -config".
+// ResolveConfigPath uses this to detect "user didn't pass --config".
 const DefaultConfigFlag = "click-dog.yaml"
 
 // ResolveConfigPath returns the config path to use. If the user passed a
@@ -504,7 +589,7 @@ func resolveConfigPath(userPath, systemPath, localPath string) (string, error) {
 		return "", accessErr
 	}
 
-	return "", fmt.Errorf("no config file found at %s or ./%s — pass -config <path> to specify", systemPath, localPath)
+	return "", fmt.Errorf("no config file found at %s or ./%s — pass --config <path> to specify", systemPath, localPath)
 }
 
 // configAccessError describes a config path that exists but can't be read,
@@ -550,6 +635,7 @@ func LoadConfig(path string) (*Config, error) {
 	topologyAuditEnabledSet := lookupPath(raw, "monitor.topology_audit.enabled")
 	otlpMetricsInheritSet := lookupPath(raw, "metrics.otlp.inherit_otel_connection")
 	otlpMetricsIntervalSet := lookupPath(raw, "metrics.otlp.interval_seconds")
+	queryTextModeSet := lookupPath(raw, "filters.query_text_mode")
 
 	// Strict decode: reject unknown keys so a typo (e.g. check_intervla_s) — or
 	// the removed legacy top-level otel: key — fails fast at load instead of
@@ -559,6 +645,9 @@ func LoadConfig(path string) (*Config, error) {
 	dec.KnownFields(true)
 	if err := dec.Decode(&config); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
+	}
+	if queryTextModeSet && strings.TrimSpace(string(config.Filters.QueryTextMode)) == "" {
+		return nil, errors.New("filters.query_text_mode must be one of: raw, redacted, normalized_only, none; got an empty value")
 	}
 	config.DeprecationWarnings = deprecationWarnings
 	config.EnvWarnings = envWarnings
@@ -587,6 +676,11 @@ func LoadConfig(path string) (*Config, error) {
 	config.Metrics.OTLP.CollectorAddress = expandEnvVars(config.Metrics.OTLP.CollectorAddress)
 	config.Metrics.OTLP.Host = expandEnvVars(config.Metrics.OTLP.Host)
 	config.Metrics.OTLP.ServiceName = expandEnvVars(config.Metrics.OTLP.ServiceName)
+	config.DatadogEvents.Site = expandEnvVars(config.DatadogEvents.Site)
+	config.DatadogEvents.APIKey = expandEnvVars(config.DatadogEvents.APIKey)
+	config.DatadogEvents.ApplicationKey = expandEnvVars(config.DatadogEvents.ApplicationKey)
+	config.DatadogEvents.Environment = expandEnvVars(config.DatadogEvents.Environment)
+	config.DatadogEvents.Service = expandEnvVars(config.DatadogEvents.Service)
 
 	// Resolve *_file secrets after inline env expansion. resolveSecret receives
 	// the RAW *_file field and expands the path itself (the path may be
@@ -609,6 +703,14 @@ func LoadConfig(path string) (*Config, error) {
 			config.Exporters.SplunkHEC[i].TokenFile); err != nil {
 			return nil, err
 		}
+	}
+	if config.DatadogEvents.APIKey, err = resolveSecret("datadog_events.api_key",
+		config.DatadogEvents.APIKey, config.DatadogEvents.APIKeyFile); err != nil {
+		return nil, err
+	}
+	if config.DatadogEvents.ApplicationKey, err = resolveSecret("datadog_events.application_key",
+		config.DatadogEvents.ApplicationKey, config.DatadogEvents.ApplicationKeyFile); err != nil {
+		return nil, err
 	}
 
 	// Set defaults
@@ -658,6 +760,20 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if config.Monitor.ExportTimeoutS == 0 && !exportTimeoutSet {
 		config.Monitor.ExportTimeoutS = DefaultExportTimeoutS
+	}
+	// Migrate legacy redact_queries configs without risking a silent privacy
+	// regression during upgrade. New configs default to raw; an older config
+	// that has redaction rules but no query_text_mode is promoted to the new,
+	// fail-closed redacted mode. Unlike the legacy implementation, unmatched
+	// statements are omitted, so the warning calls out that stricter behavior.
+	if !queryTextModeSet {
+		if len(config.Filters.RedactQueries) > 0 {
+			config.Filters.QueryTextMode = QueryTextModeRedacted
+			config.ValidationWarnings = append(config.ValidationWarnings,
+				"filters.redact_queries is configured without filters.query_text_mode; selecting fail-closed query_text_mode: redacted for migration safety. Unlike legacy redaction, statements that match no rule are now omitted. Set the mode explicitly to complete the migration")
+		} else {
+			config.Filters.QueryTextMode = QueryTextModeRaw
+		}
 	}
 
 	// Set defaults for exporters
@@ -793,6 +909,12 @@ func LoadConfig(path string) (*Config, error) {
 	if config.Webhook.TimeoutS == 0 {
 		config.Webhook.TimeoutS = 10
 	}
+	config.DatadogEvents.Site = strings.ToLower(strings.TrimSpace(config.DatadogEvents.Site))
+	config.DatadogEvents.Environment = strings.TrimSpace(config.DatadogEvents.Environment)
+	config.DatadogEvents.Service = strings.TrimSpace(config.DatadogEvents.Service)
+	if config.DatadogEvents.TimeoutS == 0 {
+		config.DatadogEvents.TimeoutS = DefaultDatadogEventsTimeoutS
+	}
 
 	// HA defaults — applied when Keeper hosts are configured (which is what
 	// turns election on; see HAConfig.Active).
@@ -807,7 +929,7 @@ func LoadConfig(path string) (*Config, error) {
 
 	// Non-fatal advisories computed once defaults are settled (they read the
 	// resolved config). Surfaced as WARN by main/analyze.
-	config.ValidationWarnings = config.validationWarnings()
+	config.ValidationWarnings = append(config.ValidationWarnings, config.validationWarnings()...)
 
 	// Validate configuration
 	if err := config.Validate(); err != nil {
@@ -854,6 +976,19 @@ func (c *Config) validationWarnings() []string {
 	warnings = append(warnings, c.topologyAuditWarnings()...)
 	warnings = append(warnings, c.keeperSecurityWarnings()...)
 	warnings = append(warnings, c.tlsMaterialWarnings()...)
+	warnings = append(warnings, c.queryTextModeWarnings()...)
+	return warnings
+}
+
+func (c *Config) queryTextModeWarnings() []string {
+	mode := c.Filters.EffectiveQueryTextMode()
+	var warnings []string
+	if mode == QueryTextModeNormalizedOnly && !c.Monitor.ShouldEnrichFromQueryLog() {
+		warnings = append(warnings, "filters.query_text_mode is normalized_only while monitor.enrich_from_query_log is false; scheduled/native spans cannot receive query_log normalized previews and will omit query text unless another explicitly normalized span attribute is present")
+	}
+	if (mode == QueryTextModeNormalizedOnly || mode == QueryTextModeNone) && len(c.Filters.RedactQueries) > 0 {
+		warnings = append(warnings, fmt.Sprintf("filters.redact_queries is ignored when filters.query_text_mode is %s; remove the inert rules after confirming the stricter query-text policy", mode))
+	}
 	return warnings
 }
 
@@ -955,7 +1090,7 @@ func (c *Config) Validate() error {
 	// Cluster name is interpolated into SQL (cluster('name', table)); restrict
 	// to safe identifier characters to structurally prevent SQL injection.
 	if c.ClickHouse.Cluster != "" && !safeIdentifierPattern.MatchString(c.ClickHouse.Cluster) {
-		errs = append(errs, fmt.Sprintf("clickhouse.cluster contains unsafe characters (only alphanumeric, hyphens, underscores allowed), got %q", c.ClickHouse.Cluster))
+		errs = append(errs, fmt.Sprintf("clickhouse.cluster must start with an ASCII letter and then contain only letters, digits, hyphens, or underscores, got %q", c.ClickHouse.Cluster))
 	}
 	// use_cluster_queries fans reads across the cluster via cluster('name', …);
 	// without a cluster name buildTableRef silently falls back to the local
@@ -1213,6 +1348,14 @@ func (c *Config) Validate() error {
 		errs = append(errs, "filters.whitelist_users / filters.blacklist_users require query_log enrichment (set monitor.enrich_from_query_log: true or remove the user filter)")
 	}
 
+	// The IP whitelist has the same dependency for the same reason: span-log
+	// rows carry no client address, so scheduled mode resolves it through
+	// query_log. Without enrichment every span resolves to "" and the
+	// whitelist drops the whole cycle.
+	if len(c.Filters.WhitelistIPs) > 0 && !c.Monitor.ShouldEnrichFromQueryLog() {
+		errs = append(errs, "filters.whitelist_ips requires query_log enrichment (set monitor.enrich_from_query_log: true or remove the IP whitelist)")
+	}
+
 	// Filter IP whitelist validation: each entry must parse either as a plain
 	// IP (e.g. "10.0.0.1") or as a CIDR (e.g. "10.0.0.0/8"). The filter package
 	// rejects bad CIDRs at construction time, but plain-IP entries are
@@ -1231,16 +1374,38 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// Filter redaction rule validation
-	for i, rule := range c.Filters.RedactQueries {
-		pattern := strings.TrimSpace(rule.Pattern)
-		if pattern == "" {
-			errs = append(errs, fmt.Sprintf("filters.redact_queries[%d].pattern must not be empty", i))
-			continue
+	// Query-text privacy mode and redaction rule validation. normalized is
+	// intentionally not accepted: normalized_only names the guarantee that raw
+	// statement fields are removed, rather than merely enabling enrichment.
+	queryTextMode := c.Filters.EffectiveQueryTextMode()
+	switch queryTextMode {
+	case QueryTextModeRaw, QueryTextModeRedacted, QueryTextModeNormalizedOnly, QueryTextModeNone:
+	default:
+		errs = append(errs, fmt.Sprintf("filters.query_text_mode must be one of: raw, redacted, normalized_only, none; got %q", queryTextMode))
+	}
+
+	// Redaction-rule invariants are also enforced by NewQueryFilter so directly
+	// constructed configs cannot bypass the final privacy boundary. Only the
+	// redacted mode consumes and therefore compiles rules. normalized_only/none
+	// ignore stale rules with a warning; raw rejects them because it would
+	// otherwise look redacted while exporting the original statement.
+	if queryTextMode == QueryTextModeRedacted {
+		for i, rule := range c.Filters.RedactQueries {
+			pattern := strings.TrimSpace(rule.Pattern)
+			if pattern == "" {
+				errs = append(errs, fmt.Sprintf("filters.redact_queries[%d].pattern must not be empty", i))
+				continue
+			}
+			if _, err := regexp.Compile(pattern); err != nil {
+				errs = append(errs, fmt.Sprintf("filters.redact_queries[%d].pattern is invalid regex: %v", i, err))
+			}
 		}
-		if _, err := regexp.Compile(pattern); err != nil {
-			errs = append(errs, fmt.Sprintf("filters.redact_queries[%d].pattern is invalid regex: %v", i, err))
-		}
+	}
+	if queryTextMode == QueryTextModeRedacted && len(c.Filters.RedactQueries) == 0 {
+		errs = append(errs, "filters.query_text_mode redacted requires at least one valid filters.redact_queries rule; click-dog will not fall back to raw query text")
+	}
+	if queryTextMode == QueryTextModeRaw && len(c.Filters.RedactQueries) > 0 {
+		errs = append(errs, fmt.Sprintf("filters.redact_queries is only used when filters.query_text_mode is redacted; remove the rules or set query_text_mode: redacted (currently %s)", queryTextMode))
 	}
 
 	// Log level validation
@@ -1314,12 +1479,13 @@ func (c *Config) Validate() error {
 		if c.Webhook.URL == "" {
 			errs = append(errs, "webhook.url is required when webhook is enabled")
 		} else if reason := validateWebhookURL(c.Webhook.URL); reason != "" {
-			errs = append(errs, fmt.Sprintf("webhook.url %q is invalid: %s", c.Webhook.URL, reason))
+			errs = append(errs, fmt.Sprintf("webhook.url is invalid: %s", reason))
 		}
 		if c.Webhook.TimeoutS < 0 {
 			errs = append(errs, fmt.Sprintf("webhook.timeout_s cannot be negative, got %d", c.Webhook.TimeoutS))
 		}
 		validEvents := map[string]bool{
+			"analysis_findings":      true,
 			"circuit_breaker_opened": true,
 			"circuit_breaker_closed": true,
 			"backfill_complete":      true,
@@ -1332,6 +1498,32 @@ func (c *Config) Validate() error {
 			if !validEvents[event] {
 				errs = append(errs, fmt.Sprintf("webhook.events contains unknown event %q", event))
 			}
+		}
+	}
+
+	// Datadog Event Management validation. The credentials are deliberately
+	// separate from exporters.otel: an OTLP collector or Agent connection does
+	// not authorize the Events API.
+	if c.DatadogEvents.Enabled {
+		if c.DatadogEvents.Site == "" {
+			errs = append(errs, "datadog_events.site is required when datadog_events is enabled")
+		} else if _, err := ValidateDatadogSite(c.DatadogEvents.Site); err != nil {
+			errs = append(errs, fmt.Sprintf("datadog_events.site %q is invalid: %v", c.DatadogEvents.Site, err))
+		}
+		if strings.TrimSpace(c.DatadogEvents.APIKey) == "" {
+			errs = append(errs, "datadog_events.api_key or api_key_file is required when datadog_events is enabled")
+		}
+		if strings.TrimSpace(c.DatadogEvents.ApplicationKey) == "" {
+			errs = append(errs, "datadog_events.application_key or application_key_file is required when datadog_events is enabled")
+		}
+		if c.DatadogEvents.TimeoutS <= 0 || c.DatadogEvents.TimeoutS > MaxDatadogEventsTimeoutS {
+			errs = append(errs, fmt.Sprintf("datadog_events.timeout_s must be between 1 and %d when enabled, got %d", MaxDatadogEventsTimeoutS, c.DatadogEvents.TimeoutS))
+		}
+		if reason := ValidateDatadogTagValue("datadog_events.environment", c.DatadogEvents.Environment); reason != "" {
+			errs = append(errs, reason)
+		}
+		if reason := ValidateDatadogTagValue("datadog_events.service", c.DatadogEvents.Service); reason != "" {
+			errs = append(errs, reason)
 		}
 	}
 

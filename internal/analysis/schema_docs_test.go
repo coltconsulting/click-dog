@@ -9,17 +9,37 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/coltconsulting/click-dog/internal/testutil"
 )
 
 func TestDocsAnalysisSchemasMatchGoContract(t *testing.T) {
+	requireInternalDocs(t)
+
 	reportSchema := readDocsSchema(t, "analysis-report-v1.schema.json")
+	comparisonReportSchema := readDocsSchema(t, "analysis-report-v2.schema.json")
 	findingSchema := readDocsSchema(t, "analysis-finding-v1.schema.json")
+	baselineSchema := readDocsSchema(t, "analysis-baseline-v1.schema.json")
+	notificationSchema := readDocsSchema(t, "analysis-notification-v1.schema.json")
 
 	requireSchemaConst(t, reportSchema, "schema_version", ReportSchemaVersion)
 	requireRequiredFields(t, "report", reportSchema, requiredJSONFields(reflect.TypeOf(AnalysisReport{})))
 	requireRequiredFields(t, "report.config", schemaDef(t, reportSchema, "config"), requiredJSONFields(reflect.TypeOf(ReportConfig{})))
 	requireRequiredFields(t, "report.coverage", schemaDef(t, reportSchema, "coverage"), requiredJSONFields(reflect.TypeOf(CoverageSummary{})))
 	requireRequiredFields(t, "report.analyzer_run", schemaDef(t, reportSchema, "analyzer_run"), requiredJSONFields(reflect.TypeOf(AnalyzerRun{})))
+
+	requireSchemaConst(t, comparisonReportSchema, "schema_version", ComparisonReportSchemaVersion)
+	v2Required := append(requiredJSONFields(reflect.TypeOf(AnalysisReport{})), "comparison")
+	sort.Strings(v2Required)
+	requireRequiredFields(t, "comparison report", comparisonReportSchema, v2Required)
+	requireRequiredFields(t, "comparison report.comparison", schemaDef(t, comparisonReportSchema, "comparison"), requiredJSONFields(reflect.TypeOf(ComparisonSummary{})))
+	requireRequiredFields(t, "comparison report.counts", schemaDef(t, comparisonReportSchema, "comparison_counts"), requiredJSONFields(reflect.TypeOf(ComparisonCounts{})))
+
+	requireSchemaConst(t, baselineSchema, "schema_version", BaselineSchemaVersion)
+	requireRequiredFields(t, "baseline", baselineSchema, requiredJSONFields(reflect.TypeOf(BaselineSnapshot{})))
+	requireRequiredFields(t, "baseline.compatibility", schemaDef(t, baselineSchema, "compatibility"), requiredJSONFields(reflect.TypeOf(BaselineCompatibility{})))
+	requireRequiredFields(t, "baseline.exact_group", schemaDef(t, baselineSchema, "exact_group"), requiredJSONFields(reflect.TypeOf(BaselineExactGroup{})))
+	requireRequiredFields(t, "baseline.exception_count", schemaDef(t, baselineSchema, "exception_count"), requiredJSONFields(reflect.TypeOf(BaselineExceptionCount{})))
 
 	requireSchemaConst(t, findingSchema, "schema_version", FindingSchemaVersion)
 	requireRequiredFields(t, "finding", findingSchema, requiredJSONFields(reflect.TypeOf(Finding{})))
@@ -28,9 +48,47 @@ func TestDocsAnalysisSchemasMatchGoContract(t *testing.T) {
 		string(SeverityWarning),
 		string(SeverityInfo),
 	})
+
+	requireSchemaConst(t, notificationSchema, "schema_version", NotificationSchemaVersion)
+	requireRequiredFields(t, "notification summary", notificationSchema, requiredJSONFields(reflect.TypeOf(NotificationSummary{})))
+	requireRequiredFields(t, "notification severity counts", schemaDef(t, notificationSchema, "severity_counts"), requiredJSONFields(reflect.TypeOf(SeverityCounts{})))
+	requireRequiredFields(t, "notification condition", schemaDef(t, notificationSchema, "condition"), requiredJSONFields(reflect.TypeOf(NotificationCondition{})))
+}
+
+func TestDocsAnalysisNotificationExampleMatchesGoContract(t *testing.T) {
+	requireInternalDocs(t)
+
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "docs", "examples", "analysis-notification-summary.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("decode notification example: %v", err)
+	}
+	requireObjectKeys(t, "notification example", raw, allJSONFields(reflect.TypeOf(NotificationSummary{})))
+	requireRequiredKeys(t, "notification example", raw, requiredJSONFields(reflect.TypeOf(NotificationSummary{})))
+	requireObjectKeys(t, "notification total counts", objectValue(t, raw, "total_finding_counts"), allJSONFields(reflect.TypeOf(SeverityCounts{})))
+	for i, item := range arrayValue(t, raw, "conditions") {
+		condition, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("condition[%d] is %T, want object", i, item)
+		}
+		requireObjectKeys(t, "notification condition", condition, allJSONFields(reflect.TypeOf(NotificationCondition{})))
+		requireRequiredKeys(t, "notification condition", condition, requiredJSONFields(reflect.TypeOf(NotificationCondition{})))
+	}
+	var summary NotificationSummary
+	if err := json.Unmarshal(data, &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary.SchemaVersion != NotificationSchemaVersion || len(summary.Conditions) == 0 {
+		t.Fatalf("notification example = %+v", summary)
+	}
 }
 
 func TestDocsAnalysisReportExampleMatchesGoContract(t *testing.T) {
+	requireInternalDocs(t)
+
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), "docs", "examples", "analysis-report-redacted.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -79,6 +137,40 @@ func TestDocsAnalysisReportExampleMatchesGoContract(t *testing.T) {
 	}
 }
 
+func TestDocsAnalysisBaselineAndComparisonExamplesMatchGoContract(t *testing.T) {
+	requireInternalDocs(t)
+
+	baselinePath := filepath.Join(repoRoot(t), "docs", "examples", "analysis-baseline.json")
+	baseline, err := LoadBaseline(baselinePath)
+	if err != nil {
+		t.Fatalf("load baseline example: %v", err)
+	}
+	if baseline.SchemaVersion != BaselineSchemaVersion {
+		t.Fatalf("baseline example schema_version = %q", baseline.SchemaVersion)
+	}
+
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "docs", "examples", "analysis-comparison-report.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("decode comparison example as object: %v", err)
+	}
+	requireObjectKeys(t, "comparison report example", raw, allJSONFields(reflect.TypeOf(AnalysisReport{})))
+	requireRequiredKeys(t, "comparison report example", raw, append(requiredJSONFields(reflect.TypeOf(AnalysisReport{})), "comparison"))
+	requireObjectKeys(t, "comparison summary example", objectValue(t, raw, "comparison"), allJSONFields(reflect.TypeOf(ComparisonSummary{})))
+	requireRequiredKeys(t, "comparison summary example", objectValue(t, raw, "comparison"), requiredJSONFields(reflect.TypeOf(ComparisonSummary{})))
+
+	var report AnalysisReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatalf("decode comparison example as AnalysisReport: %v", err)
+	}
+	if report.SchemaVersion != ComparisonReportSchemaVersion || report.Comparison == nil {
+		t.Fatalf("comparison example = %+v", report)
+	}
+}
+
 func readDocsSchema(t *testing.T, name string) map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), "docs", "schemas", name))
@@ -90,6 +182,30 @@ func readDocsSchema(t *testing.T, name string) map[string]any {
 		t.Fatalf("decode %s: %v", name, err)
 	}
 	return schema
+}
+
+func requireInternalDocs(t *testing.T) {
+	t.Helper()
+
+	docsRoot := filepath.Join(repoRoot(t), "docs")
+	info, err := os.Stat(docsRoot)
+	if err == nil {
+		if !info.IsDir() {
+			t.Fatalf("%s exists but is not a directory", docsRoot)
+		}
+		return
+	}
+	if os.IsNotExist(err) {
+		public, publicErr := testutil.IsPublicSourceTree(repoRoot(t))
+		if publicErr != nil {
+			t.Fatalf("identify public source tree: %v", publicErr)
+		}
+		if !public {
+			t.Fatal("docs tree is missing from the internal repository")
+		}
+		t.Skip("docs are internal-only (export-ignored); schema contracts are enforced in the internal repository")
+	}
+	t.Fatalf("stat %s: %v", docsRoot, err)
 }
 
 func repoRoot(t *testing.T) string {

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	lru "github.com/hashicorp/golang-lru/v2"
 
 	"github.com/coltconsulting/click-dog/internal/clickhouse"
@@ -17,11 +18,24 @@ import (
 	"github.com/coltconsulting/click-dog/internal/webhook"
 )
 
+// LiveReader is the ClickHouse read surface required by a scheduled cycle.
+// *clickhouse.ClickHouseReader is the production implementation.
+type LiveReader interface {
+	IsHealthy(ctx context.Context) bool
+	FetchOpenTelemetrySpansWithOpts(ctx context.Context, minTraceDurationMs int, lookback time.Duration, limit int, opts clickhouse.FetchOpts) ([]model.OpenTelemetrySpan, error)
+	FetchQueryLogByQueryIDs(ctx context.Context, queryIDs []string, lookbackDays int) (map[string]model.QueryLog, error)
+	// FetchTraceQueryIDs returns the clickhouse.query_id values recorded in the
+	// span log for each trace. The IP whitelist uses it when a span page holds
+	// a trace but none of its query spans, so resolution does not depend on
+	// which page the root landed in.
+	FetchTraceQueryIDs(ctx context.Context, traceIDs []uuid.UUID, lookbackDays int) (map[uuid.UUID][]string, error)
+}
+
 // Pipeline owns the live fetch → filter → enrich → export path plus its
 // protection hooks. Callers wire dependencies once and then drive cycles
 // through Process.
 type Pipeline struct {
-	Reader         *clickhouse.ClickHouseReader
+	Reader         LiveReader
 	Exporter       model.SpanExporter
 	Filter         *filter.QueryFilter
 	Config         *config.Config
@@ -89,7 +103,7 @@ func (p *Pipeline) Process(ctx context.Context) error {
 
 	// Check circuit breaker before proceeding
 	if p.CircuitBreaker != nil && !p.CircuitBreaker.Allow() {
-		return handleCircuitOpen(ctx, p.Exporter, p.Config, p.CircuitBreaker, p.Heartbeat, p.CanaryQuerier, p.Metrics, p.Webhook, cycleStart)
+		return handleCircuitOpen(ctx, p.Exporter, p.Config, p.Filter, p.CircuitBreaker, p.Heartbeat, p.CanaryQuerier, p.Metrics, p.Webhook, cycleStart)
 	}
 
 	// If Allow() transitioned the circuit breaker to half-open, reflect that in metrics.
@@ -98,7 +112,7 @@ func (p *Pipeline) Process(ctx context.Context) error {
 	}
 
 	// Check if backoff is elevated and canary should run instead of full fetch.
-	if ran, canaryErr := handleElevatedBackoff(ctx, p.Exporter, p.Config, p.CircuitBreaker, p.Heartbeat, p.Poller, p.CanaryQuerier, p.Metrics, p.Webhook, cycleStart); ran {
+	if ran, canaryErr := handleElevatedBackoff(ctx, p.Exporter, p.Config, p.Filter, p.CircuitBreaker, p.Heartbeat, p.Poller, p.CanaryQuerier, p.Metrics, p.Webhook, cycleStart); ran {
 		return canaryErr
 	}
 

@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"io"
+	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -24,8 +26,12 @@ func TestSubcommandFlagParsing_NoProcessExit(t *testing.T) {
 		run  func([]string, io.Writer, io.Writer) int
 	}{
 		{"check", runCheck},
+		{"validate", runValidate},
 		{"init", runInit},
 		{"flush", runFlush},
+		{"test", runTest},
+		{"test export", runTestExport},
+		{"test tracing", runTestTracing},
 		{"test-span", runTestSpan},
 		{"self-update", runSelfUpdate},
 		{"create-dashboards", runCreateDashboards},
@@ -46,5 +52,69 @@ func TestSubcommandFlagParsing_NoProcessExit(t *testing.T) {
 				t.Errorf("%s --definitely-not-a-real-flag: exit = %d, want 2", h.name, code)
 			}
 		})
+	}
+}
+
+// singleDashLongOption matches a single-dash long option like ` -config` while
+// letting `--config`, single-char shorts (`-c`), hyphenated words
+// (`test-span`), and dates through. It pins the standardized --flag spelling.
+var singleDashLongOption = regexp.MustCompile(`(?:^|[\s"'(\[` + "`" + `])-[a-z][a-z0-9][a-z0-9-]*`)
+
+// TestHelpOutput_UsesDoubleDashLongOptions pins every command's help text (and
+// the root banner) to the documented --flag spelling, so generated help cannot
+// drift back to advertising single-dash long options. Lines that deliberately
+// name the deprecated mode-flag spellings are exempt.
+func TestHelpOutput_UsesDoubleDashLongOptions(t *testing.T) {
+	outputs := map[string]string{}
+
+	handlers := []struct {
+		name string
+		run  func([]string, io.Writer, io.Writer) int
+		args []string
+	}{
+		{"check", runCheck, []string{"--help"}},
+		{"validate", runValidate, []string{"--help"}},
+		{"init", runInit, []string{"--help"}},
+		{"flush", runFlush, []string{"--help"}},
+		{"analyze", runAnalyze, []string{"--help"}},
+		{"analyze queries", runAnalyzeQueries, []string{"--help"}},
+		{"analyze trace", runAnalyzeTrace, []string{"--help"}},
+		{"test", runTest, []string{"--help"}},
+		{"test export", runTestExport, []string{"--help"}},
+		{"test tracing", runTestTracing, []string{"--help"}},
+		{"test-span", runTestSpan, []string{"--help"}},
+		{"self-update", runSelfUpdate, []string{"--help"}},
+		{"create-dashboards", runCreateDashboards, []string{"--help"}},
+		{"deploy status", runDeployStatus, []string{"--help"}},
+		{"deploy kubernetes", runDeployKubernetes, []string{"--help"}},
+		{"deploy docker", runDeployDocker, []string{"--help"}},
+	}
+	for _, h := range handlers {
+		var out, errOut bytes.Buffer
+		h.run(h.args, &out, &errOut)
+		outputs[h.name] = out.String() + errOut.String()
+	}
+
+	var banner bytes.Buffer
+	printUsage(&banner)
+	outputs["root banner"] = banner.String()
+
+	var backfillHelp bytes.Buffer
+	_, _ = rewriteBackfillArgs([]string{"-h"}, &backfillHelp)
+	outputs["backfill"] = backfillHelp.String()
+
+	for name, text := range outputs {
+		if text == "" {
+			t.Errorf("%s: produced no help output", name)
+			continue
+		}
+		for _, line := range strings.Split(text, "\n") {
+			if strings.Contains(strings.ToLower(line), "deprecated") {
+				continue
+			}
+			if m := singleDashLongOption.FindString(line); m != "" {
+				t.Errorf("%s help advertises single-dash long option %q in line %q", name, strings.TrimSpace(m), line)
+			}
+		}
 	}
 }

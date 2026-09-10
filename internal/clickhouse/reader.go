@@ -6,13 +6,17 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"math"
 	"os"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"github.com/coltconsulting/click-dog/internal/clicklog"
 	"github.com/coltconsulting/click-dog/internal/config"
@@ -58,6 +62,10 @@ const tblProcesses = "{TABLE_PROCESSES}"
 const queryLogNormalizedColumns = "{QUERY_LOG_NORMALIZED_COLUMNS}"
 const queryLogOperationColumn = "{QUERY_LOG_OPERATION_COLUMN}"
 const processesNormalizedColumn = "{PROCESSES_NORMALIZED_COLUMN}"
+
+// tracingTestQuery is deliberately constant: the operator smoke test must be
+// safe, cheap, and recognizable in ClickHouse diagnostics.
+const tracingTestQuery = "SELECT 1 /* click-dog test tracing */"
 
 // enrichSelectAnchor is a dedicated marker setUserFilter replaces with the
 // whitelist clause (or strips entirely). Kept distinct from any functional
@@ -129,6 +137,7 @@ const queryLogSelectSQL = `
 				client_name,
 				client_hostname,
 				IPv6NumToString(address) as client_address,
+				IPv6NumToString(initial_address) as initial_address,
 				databases,
 				tables,
 				exception_code,
@@ -196,6 +205,18 @@ const traceIDByQueryIDSelectSQL = `
 			LIMIT ?
 		`
 
+// traceQueryIDsSelectSQL is the inverse bridge: the query IDs recorded on a
+// trace's query spans. The IP whitelist uses it when a span page carries a
+// trace's children but not its query root, so the trace's client can be
+// resolved through query_log regardless of which page the root landed in.
+const traceQueryIDsSelectSQL = `
+			SELECT DISTINCT trace_id, attribute['clickhouse.query_id'] AS query_id
+			FROM ` + tblSpanLog + `
+			WHERE trace_id IN ?
+			  AND finish_date >= today() - INTERVAL ? DAY
+			  AND attribute['clickhouse.query_id'] != ''
+		`
+
 // queryLogEnrichSelectSQL fetches query_log rows for enrichment by query_id.
 // Query text is intentionally omitted — it can be large and sensitive, and
 // db.statement already carries the SQL from the span attributes.
@@ -215,6 +236,7 @@ const queryLogEnrichSelectSQL = `
 				client_name,
 				client_hostname,
 				IPv6NumToString(address) as client_address,
+				IPv6NumToString(initial_address) as initial_address,
 				databases,
 				tables,
 				exception_code,
@@ -241,8 +263,12 @@ var queryFamilyExactGroupsSQL = fmt.Sprintf(`
 				normalized_query_hash,
 				min(normalizeQuery(query)) AS normalized_query,
 				count() AS execution_count,
+				countIf(type = 'QueryFinish') AS successful_count,
+				countIf(type = 'ExceptionWhileProcessing') AS failed_count,
 				toFloat64(quantileTDigest(0.95)(query_duration_ms)) AS p95_duration_ms,
 				toFloat64(quantileTDigest(0.99)(query_duration_ms)) AS p99_duration_ms,
+				tupleElement(sumMap([toInt64(exception_code)], [toUInt64(type = 'ExceptionWhileProcessing')]), 1) AS exception_codes,
+				tupleElement(sumMap([toInt64(exception_code)], [toUInt64(type = 'ExceptionWhileProcessing')]), 2) AS exception_counts,
 				max(memory_usage) AS max_memory_usage,
 				toFloat64(quantileTDigest(0.95)(read_rows)) AS p95_read_rows,
 				toFloat64(quantileTDigest(0.95)(read_bytes)) AS p95_read_bytes,
@@ -298,11 +324,14 @@ const currentQueryCandidatesSelectSQL = `
 type ClickHouseReader struct {
 	conn         driver.Conn
 	queryTimeout time.Duration
+	spanScanMu   sync.Mutex
+	spanScan     spanScanState
 
 	// Precomputed SQL templates with table references resolved at init.
 	queryLogSelect     string
 	traceIDSelect      string
 	traceIDByQueryID   string
+	traceQueryIDs      string
 	spanSelect         string
 	canarySelect       string
 	enrichSelect       string
@@ -326,6 +355,43 @@ type ClickHouseReader struct {
 	// Raw user-filter lists for the builder-based slow-query paths.
 	whitelistUsers []string
 	blacklistUsers []string
+}
+
+// spanScanState is the scheduled reader's in-memory keyset cursor. It walks
+// every eligible trace page and every span in that page before wrapping to the
+// newest row again. The dedup cache still owns delivery identity; this cursor
+// only prevents already-returned or Go-filtered rows from permanently pinning
+// the SQL LIMIT at the head of the lookback window.
+type spanScanState struct {
+	initialized bool
+	signature   spanScanSignature
+
+	traceAfterSet    bool
+	traceAfterFinish uint64
+	traceAfterID     uuid.UUID
+
+	traceIDs        []uuid.UUID
+	nextTraceFinish uint64
+	nextTraceID     uuid.UUID
+	// pageComplete is true when the current trace page came back shorter than
+	// the limit: nothing older qualifies right now, so the walk ends with this
+	// page and the next cycle starts from the newest rows again.
+	pageComplete bool
+
+	spanAfterSet    bool
+	spanAfterFinish uint64
+	spanAfterTrace  uuid.UUID
+	spanAfterID     uint64
+}
+
+type spanScanSignature struct {
+	minTraceDurationMs int
+	maxTraceDurationMs int
+	minSpanDurationMs  int
+	maxSpanDurationMs  int
+	lookback           time.Duration
+	limit              int
+	blacklist          string
 }
 
 // escapeSQL escapes single quotes for safe embedding in a SQL string literal.
@@ -486,6 +552,18 @@ func runCapabilityProbe(timeoutS int, probe func(context.Context) bool) bool {
 // applies the user-filter splice atomically — there is no separate post-
 // construction step a caller can forget.
 func NewClickHouseReader(cfg config.ClickHouseConfig, filters config.FiltersConfig) (*ClickHouseReader, error) {
+	return newClickHouseReader(context.Background(), cfg, filters, true)
+}
+
+// NewTracingTestReader opens the normal native-protocol connection under ctx
+// but skips the query-log capability probes used by scheduled processing. The
+// tracing smoke test needs only the exact span-log read path, and avoiding
+// unrelated probes keeps its workload and command-level deadline explicit.
+func NewTracingTestReader(ctx context.Context, cfg config.ClickHouseConfig) (*ClickHouseReader, error) {
+	return newClickHouseReader(ctx, cfg, config.FiltersConfig{}, false)
+}
+
+func newClickHouseReader(ctx context.Context, cfg config.ClickHouseConfig, filters config.FiltersConfig, probeCapabilities bool) (*ClickHouseReader, error) {
 	options := &clickhouse.Options{
 		Addr: []string{fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)},
 		Auth: clickhouse.Auth{
@@ -506,7 +584,11 @@ func NewClickHouseReader(cfg config.ClickHouseConfig, filters config.FiltersConf
 	}
 
 	if cfg.Secure {
+		// MinVersion is Go's current client default, stated explicitly so the
+		// floor is a property of this config rather than of the toolchain. Not
+		// a behavior change; see internal/export/otel.go for the same note.
 		tlsConfig := &tls.Config{
+			MinVersion:         tls.VersionTLS12,
 			InsecureSkipVerify: cfg.InsecureSkipVerify,
 		}
 
@@ -535,7 +617,8 @@ func NewClickHouseReader(cfg config.ClickHouseConfig, filters config.FiltersConf
 		return nil, fmt.Errorf("failed to connect to ClickHouse: %w", err)
 	}
 
-	if err := conn.Ping(context.Background()); err != nil {
+	if err := conn.Ping(ctx); err != nil {
+		_ = conn.Close()
 		if cfg.Secure && strings.Contains(err.Error(), "does not look like a TLS handshake") {
 			clicklog.Error("ClickHouse at %s:%d appears to be running in plaintext mode — set secure: false in config, or configure ClickHouse to use TLS", cfg.Host, cfg.Port)
 			return nil, fmt.Errorf("failed to ping ClickHouse (TLS handshake failed): %w", err)
@@ -555,12 +638,15 @@ func NewClickHouseReader(cfg config.ClickHouseConfig, filters config.FiltersConf
 	processesRef := buildTableRef("system.processes", cfg.Cluster, cfg.UseClusterQueries)
 	useClusterQueryLog := cfg.UseClusterQueries
 
-	queryLogNormalized := runCapabilityProbe(cfg.QueryTimeoutS, func(ctx context.Context) bool {
-		return detectQueryLogNormalizedSupport(ctx, conn, cfg.Cluster, useClusterQueryLog)
-	})
-	queryLogOperation := runCapabilityProbe(cfg.QueryTimeoutS, func(ctx context.Context) bool {
-		return detectQueryLogOperationSupport(ctx, conn, cfg.Cluster, useClusterQueryLog)
-	})
+	var queryLogNormalized, queryLogOperation bool
+	if probeCapabilities {
+		queryLogNormalized = runCapabilityProbe(cfg.QueryTimeoutS, func(ctx context.Context) bool {
+			return detectQueryLogNormalizedSupport(ctx, conn, cfg.Cluster, useClusterQueryLog)
+		})
+		queryLogOperation = runCapabilityProbe(cfg.QueryTimeoutS, func(ctx context.Context) bool {
+			return detectQueryLogOperationSupport(ctx, conn, cfg.Cluster, useClusterQueryLog)
+		})
+	}
 
 	r := &ClickHouseReader{
 		conn:               conn,
@@ -568,6 +654,7 @@ func NewClickHouseReader(cfg config.ClickHouseConfig, filters config.FiltersConf
 		queryLogSelect:     buildQueryLogSQLWithCapabilities(queryLogSelectSQL, queryLogRef, queryLogNormalized, queryLogOperation),
 		traceIDSelect:      strings.ReplaceAll(traceIDSelectSQL, tblSpanLog, spanLogRef),
 		traceIDByQueryID:   strings.ReplaceAll(traceIDByQueryIDSelectSQL, tblSpanLog, spanLogRef),
+		traceQueryIDs:      strings.ReplaceAll(traceQueryIDsSelectSQL, tblSpanLog, spanLogRef),
 		spanSelect:         strings.ReplaceAll(spanSelectSQL, tblSpanLog, spanLogRef),
 		canarySelect:       strings.ReplaceAll(canarySelectSQL, tblSpanLog, spanLogRef),
 		enrichSelect:       buildQueryLogSQLWithCapabilities(queryLogEnrichSelectSQL, queryLogRef, queryLogNormalized, queryLogOperation),
@@ -582,6 +669,27 @@ func NewClickHouseReader(cfg config.ClickHouseConfig, filters config.FiltersConf
 	}
 	r.setUserFilter(filters.WhitelistUsers, filters.BlacklistUsers)
 	return r, nil
+}
+
+// ExecuteTracingTestQuery submits the tracing smoke-test canary with both the
+// sampled upstream span context and a diagnostic query ID attached through
+// clickhouse-go's native query options. An active Go span alone is not enough
+// for native-protocol propagation.
+func (c *ClickHouseReader) ExecuteTracingTestQuery(ctx context.Context, spanContext oteltrace.SpanContext, queryID string) error {
+	queryCtx := clickhouse.Context(
+		ctx,
+		clickhouse.WithSpan(spanContext),
+		clickhouse.WithQueryID(queryID),
+	)
+
+	var result uint8
+	if err := c.conn.QueryRow(queryCtx, tracingTestQuery).Scan(&result); err != nil {
+		return fmt.Errorf("tracing test query failed: %w", err)
+	}
+	if result != 1 {
+		return fmt.Errorf("tracing test query returned %d, want 1", result)
+	}
+	return nil
 }
 
 func (c *ClickHouseReader) Close() error {
@@ -836,6 +944,7 @@ func (c *ClickHouseReader) queryLogScanDest(log *model.QueryLog) []interface{} {
 		&log.ClientName,
 		&log.ClientHostname,
 		&log.ClientAddress,
+		&log.InitialAddress,
 		&log.DatabasesVisited,
 		&log.TablesVisited,
 		&log.ExceptionCode,
@@ -935,12 +1044,18 @@ func (c *ClickHouseReader) fetchQueryFamilyExactGroups(ctx context.Context, opts
 	var groups []model.QueryFamilyExactGroup
 	for rows.Next() {
 		var group model.QueryFamilyExactGroup
+		var exceptionCodes []int64
+		var exceptionCounts []uint64
 		if err := rows.Scan(
 			&group.NormalizedQueryHash,
 			&group.NormalizedQuery,
 			&group.ExecutionCount,
+			&group.SuccessfulCount,
+			&group.FailedCount,
 			&group.P95DurationMs,
 			&group.P99DurationMs,
+			&exceptionCodes,
+			&exceptionCounts,
 			&group.MaxMemoryUsage,
 			&group.P95ReadRows,
 			&group.P95ReadBytes,
@@ -951,6 +1066,24 @@ func (c *ClickHouseReader) fetchQueryFamilyExactGroups(ctx context.Context, opts
 			&group.LastSeen,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan query family exact group: %w", err)
+		}
+		if len(exceptionCodes) != len(exceptionCounts) {
+			return nil, fmt.Errorf("failed to scan query family exact group: exception code/count length mismatch (%d != %d)", len(exceptionCodes), len(exceptionCounts))
+		}
+		for i, code := range exceptionCodes {
+			if exceptionCounts[i] == 0 {
+				continue
+			}
+			group.TopExceptions = append(group.TopExceptions, model.QueryExceptionCount{Code: int32(code), Count: exceptionCounts[i]})
+		}
+		sort.Slice(group.TopExceptions, func(i, j int) bool {
+			if group.TopExceptions[i].Count != group.TopExceptions[j].Count {
+				return group.TopExceptions[i].Count > group.TopExceptions[j].Count
+			}
+			return group.TopExceptions[i].Code < group.TopExceptions[j].Code
+		})
+		if len(group.TopExceptions) > queryfamily.TopKLimit {
+			group.TopExceptions = group.TopExceptions[:queryfamily.TopKLimit]
 		}
 		group.NormalizedQuery = queryfamily.TruncatePreview(group.NormalizedQuery, opts.MaxPreviewLength)
 		groups = append(groups, group)
@@ -1063,7 +1196,18 @@ func (c *ClickHouseReader) recentQueryCandidatesBuilder(opts RecentQueryCandidat
 // and metadata when normalized support is available; callers must bound the
 // previews before display and must not emit raw query text.
 func (c *ClickHouseReader) FetchRecentQueryCandidates(ctx context.Context, opts RecentQueryCandidateOptions) ([]model.QueryLog, error) {
-	return c.executeQueryLogQuery(ctx, c.recentQueryCandidatesBuilder(opts))
+	logs, err := c.executeQueryLogQuery(ctx, c.recentQueryCandidatesBuilder(opts))
+	if err != nil {
+		return nil, err
+	}
+	// The shared query-log scanner also serves backfill, which needs raw SQL.
+	// Trace-drilldown candidates must expose only the normalized preview: clear
+	// raw text at this API boundary so future callers cannot accidentally leak
+	// it even if the presentation layer forgets to suppress the field.
+	for i := range logs {
+		logs[i].Query = ""
+	}
+	return logs, nil
 }
 
 // CurrentQueryCandidateOptions bounds the trace-drilldown `current` candidate
@@ -1252,6 +1396,7 @@ func (c *ClickHouseReader) queryLogEnrichScanDest(log *model.QueryLog) []interfa
 		&log.ClientName,
 		&log.ClientHostname,
 		&log.ClientAddress,
+		&log.InitialAddress,
 		&log.DatabasesVisited,
 		&log.TablesVisited,
 		&log.ExceptionCode,
@@ -1289,6 +1434,13 @@ func (c *ClickHouseReader) FetchOpenTelemetrySpans(ctx context.Context, minTrace
 }
 
 func (c *ClickHouseReader) FetchOpenTelemetrySpansWithOpts(ctx context.Context, minTraceDurationMs int, lookback time.Duration, limit int, opts FetchOpts) ([]model.OpenTelemetrySpan, error) {
+	// Scheduled polling is single-threaded today, but keep the cursor coherent if
+	// a future caller overlaps fetches on the same reader. Holding the lock across
+	// the two queries also makes state commits transactional: a query error leaves
+	// the current page/cursor available for retry.
+	c.spanScanMu.Lock()
+	defer c.spanScanMu.Unlock()
+
 	maxTraceDurationMs := opts.MaxTraceDurationMs
 	minSpanDurationMs := opts.MinSpanDurationMs
 	maxSpanDurationMs := opts.MaxSpanDurationMs
@@ -1303,70 +1455,116 @@ func (c *ClickHouseReader) FetchOpenTelemetrySpansWithOpts(ctx context.Context, 
 	//    that never qualify.
 	// 2. Fetch spans for those traces, filtered by duration range and
 	//    operation blacklist. Step 2's LIMIT is the operator-configured
-	//    monitor.max_spans_per_cycle and bounds spans actually exported.
-	//    When the cap is hit, partial traces continue across cycles via
-	//    lookback overlap + dedup cache.
+	//    monitor.max_spans_per_cycle and bounds spans returned to the processor.
+	//    Stable keyset cursors advance through partial trace/span pages across
+	//    cycles before wrapping to the newest row; the lookback + dedup cache then
+	//    handles late arrivals and rows seen again after a wrap.
 
 	lookbackDays := int(lookback.Hours()/24) + 1
 
 	// Resolve once so both steps share the same effective cap, including
 	// the MaxSpanQueryLimit safety ceiling and the unset/<=0 fallback.
 	effectiveLimit := resolveSpanLimit(limit)
-
-	// Step 1: Get trace IDs with spans within duration range
-	traceQuery := c.traceIDSelect
-	traceParams := []interface{}{lookbackDays, int(lookback.Seconds()), minTraceDurationMs}
-
-	if maxTraceDurationMs > 0 {
-		traceQuery += " AND (finish_time_us - start_time_us) <= ? * 1000"
-		traceParams = append(traceParams, maxTraceDurationMs)
+	signature := spanScanSignature{
+		minTraceDurationMs: minTraceDurationMs,
+		maxTraceDurationMs: maxTraceDurationMs,
+		minSpanDurationMs:  minSpanDurationMs,
+		maxSpanDurationMs:  maxSpanDurationMs,
+		lookback:           lookback,
+		limit:              effectiveLimit,
+		blacklist:          strings.Join(opts.BlacklistOperations, "\x00"),
+	}
+	if !c.spanScan.initialized || c.spanScan.signature != signature {
+		c.spanScan = spanScanState{initialized: true, signature: signature}
 	}
 
-	traceQuery += `
-			)
-			GROUP BY trace_id
-			ORDER BY max_finish_time DESC`
+	// Step 1: Get the next trace page only after the previous page's spans have
+	// been exhausted. The (max_finish_time, trace_id) tie-breaker is stable even
+	// when many traces finish in the same microsecond.
+	//
+	// A keyset walk that has run past its last page wraps to the newest rows
+	// within this same call. Returning an empty page here instead — deferring
+	// the wrap to the next cycle — would blind every other cycle to traces that
+	// arrived since the walk began: the effective poll interval doubles, and
+	// with lookback = interval + buffer that is a guaranteed rolling gap rather
+	// than an overlap.
+	//
+	// The same rule applies one level down: when the previous call's span page
+	// filled the cap exactly, this call's span continuation may come back empty
+	// (the page was exhausted right at the cap). That is not a result either —
+	// select again in the same call, once, so the cycle never returns empty
+	// while a qualifying trace is inside the lookback. The per-call span cap
+	// still holds: the continuation contributed nothing.
+	for attempt := 0; ; attempt++ {
+		for len(c.spanScan.traceIDs) == 0 {
+			traceIDs, lastFinish, lastTraceID, err := c.queryTracePage(ctx, lookbackDays, lookback, minTraceDurationMs, maxTraceDurationMs, effectiveLimit)
+			if err != nil {
+				return nil, err
+			}
 
-	traceQuery += " LIMIT ?"
-	traceParams = append(traceParams, effectiveLimit)
+			if len(traceIDs) == 0 {
+				if c.spanScan.traceAfterSet {
+					c.spanScan.traceAfterSet = false
+					continue
+				}
+				return []model.OpenTelemetrySpan{}, nil
+			}
 
-	traceCtx, traceCancel := context.WithTimeout(ctx, c.queryTimeout)
-	defer traceCancel()
-
-	rows, err := c.conn.Query(traceCtx, traceQuery, traceParams...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query trace IDs: %w", err)
-	}
-
-	var traceIDs []uuid.UUID
-	for rows.Next() {
-		var traceID uuid.UUID
-		var maxFinishTime uint64 // Not used, but need to scan it
-		if err := rows.Scan(&traceID, &maxFinishTime); err != nil {
-			_ = rows.Close()
-			return nil, fmt.Errorf("failed to scan trace ID: %w", err)
+			c.spanScan.traceIDs = traceIDs
+			c.spanScan.nextTraceFinish = lastFinish
+			c.spanScan.nextTraceID = lastTraceID
+			c.spanScan.pageComplete = len(traceIDs) < effectiveLimit
 		}
-		traceIDs = append(traceIDs, traceID)
-	}
-	_ = rows.Close()
 
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("trace ID iteration error: %w", err)
-	}
+		if minSpanDurationMs > 0 || maxSpanDurationMs > 0 {
+			clicklog.Debug("Found %d traces with slow spans, fetching spans with duration filters for these traces", len(c.spanScan.traceIDs))
+		} else {
+			clicklog.Debug("Found %d traces with slow spans, fetching all spans for these traces", len(c.spanScan.traceIDs))
+		}
 
-	if len(traceIDs) == 0 {
-		return []model.OpenTelemetrySpan{}, nil
-	}
+		// Step 2: Fetch spans for those traces, optionally filtered by duration range
+		continuation := c.spanScan.spanAfterSet
+		spans, err := c.querySpanPage(ctx, lookbackDays, minSpanDurationMs, maxSpanDurationMs, opts.BlacklistOperations, effectiveLimit)
+		if err != nil {
+			return nil, err
+		}
 
-	if minSpanDurationMs > 0 || maxSpanDurationMs > 0 {
-		clicklog.Debug("Found %d traces with slow spans, fetching spans with duration filters for these traces", len(traceIDs))
-	} else {
-		clicklog.Debug("Found %d traces with slow spans, fetching all spans for these traces", len(traceIDs))
-	}
+		if len(spans) == effectiveLimit {
+			last := spans[len(spans)-1]
+			c.spanScan.spanAfterSet = true
+			c.spanScan.spanAfterFinish = last.FinishTimeUs
+			c.spanScan.spanAfterTrace = last.TraceID
+			c.spanScan.spanAfterID = last.SpanID
+			return spans, nil
+		}
 
-	// Step 2: Fetch spans for those traces, optionally filtered by duration range
+		// This trace page is exhausted. Clear the span cursor and, when the
+		// page was full, advance the trace keyset so the next cycle continues
+		// the walk; even an empty/fully SQL-filtered page therefore cannot pin
+		// the reader forever. A short page already ended the walk, so the next
+		// cycle starts from the newest rows without a wasted cursor query.
+		c.spanScan.traceIDs = nil
+		c.spanScan.spanAfterSet = false
+		c.spanScan.traceAfterSet = !c.spanScan.pageComplete
+		if c.spanScan.traceAfterSet {
+			c.spanScan.traceAfterFinish = c.spanScan.nextTraceFinish
+			c.spanScan.traceAfterID = c.spanScan.nextTraceID
+		}
+
+		if len(spans) == 0 && continuation && attempt == 0 {
+			continue
+		}
+		return spans, nil
+	}
+}
+
+// querySpanPage runs step 2 of the live span selection: one page of spans for
+// the current trace page, newest first, continuing from the span keyset cursor
+// when one is set, with the duration filters and operation blacklist pushed
+// down as SQL.
+func (c *ClickHouseReader) querySpanPage(ctx context.Context, lookbackDays, minSpanDurationMs, maxSpanDurationMs int, blacklist []string, limit int) ([]model.OpenTelemetrySpan, error) {
 	spansQuery := c.spanSelect
-	spanParams := []interface{}{traceIDs, lookbackDays}
+	spanParams := []interface{}{c.spanScan.traceIDs, lookbackDays}
 
 	// 0 = fetch all spans (no lower bound)
 	if minSpanDurationMs > 0 {
@@ -1383,7 +1581,7 @@ func (c *ClickHouseReader) FetchOpenTelemetrySpansWithOpts(ctx context.Context, 
 	// known-noise internal ops like MergeTreeIndex). Bound as %pattern%, so a
 	// literal % or _ inside a configured pattern is treated as a LIKE wildcard,
 	// not matched literally — see config docs for blacklist_operations.
-	for _, pattern := range opts.BlacklistOperations {
+	for _, pattern := range blacklist {
 		if pattern == "" {
 			continue
 		}
@@ -1391,13 +1589,18 @@ func (c *ClickHouseReader) FetchOpenTelemetrySpansWithOpts(ctx context.Context, 
 		spanParams = append(spanParams, "%"+pattern+"%")
 	}
 
-	spansQuery += " LIMIT ?"
-	spanParams = append(spanParams, effectiveLimit)
+	if c.spanScan.spanAfterSet {
+		spansQuery += " AND (finish_time_us, trace_id, span_id) < (?, ?, ?)"
+		spanParams = append(spanParams, c.spanScan.spanAfterFinish, c.spanScan.spanAfterTrace, c.spanScan.spanAfterID)
+	}
+
+	spansQuery += " ORDER BY finish_time_us DESC, trace_id DESC, span_id DESC LIMIT ?"
+	spanParams = append(spanParams, limit)
 
 	spansCtx, spansCancel := context.WithTimeout(ctx, c.queryTimeout)
 	defer spansCancel()
 
-	rows, err = c.conn.Query(spansCtx, spansQuery, spanParams...)
+	rows, err := c.conn.Query(spansCtx, spansQuery, spanParams...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query spans: %w", err)
 	}
@@ -1426,8 +1629,57 @@ func (c *ClickHouseReader) FetchOpenTelemetrySpansWithOpts(ctx context.Context, 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("span row iteration error: %w", err)
 	}
-
 	return spans, nil
+}
+
+// queryTracePage runs step 1 of the live span selection: one page of trace IDs
+// with a qualifying span inside the lookback window, newest first, continuing
+// from the trace keyset cursor when one is set. It returns the page plus the
+// last row's (max_finish_time, trace_id) for the next cursor.
+func (c *ClickHouseReader) queryTracePage(ctx context.Context, lookbackDays int, lookback time.Duration, minTraceDurationMs, maxTraceDurationMs, limit int) ([]uuid.UUID, uint64, uuid.UUID, error) {
+	traceQuery := c.traceIDSelect
+	traceParams := []interface{}{lookbackDays, int(lookback.Seconds()), minTraceDurationMs}
+
+	if maxTraceDurationMs > 0 {
+		traceQuery += " AND (finish_time_us - start_time_us) <= ? * 1000"
+		traceParams = append(traceParams, maxTraceDurationMs)
+	}
+
+	traceQuery += `
+			)
+			GROUP BY trace_id`
+	if c.spanScan.traceAfterSet {
+		traceQuery += " HAVING (max_finish_time, trace_id) < (?, ?)"
+		traceParams = append(traceParams, c.spanScan.traceAfterFinish, c.spanScan.traceAfterID)
+	}
+	traceQuery += " ORDER BY max_finish_time DESC, trace_id DESC LIMIT ?"
+	traceParams = append(traceParams, limit)
+
+	traceCtx, traceCancel := context.WithTimeout(ctx, c.queryTimeout)
+	defer traceCancel()
+	rows, err := c.conn.Query(traceCtx, traceQuery, traceParams...)
+	if err != nil {
+		return nil, 0, uuid.Nil, fmt.Errorf("failed to query trace IDs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var traceIDs []uuid.UUID
+	var lastTraceID uuid.UUID
+	var lastFinish uint64
+	for rows.Next() {
+		var traceID uuid.UUID
+		var maxFinishTime uint64
+		if err := rows.Scan(&traceID, &maxFinishTime); err != nil {
+			return nil, 0, uuid.Nil, fmt.Errorf("failed to scan trace ID: %w", err)
+		}
+		traceIDs = append(traceIDs, traceID)
+		lastTraceID = traceID
+		lastFinish = maxFinishTime
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, uuid.Nil, fmt.Errorf("trace ID iteration error: %w", err)
+	}
+	return traceIDs, lastFinish, lastTraceID, nil
 }
 
 // FetchTraceIDsByQueryID returns the distinct trace IDs whose spans carry the
@@ -1467,6 +1719,42 @@ func (c *ClickHouseReader) FetchTraceIDsByQueryID(ctx context.Context, queryID s
 		return nil, fmt.Errorf("trace ID iteration error: %w", err)
 	}
 	return traceIDs, nil
+}
+
+// FetchTraceQueryIDs returns, for each trace that has any, the distinct
+// clickhouse.query_id values recorded on its spans within lookbackDays. It is
+// the whitelist's page-independent path to a trace's query_log rows; traces
+// with no query span inside the window are absent from the result.
+func (c *ClickHouseReader) FetchTraceQueryIDs(ctx context.Context, traceIDs []uuid.UUID, lookbackDays int) (map[uuid.UUID][]string, error) {
+	if len(traceIDs) == 0 {
+		return map[uuid.UUID][]string{}, nil
+	}
+	if lookbackDays < 1 {
+		lookbackDays = 1
+	}
+
+	queryCtx, cancel := context.WithTimeout(ctx, c.queryTimeout)
+	defer cancel()
+
+	rows, err := c.conn.Query(queryCtx, c.traceQueryIDs, traceIDs, lookbackDays)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query trace query IDs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make(map[uuid.UUID][]string)
+	for rows.Next() {
+		var traceID uuid.UUID
+		var queryID string
+		if err := rows.Scan(&traceID, &queryID); err != nil {
+			return nil, fmt.Errorf("failed to scan trace query ID: %w", err)
+		}
+		out[traceID] = append(out[traceID], queryID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("trace query ID iteration error: %w", err)
+	}
+	return out, nil
 }
 
 // FetchSpansForTraceIDs fetches every available span for the given trace IDs,
@@ -1558,11 +1846,17 @@ func (c *ClickHouseReader) RunCanaryQuery(ctx context.Context, thresholdMs int) 
 	canaryCtx, cancel := context.WithTimeout(ctx, canaryQueryTimeout)
 	defer cancel()
 
-	var count int64
-	err := c.conn.QueryRow(canaryCtx, c.canarySelect, thresholdMs).Scan(&count)
+	// ClickHouse count() is UInt64. Scan its native type first: clickhouse-go
+	// deliberately rejects scanning UInt64 directly into *int64.
+	var rawCount uint64
+	err := c.conn.QueryRow(canaryCtx, c.canarySelect, thresholdMs).Scan(&rawCount)
 	if err != nil {
 		return model.CanaryResult{}, fmt.Errorf("canary query failed: %w", err)
 	}
+	if rawCount > math.MaxInt64 {
+		return model.CanaryResult{}, fmt.Errorf("canary count %d exceeds int64 result capacity", rawCount)
+	}
+	count := int64(rawCount)
 
 	return model.CanaryResult{
 		Count:            count,

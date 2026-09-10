@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	lru "github.com/hashicorp/golang-lru/v2"
 
 	"github.com/coltconsulting/click-dog/internal/clickhouse"
@@ -33,6 +34,7 @@ func handleCircuitOpen(
 	ctx context.Context,
 	exporter model.SpanExporter,
 	cfg *config.Config,
+	f *filter.QueryFilter,
 	circuitBreaker *resilience.CircuitBreaker,
 	hb *Heartbeat,
 	canaryQuerier model.CanaryQuerier,
@@ -42,7 +44,7 @@ func handleCircuitOpen(
 ) error {
 	if cfg.Monitor.Canary.Enabled && canaryQuerier != nil {
 		prevState := circuitBreaker.State()
-		err := RunCanaryAndExport(ctx, canaryQuerier, exporter, cfg, circuitBreaker)
+		err := RunCanaryAndExport(ctx, canaryQuerier, exporter, cfg, f, circuitBreaker)
 		notifyOnRecovery(prevState, circuitBreaker, m, wh, "Circuit breaker closed — canary recovery successful")
 		recordCanaryCycle(hb, m, err, cycleStart)
 		return err
@@ -68,6 +70,7 @@ func handleElevatedBackoff(
 	ctx context.Context,
 	exporter model.SpanExporter,
 	cfg *config.Config,
+	f *filter.QueryFilter,
 	circuitBreaker *resilience.CircuitBreaker,
 	hb *Heartbeat,
 	poller *resilience.AdaptivePoller,
@@ -90,7 +93,7 @@ func handleElevatedBackoff(
 	if circuitBreaker != nil {
 		prevState = circuitBreaker.State()
 	}
-	err := RunCanaryAndExport(ctx, canaryQuerier, exporter, cfg, circuitBreaker)
+	err := RunCanaryAndExport(ctx, canaryQuerier, exporter, cfg, f, circuitBreaker)
 	if circuitBreaker != nil {
 		notifyOnRecovery(prevState, circuitBreaker, m, wh, "Circuit breaker closed — canary recovery successful")
 	}
@@ -205,7 +208,7 @@ func recordSpanLogObservation(m *metrics.Metrics, spans []model.OpenTelemetrySpa
 // Returns (exported, filtered, duplicates, error).
 func fetchAndProcessSpans(
 	ctx context.Context,
-	chReader *clickhouse.ClickHouseReader,
+	chReader LiveReader,
 	exporter model.SpanExporter,
 	f *filter.QueryFilter,
 	cfg *config.Config,
@@ -248,13 +251,13 @@ func fetchAndProcessSpans(
 
 	// Enrich spans with query_log metadata (user, client, tables, stats).
 	var queryLogMap map[string]model.QueryLog
+	lookbackDays := int(cfg.GetLookback().Hours()/24) + 1
+	if lookbackDays > 7 {
+		lookbackDays = 7 // cap enrichment scan; older data unlikely to match current spans
+	}
 	if cfg.Monitor.ShouldEnrichFromQueryLog() && len(spans) > 0 {
 		queryIDs := UniqueQueryIDs(spans)
 		if len(queryIDs) > 0 {
-			lookbackDays := int(cfg.GetLookback().Hours()/24) + 1
-			if lookbackDays > 7 {
-				lookbackDays = 7 // cap enrichment scan; older data unlikely to match current spans
-			}
 			var enrichErr error
 			queryLogMap, enrichErr = chReader.FetchQueryLogByQueryIDs(ctx, queryIDs, lookbackDays)
 			// Record dashboard-facing enrichment metrics (#183). The attempt
@@ -287,6 +290,35 @@ func fetchAndProcessSpans(
 	duplicate := 0
 	seenThisCycle := make(map[model.SpanKey]struct{}, len(spans))
 
+	// Resolved per trace across the whole cycle, before batching: only the
+	// query root carries clickhouse.query_id and it may sit in a different
+	// batch from its children.
+	var traceAddrs map[uuid.UUID]string
+	if f.HasIPWhitelist() {
+		traceAddrs = TraceClientAddresses(spans, queryLogMap)
+		// A page can hold a trace's children without its query root — the
+		// reader splits a trace across cycles at max_spans_per_cycle — so the
+		// page alone cannot decide those traces. Resolve them through the span
+		// log's own record of the trace's query IDs; a lookup failure leaves
+		// them unresolved, which the strict whitelist then drops.
+		if missing := UnresolvedTraceIDs(spans, traceAddrs); len(missing) > 0 {
+			resolved, err := ResolveTraceAddressesFromSpanLog(ctx, chReader, missing, lookbackDays)
+			if err != nil {
+				clicklog.Warn("IP whitelist could not resolve %d trace(s) whose query root is outside this page: %v", len(missing), err)
+			}
+			for id, addr := range resolved {
+				traceAddrs[id] = addr
+			}
+		}
+		// Config validation rejects an IP whitelist without enrichment, so
+		// reaching this with nothing resolved means enrichment failed at
+		// runtime — which is non-fatal, and would otherwise drop the cycle
+		// with no signal beyond the filtered counter.
+		if len(traceAddrs) == 0 && len(spans) > 0 {
+			clicklog.Warn("IP whitelist is active but no client address could be resolved for any of %d spans; query_log enrichment is unavailable, so every span will be filtered", len(spans))
+		}
+	}
+
 	// Determine batch size (0 = process all at once)
 	batchSize := cfg.Monitor.BatchSize
 	if batchSize <= 0 {
@@ -303,7 +335,10 @@ func fetchAndProcessSpans(
 		batch := spans[batchStart:batchEnd]
 		clicklog.Debug("Processing batch %d-%d of %d spans", batchStart+1, batchEnd, len(spans))
 
-		// First pass: filter, redact, and collect spans to export
+		// First pass: filter, enrich, and collect spans to export. Query-text
+		// shaping happens at the final boundary in ExportSpansWithDeadline so
+		// exporters and fan-out sinks never receive the raw representation for
+		// a privacy-restricting mode.
 		var toExport []model.OpenTelemetrySpan
 		for _, span := range batch {
 			// Composite key: span_id alone is not globally unique across traces.
@@ -320,9 +355,13 @@ func fetchAndProcessSpans(
 			// Later rows with the same span identity should not get a second pass.
 			seenThisCycle[key] = struct{}{}
 
-			// Apply filters
+			// The client address comes from query_log enrichment: ClickHouse
+			// does not put client.address on span_log rows.
 			queryText := span.Attributes["db.statement"]
-			clientAddr := span.Attributes["client.address"]
+			var clientAddr string
+			if f.HasIPWhitelist() {
+				clientAddr = ResolveSpanClientAddress(span, queryLogMap, traceAddrs)
+			}
 			if f.ShouldFilter(span.OperationName, queryText, clientAddr) {
 				filtered++
 				continue
@@ -335,17 +374,6 @@ func fetchAndProcessSpans(
 			if ShouldFilterSpanByUser(span, f, queryLogMap) {
 				filtered++
 				continue
-			}
-
-			// Apply SQL redaction before export
-			redacted := f.RedactQuery(queryText)
-			if redacted != queryText {
-				newAttrs := make(map[string]string, len(span.Attributes))
-				for k, v := range span.Attributes {
-					newAttrs[k] = v
-				}
-				newAttrs["db.statement"] = redacted
-				span.Attributes = newAttrs
 			}
 
 			// Extract log_comment JSON from URI attributes
@@ -365,7 +393,7 @@ func fetchAndProcessSpans(
 
 		// Export batch to OTEL in a single gRPC call
 		if len(toExport) > 0 {
-			exportResult, err := ExportSpansWithDeadline(ctx, cfg, exporter, toExport)
+			exportResult, err := ExportSpansWithDeadline(ctx, cfg, exporter, f, toExport)
 			RecordExportObservability(m, exportResult)
 			if err != nil {
 				clicklog.Error("Error exporting batch of %d spans: %v", len(toExport), err)

@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -55,6 +56,14 @@ func shutdownHTTPServer(srv *http.Server) {
 	ctx, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
 	defer cancel()
 	_ = srv.Shutdown(ctx)
+}
+
+// scheduledModeSignalContext cancels the same context passed through the live
+// ClickHouse/export pipeline as soon as SIGINT or SIGTERM arrives. Keeping this
+// construction outside the polling select is what lets an in-flight cycle stop
+// immediately instead of waiting for the select loop to become idle.
+func scheduledModeSignalContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 }
 
 func otlpMetricsSinkNames(cfg *config.Config, dryRun bool) map[string]string {
@@ -103,6 +112,17 @@ func selfMetricsStatusLine(cfg *config.Config) string {
 	}
 	return fmt.Sprintf("Self-metrics: OTLP push → %s (%s), every %ds (service=%s, host=%s)",
 		endpoint, source, cfg.Metrics.OTLP.IntervalSeconds, cfg.Metrics.OTLP.ServiceName, cfg.Metrics.OTLP.Host)
+}
+
+// queryTextCapabilityWarning ties the normalized-query capability probe to
+// the operator-selected privacy mode. The reader already reports the probe
+// failure itself; this second, mode-specific warning explains the observable
+// fail-closed result rather than leaving an empty query-text stream mysterious.
+func queryTextCapabilityWarning(cfg *config.Config, normalizedQuerySupported bool) string {
+	if cfg.Filters.EffectiveQueryTextMode() != config.QueryTextModeNormalizedOnly || normalizedQuerySupported {
+		return ""
+	}
+	return "filters.query_text_mode is normalized_only, but ClickHouse normalized-query support is unavailable; exports will omit query text rather than fall back to raw SQL"
 }
 
 // sameListenAddress reports whether two ListenAndServe addresses would bind
@@ -209,7 +229,9 @@ func canonicalListenAddr(addr string) string {
 var subcommands = map[string]func(args []string, out, errOut io.Writer) int{
 	"init":              runInit,
 	"check":             runCheck,
+	"validate":          runValidate,
 	"analyze":           runAnalyze,
+	"test":              runTest,
 	"test-span":         runTestSpan,
 	"flush":             runFlush,
 	"self-update":       runSelfUpdate,
@@ -226,32 +248,34 @@ Exports slow queries and OpenTelemetry spans from ClickHouse to an
 OTEL collector via gRPC.
 
 Usage:
-  click-dog [flags]
+  click-dog [flags]              Scheduled monitoring — polls ClickHouse on an interval
   click-dog init [flags]         Generate a starter configuration file
   click-dog check [flags]        Validate config, probe the ClickHouse data plane, and test exporters
+  click-dog validate [flags]     Validate configuration offline and exit (no ClickHouse/exporter calls)
+  click-dog backfill [flags]     One-shot export of a historical time range, then exit
   click-dog analyze <subcommand> Run a local, read-only query analysis report
-  click-dog test-span            Send a synthetic test span to verify export pipeline
-  click-dog flush                Export current lookback window and exit
+  click-dog test <subcommand>    Test exporter delivery or native ClickHouse tracing
+  click-dog test-span            Deprecated alias for 'click-dog test export'
+  click-dog flush                Ask the running service (systemd or leader) to export
   click-dog self-update [flags]  Update to the latest release
   click-dog create-dashboards    Create the Datadog dashboards via API
   click-dog deploy <subcommand>  Install / inspect a click-dog deployment
   click-dog version              Print version and exit
   click-dog help                 Show this help and exit
 
-Modes:
-  (default)                       Scheduled monitoring — polls ClickHouse on an interval
-  -backfill-start / -backfill-end One-shot export of a historical time range
-  -validate                       Validate configuration offline and exit (no ClickHouse/exporter calls)
-  -version                        Print version and exit
-  --dry-run                       Read real data but discard exports; print summary
+Options are flags spelled --flag; a single leading dash is also accepted. The
+deprecated -validate and -backfill-start/-backfill-end mode flags still work
+and map to the validate and backfill commands.
 
 Examples:
-  click-dog -config /etc/click-dog/config.yaml
-  click-dog -validate -config /etc/click-dog/config.yaml
-  click-dog --dry-run -config /etc/click-dog/config.yaml
+  click-dog --config /etc/click-dog/config.yaml
+  click-dog validate --config /etc/click-dog/config.yaml
+  click-dog --dry-run --config /etc/click-dog/config.yaml
   click-dog init --ch-host clickhouse.local --collector otel:4317
-  click-dog check -config /etc/click-dog/config.yaml
-  click-dog -backfill-start 2024-01-01T00:00:00Z -backfill-end 2024-01-02T00:00:00Z
+  click-dog check --config /etc/click-dog/config.yaml
+  click-dog test export --config /etc/click-dog/config.yaml
+  click-dog test tracing --config /etc/click-dog/config.yaml
+  click-dog backfill --start 2024-01-01T00:00:00Z --end 2024-01-02T00:00:00Z
 `
 
 // printVersion writes the canonical version line. Shared by the `version` verb
@@ -268,35 +292,45 @@ func printUsage(w io.Writer) {
 
 // dispatch routes a leading non-flag verb (argv[1]) before flag.Parse() runs:
 // a registered subcommand to its handler, or the built-in `version` / `help`
-// verbs to their printers. It returns fellThrough=true only when there is no
-// verb to handle — no args, or a leading flag — signalling main() to proceed
-// into flag parsing and the default scheduled mode. Any other non-flag arg is
-// treated as a typo (e.g. `cehck` for `check`) and reported as an error
+// verbs to their printers. It returns fellThrough=true only when main() should
+// proceed into flag parsing — no args, a leading flag, or the `backfill` verb,
+// which has no handler of its own: its args are rewritten onto the legacy mode
+// flags and handed back via argv (argv is otherwise args unchanged; main()
+// must parse argv, not os.Args, to pick the rewrite up). Any other non-flag
+// arg is treated as a typo (e.g. `cehck` for `check`) and reported as an error
 // rather than silently falling through to start the daemon. When a verb is
 // handled, the returned code is the intended process exit code.
-func dispatch(args []string, out, errOut io.Writer) (exitCode int, fellThrough bool) {
+func dispatch(args []string, out, errOut io.Writer) (exitCode int, fellThrough bool, argv []string) {
 	if len(args) < 2 || strings.HasPrefix(args[1], "-") {
-		return 0, true
+		return 0, true, args
 	}
 	cmd := args[1]
 	if handler, ok := subcommands[cmd]; ok {
-		return handler(args[2:], out, errOut), false
+		return handler(args[2:], out, errOut), false, nil
 	}
 	switch cmd {
 	case "version":
 		printVersion(out)
-		return 0, false
+		return 0, false, nil
 	case "help":
 		printUsage(out)
-		return 0, false
+		return 0, false, nil
+	case "backfill":
+		rewritten, code := rewriteBackfillArgs(args[2:], errOut)
+		if rewritten == nil {
+			return code, false, nil
+		}
+		return 0, true, append([]string{args[0]}, rewritten...)
 	}
 	_, _ = fmt.Fprintf(errOut, "click-dog: unknown command %q\nRun 'click-dog -h' for usage.\n", cmd)
-	return 2, false
+	return 2, false, nil
 }
 
 func main() {
-	// Dispatch subcommands before flag.Parse().
-	if code, fellThrough := dispatch(os.Args, os.Stdout, os.Stderr); !fellThrough {
+	// Dispatch subcommands before flag parsing. argv is os.Args except for the
+	// backfill verb, which dispatch rewrites onto the legacy mode flags.
+	code, fellThrough, argv := dispatch(os.Args, os.Stdout, os.Stderr)
+	if !fellThrough {
 		os.Exit(code)
 	}
 
@@ -307,28 +341,39 @@ func main() {
 		// stays tight and only -h pays for the table separator.
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintln(os.Stderr, "Flags:")
-		flag.PrintDefaults()
+		printFlagDefaults(os.Stderr, flag.CommandLine)
 	}
 
 	configPath := flag.String("config", config.DefaultConfigFlag, "Path to configuration file")
-	backfillStart := flag.String("backfill-start", "", "Start time for backfill (RFC3339, e.g. 2024-01-01T00:00:00Z)")
-	backfillEnd := flag.String("backfill-end", "", "End time for backfill (RFC3339, e.g. 2024-01-01T23:59:59Z)")
+	backfillStart := flag.String("backfill-start", "", "Deprecated: use 'click-dog backfill --start'")
+	backfillEnd := flag.String("backfill-end", "", "Deprecated: use 'click-dog backfill --end'")
 	showVersion := flag.Bool("version", false, "Print version and exit")
-	validateOnly := flag.Bool("validate", false, "Validate configuration and exit")
+	validateOnly := flag.Bool("validate", false, "Deprecated: use 'click-dog validate'")
 	dryRun := flag.Bool("dry-run", false, "Read real data but discard exports; print summary")
 
 	// Unknown flags fail with the standard flag package error and exit 2.
 	// If a flag is removed in the future, the removal commit must add an
 	// explicit deprecation handler — silent compat shims would mask typos
 	// like `--cfg` for `--config`.
-	flag.Parse()
+	_ = flag.CommandLine.Parse(argv[1:])
 
 	if *showVersion {
 		printVersion(os.Stdout)
 		os.Exit(0)
 	}
 
-	cfg, resolvedPath, err := loadConfig(*configPath)
+	if *validateOnly {
+		fmt.Fprintln(os.Stderr, "WARN: -validate is deprecated; use 'click-dog validate'")
+		os.Exit(runValidate([]string{"-config", *configPath}, os.Stdout, os.Stderr))
+	}
+
+	// The backfill verb rewrites onto these flags via dispatch(), so only the
+	// spelled-out legacy flags earn the deprecation nudge.
+	if (*backfillStart != "" || *backfillEnd != "") && (len(os.Args) < 2 || os.Args[1] != "backfill") {
+		fmt.Fprintln(os.Stderr, "WARN: -backfill-start/-backfill-end are deprecated; use 'click-dog backfill --start ... --end ...'")
+	}
+
+	cfg, _, err := loadConfig(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -339,62 +384,9 @@ func main() {
 		log.Printf("WARN: %s", w)
 	}
 
-	if *validateOnly {
-		if len(loadWarnings) > 0 {
-			fmt.Println("Warnings:")
-			for _, w := range loadWarnings {
-				fmt.Printf("  WARN: %s\n", w)
-			}
-			fmt.Println()
-		}
-		fmt.Printf("Config %s is valid.\n", resolvedPath)
-		fmt.Printf("  ClickHouse:  %s:%d\n", cfg.ClickHouse.Host, cfg.ClickHouse.Port)
-		fmt.Printf("  Exporters:   %d OTEL, %d Splunk HEC\n",
-			len(cfg.Exporters.OTEL), len(cfg.Exporters.SplunkHEC))
-		for i, o := range cfg.Exporters.OTEL {
-			fmt.Printf("    OTEL[%d]:       %s (service=%s)\n", i, o.CollectorAddress, o.ServiceName)
-		}
-		for i, s := range cfg.Exporters.SplunkHEC {
-			fmt.Printf("    SplunkHEC[%d]:  %s\n", i, s.Endpoint)
-		}
-		fmt.Printf("  Monitor:     min_trace=%dms, interval=%ds\n",
-			cfg.Monitor.MinTraceDurationMs, cfg.Monitor.CheckIntervalS)
-		if cfg.HA.Active() {
-			fmt.Printf("  HA:          leader election (keeper: %v)\n", cfg.HA.Keeper.Hosts)
-		}
-		if cfg.Metrics.Enabled {
-			fmt.Printf("  Metrics:     %s (admin: %s)\n", cfg.Metrics.ListenAddress, cfg.Metrics.AdminListenAddress)
-		}
-		// Always print the self-metrics state, on or off. Its silence in this
-		// summary is exactly why a blank Datadog Health dashboard is hard to
-		// diagnose: the dashboard reads OTLP-pushed click_dog.* metrics, and
-		// nothing here told the operator whether that push was configured.
-		if cfg.Metrics.OTLP.Enabled {
-			endpoint := cfg.Metrics.OTLP.CollectorAddress
-			source := "standalone"
-			if cfg.Metrics.OTLP.InheritOTELConnection {
-				source = "inherit otel[0]"
-				if len(cfg.Exporters.OTEL) > 0 {
-					endpoint = cfg.Exporters.OTEL[0].CollectorAddress
-				}
-			}
-			fmt.Printf("  Self-metrics: OTLP → %s (%s), %ds, host=%s\n",
-				endpoint, source, cfg.Metrics.OTLP.IntervalSeconds, cfg.Metrics.OTLP.Host)
-		} else {
-			fmt.Printf("  Self-metrics: OTLP push off\n")
-		}
-		if cfg.Health.Enabled {
-			fmt.Printf("  Health:      %s\n", cfg.Health.ListenAddress)
-		}
-		if cfg.Webhook.Enabled {
-			fmt.Printf("  Webhook:     enabled (%d events)\n", len(cfg.Webhook.Events))
-		}
-		os.Exit(0)
-	}
-
 	// Catch partial backfill flags — one without the other is always a mistake
 	if (*backfillStart == "") != (*backfillEnd == "") {
-		log.Fatalf("Both -backfill-start and -backfill-end are required for backfill mode")
+		log.Fatalf("Backfill needs both ends of the range: use 'click-dog backfill --start ... --end ...' (or both deprecated -backfill-start/-backfill-end flags)")
 	}
 
 	// Initialize logger
@@ -410,6 +402,7 @@ func main() {
 	clicklog.Info("Configuration: min_trace_duration=%dms, min_span_duration=%dms, max_trace_duration=%dms, max_span_duration=%dms",
 		cfg.Monitor.MinTraceDurationMs, cfg.Monitor.MinSpanDurationMs,
 		cfg.Monitor.MaxTraceDurationMs, cfg.Monitor.MaxSpanDurationMs)
+	clicklog.Info("Query text export mode: %s", cfg.Filters.EffectiveQueryTextMode())
 	clicklog.Info("ClickHouse: %s:%d (cluster_mode=%v, max_conns=%d, query_timeout=%ds)",
 		cfg.ClickHouse.Host, cfg.ClickHouse.Port, cfg.ClickHouse.UseClusterQueries,
 		cfg.ClickHouse.MaxOpenConns, cfg.ClickHouse.QueryTimeoutS)
@@ -442,8 +435,12 @@ func main() {
 	// correlate missing normalized-query and activity attributes with explicit
 	// ClickHouse capability state (#183). The reader probes once at construction;
 	// we propagate the results and never re-probe.
-	m.SetNormalizedQuerySupported(chReader.QueryLogNormalizedSupported())
+	normalizedQuerySupported := chReader.QueryLogNormalizedSupported()
+	m.SetNormalizedQuerySupported(normalizedQuerySupported)
 	m.SetQueryOperationSupported(chReader.QueryLogOperationSupported())
+	if warning := queryTextCapabilityWarning(cfg, normalizedQuerySupported); warning != "" {
+		clicklog.Warn("%s", warning)
+	}
 
 	// Wire up HTTP listeners for metrics and health. Three possible paths:
 	//   1. metrics enabled, health mounts on same mux (one listener)
@@ -451,9 +448,29 @@ func main() {
 	//   3. metrics disabled, health stands alone (one listener)
 	// healthAdapter is nil when health is disabled, which collapses all three
 	// paths down to just "metrics server" or "nothing".
+	// Backfill is one-shot: it exports a fixed range and exits, so nothing
+	// ever scrapes its /metrics or probes its /healthz. Binding them anyway
+	// made `click-dog backfill` fatal on the one host it is normally run
+	// from — the ClickHouse node already running the scheduled service — even
+	// though running both at once is a supported topology. Counters still
+	// record into m; only the listeners are skipped.
+	oneShot := *backfillStart != "" && *backfillEnd != ""
+	if oneShot {
+		var skipped []string
+		if cfg.Metrics.Enabled {
+			skipped = append(skipped, "metrics")
+		}
+		if cfg.Health.Enabled {
+			skipped = append(skipped, "health")
+		}
+		if len(skipped) > 0 {
+			clicklog.Info("Backfill mode: %s listener(s) not started (one-shot run)", strings.Join(skipped, " and "))
+		}
+	}
+
 	var healthAdapter *health.Server
 	var clusterSrc *clusterSource
-	if cfg.Health.Enabled {
+	if cfg.Health.Enabled && !oneShot {
 		healthAdapter = health.NewServer(chReader, metricsCycleSource{m}, version)
 		if cfg.Health.Cluster.Enabled {
 			clusterSrc = newClusterSource(cfg.HA.Active(), cfg.Health.Cluster.Peers)
@@ -499,7 +516,7 @@ func main() {
 	// today. An end-to-end test that boots all three servers, sends SIGTERM,
 	// and checks health-closes-before-admin-closes-before-metrics would
 	// make the invariant enforceable at CI time.
-	if cfg.Metrics.Enabled {
+	if cfg.Metrics.Enabled && !oneShot {
 		var extensions []metrics.MuxExtension
 		if shared {
 			extensions = append(extensions, healthAdapter.RegisterHandlers)
@@ -675,16 +692,16 @@ func runBackfillMode(
 ) error {
 	startTime, err := time.Parse(time.RFC3339, startStr)
 	if err != nil {
-		return fmt.Errorf("invalid backfill-start time format (use RFC3339, e.g., 2024-01-01T00:00:00Z): %w", err)
+		return fmt.Errorf("invalid backfill start time format (use RFC3339, e.g., 2024-01-01T00:00:00Z): %w", err)
 	}
 
 	endTime, err := time.Parse(time.RFC3339, endStr)
 	if err != nil {
-		return fmt.Errorf("invalid backfill-end time format (use RFC3339, e.g., 2024-01-01T23:59:59Z): %w", err)
+		return fmt.Errorf("invalid backfill end time format (use RFC3339, e.g., 2024-01-01T23:59:59Z): %w", err)
 	}
 
 	if startTime.After(endTime) {
-		return errors.New("backfill-start must be before backfill-end")
+		return errors.New("backfill start time must be before end time")
 	}
 
 	clicklog.Info("Starting backfill mode: %s to %s (min_trace_duration: %dms)",
@@ -732,28 +749,40 @@ func runScheduledMode(
 	clusterSrc *clusterSource,
 ) {
 	if !cfg.Monitor.Enabled {
-		clicklog.Fatal("Scheduled monitoring is disabled in config. Use -backfill-start and -backfill-end for one-time backfill, or set monitor.enabled: true")
+		clicklog.Fatal("Scheduled monitoring is disabled in config. Use 'click-dog backfill --start ... --end ...' for one-time backfill, or set monitor.enabled: true")
 	}
 
 	clicklog.Info("Starting scheduled mode: min_trace_duration=%dms, interval=%ds, lookback=%ds (interval=%d + buffer=%d)",
 		cfg.Monitor.MinTraceDurationMs, cfg.Monitor.CheckIntervalS, cfg.Monitor.LookbackS,
 		cfg.Monitor.CheckIntervalS, cfg.Monitor.LookbackBufferS)
 
-	// Set up graceful shutdown
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	// The pipeline receives this signal-aware context directly, so SIGINT/SIGTERM
+	// cancels an in-flight ClickHouse query, batch delay, or exporter call rather
+	// than waiting for the polling select to become idle.
+	ctx, stopSignals := scheduledModeSignalContext(ctx)
+	defer stopSignals()
+	shutdown := func() {
+		// Restore the default signal behavior before the bounded webhook attempt;
+		// a second signal can therefore force termination if shutdown itself stalls.
+		stopSignals()
+		clicklog.Info("Shutting down gracefully...")
+		wh.NotifySync(context.Background(), webhook.EventShutdown, "Click-Dog shutting down")
+	}
 
 	// SIGUSR1 feeds into the shared flushChan
 	sigusr1 := make(chan os.Signal, 1)
 	signal.Notify(sigusr1, syscall.SIGUSR1)
+	defer signal.Stop(sigusr1)
 	go func() {
-		for range sigusr1 {
+		for {
 			select {
-			case flushChan <- struct{}{}:
-			default:
+			case <-ctx.Done():
+				return
+			case <-sigusr1:
+				select {
+				case flushChan <- struct{}{}:
+				default:
+				}
 			}
 		}
 	}()
@@ -805,12 +834,29 @@ func runScheduledMode(
 	// can consult it. Stays nil when HA is off, or when election construction
 	// fails (for example host resolution or initial auth); both leave a cluster
 	// reader exporting.
+	// promoteChan asks the loop for an immediate cycle when a cluster reader
+	// is promoted after startup, i.e. on failover. The docs promise the new
+	// leader re-reads now - lookback within about the session timeout; waiting
+	// for the next tick instead adds up to one check interval, which at the
+	// defaults (30s interval, 40s lookback, 10s session) can turn the
+	// boundary from an overlap into a gap. Promotion during startup needs no
+	// extra cycle: the startup cycle below already runs as leader.
+	promoteChan := make(chan struct{}, 1)
+	var startupDone atomic.Bool
 	var election *leader.LeaderElection
 	if cfg.HA.Active() {
 		clicklog.Info("Keeper hosts configured — joining leader election: %v", cfg.HA.Keeper.Hosts)
 		el, electionErr := leader.NewLeaderElection(
 			cfg.HA.Keeper,
-			func() { clicklog.Info("Promoted to leader — taking coordination duties") },
+			func() {
+				clicklog.Info("Promoted to leader — taking coordination duties")
+				if cfg.ClickHouse.UseClusterQueries && startupDone.Load() {
+					select {
+					case promoteChan <- struct{}{}:
+					default:
+					}
+				}
+			},
 			func() { clicklog.Info("Demoted from leader — releasing coordination duties") },
 		)
 		if electionErr != nil {
@@ -899,12 +945,29 @@ func runScheduledMode(
 			cfg.Monitor.TopologyAudit.IntervalS, cfg.Monitor.TopologyAudit.DebounceCount)
 	}
 
+	// In cluster mode the startup cycle must not race the election that gates
+	// it: Run joins in its own goroutine, and a cycle that runs before
+	// Joined() flips fails open and exports one lookback window the leader is
+	// already exporting — a duplicate burst on every standby start. The wait
+	// is bounded by the session timeout so an unreachable Keeper still fails
+	// open rather than stalling startup.
+	if leaderGate != nil && election != nil {
+		joinWait := time.Duration(cfg.HA.Keeper.SessionTimeout) * time.Second
+		if !election.AwaitJoin(ctx, joinWait) && ctx.Err() == nil {
+			clicklog.Warn("Leader election not joined after %s — running the startup cycle fail-open", joinWait)
+		}
+	}
+
 	// Run one cycle eagerly at startup so the first iteration of the loop
 	// produces a real success/failure signal that feeds into the poller's
 	// initial backoff state. This also doubles as a smoke test that the
 	// full ClickHouse → filter → OTEL pipeline is wired correctly before
 	// we enter the steady-state loop.
 	startupErr := pipeline.Process(ctx)
+	if ctx.Err() != nil {
+		shutdown()
+		return
+	}
 	switch {
 	case errors.Is(startupErr, processor.ErrLeaderStandby):
 		clicklog.Info("Startup check: standby (not leader) — export gated, no work this cycle")
@@ -913,6 +976,7 @@ func runScheduledMode(
 	default:
 		clicklog.Info("Startup check passed")
 	}
+	startupDone.Store(true)
 
 	// Main monitoring loop with adaptive timing
 	ticker := time.NewTicker(baseInterval)
@@ -929,20 +993,35 @@ func runScheduledMode(
 		select {
 		case <-ticker.C:
 			runErr := pipeline.Process(ctx)
+			if ctx.Err() != nil {
+				shutdown()
+				return
+			}
 			processor.UpdatePollerState(adaptivePoller, runErr, ticker, baseInterval, m)
 
 		case <-flushChan:
 			clicklog.Info("Flush requested — running immediate cycle")
 			runErr := pipeline.Process(ctx)
+			if ctx.Err() != nil {
+				shutdown()
+				return
+			}
 			processor.UpdatePollerState(adaptivePoller, runErr, ticker, baseInterval, m)
 			// Reset ticker so the next regular cycle starts from now
 			ticker.Reset(baseInterval)
 
-		case <-sigChan:
-			clicklog.Info("Shutting down gracefully...")
-			// Shutdown delivery is synchronous so process exit cannot race the
-			// notification. The webhook client's configured timeout bounds the wait.
-			wh.NotifySync(context.Background(), webhook.EventShutdown, "Click-Dog shutting down")
+		case <-promoteChan:
+			clicklog.Info("Promoted to leader — running immediate cycle to cover the failover window")
+			runErr := pipeline.Process(ctx)
+			if ctx.Err() != nil {
+				shutdown()
+				return
+			}
+			processor.UpdatePollerState(adaptivePoller, runErr, ticker, baseInterval, m)
+			ticker.Reset(baseInterval)
+
+		case <-ctx.Done():
+			shutdown()
 			return
 		}
 	}

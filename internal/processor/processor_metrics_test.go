@@ -9,7 +9,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/coltconsulting/click-dog/internal/clicklog"
 	"github.com/coltconsulting/click-dog/internal/config"
@@ -107,10 +106,9 @@ func TestPipeline_ProcessCircuitOpenRecordsSkippedCycle(t *testing.T) {
 	mustContain(t, body, "click_dog_last_success_timestamp_seconds 0")
 }
 
-// TestProcessor_ErrorCycleOutcome — drives the health-check failure path
-// (handleHealthCheckFailure) directly. That path records a real cycle with
-// ErrHealthCheck, so the result counter should land on `error` and
-// last-success timestamp should remain at zero.
+// TestProcessor_ErrorCycleOutcome drives the health-check failure through the
+// production Pipeline.Process orchestration. The result counter should land on
+// `error`, the reader must not fetch, and last-success must remain at zero.
 func TestProcessor_ErrorCycleOutcome(t *testing.T) {
 	cb := resilience.NewCircuitBreaker(config.CircuitBreakerConfig{
 		FailureThreshold: 5,
@@ -118,10 +116,19 @@ func TestProcessor_ErrorCycleOutcome(t *testing.T) {
 		ResetTimeoutS:    60,
 	})
 	m := metrics.NewMetrics()
+	reader := &mockLiveReader{healthy: false}
+	pipeline := mustLivePipeline(t, reader, &mockExporter{}, &config.Config{}, nil, m)
+	pipeline.CircuitBreaker = cb
 
-	err := handleHealthCheckFailure(cb, m, nil, time.Now())
+	err := pipeline.Process(context.Background())
 	if !errors.Is(err, ErrHealthCheck) {
 		t.Fatalf("expected ErrHealthCheck, got %v", err)
+	}
+	if reader.healthCalls != 1 || reader.fetchCalls != 0 {
+		t.Fatalf("reader calls = health:%d fetch:%d, want 1/0", reader.healthCalls, reader.fetchCalls)
+	}
+	if cb.Failures() != 1 {
+		t.Fatalf("circuit-breaker failures = %d, want 1", cb.Failures())
 	}
 
 	body := scrapeMetrics(t, m)
@@ -132,23 +139,32 @@ func TestProcessor_ErrorCycleOutcome(t *testing.T) {
 	mustContain(t, body, "click_dog_last_success_timestamp_seconds 0")
 }
 
-// TestProcessor_SuccessCycleUpdatesLastCycleGauges drives RecordCycle the way
-// fetchAndProcessSpans drives it on a successful normal cycle: with real
-// exported/filtered/duplicate counts and a non-zero duration. The
-// last-cycle gauges must reflect those values, the success counter must
-// increment, and the error/skipped counters must stay flat.
+// TestProcessor_SuccessCycleUpdatesLastCycleGauges drives an actual successful
+// live cycle containing one exported span, one filtered span, and one
+// duplicate. The last-cycle gauges must reflect those production outcomes.
 func TestProcessor_SuccessCycleUpdatesLastCycleGauges(t *testing.T) {
 	m := metrics.NewMetrics()
-	m.RecordCycle(42, 7, 3, 1234, nil) // 1.234s
+	reader := &mockLiveReader{
+		healthy: true,
+		spans: []model.OpenTelemetrySpan{
+			{SpanID: 1, OperationName: "SELECT"},
+			{SpanID: 1, OperationName: "SELECT duplicate"},
+			{SpanID: 2, OperationName: "DROP", Attributes: map[string]string{"db.statement": "DROP TABLE t"}},
+		},
+	}
+	cfg := &config.Config{Filters: config.FiltersConfig{BlacklistQueries: []string{"^DROP"}}}
+	pipeline := mustLivePipeline(t, reader, &mockExporter{}, cfg, nil, m)
+	if err := pipeline.Process(context.Background()); err != nil {
+		t.Fatalf("Pipeline.Process: %v", err)
+	}
 
 	body := scrapeMetrics(t, m)
 	mustContain(t, body, `click_dog_cycle_results_total{result="success"} 1`)
 	mustContain(t, body, `click_dog_cycle_results_total{result="error"} 0`)
 	mustContain(t, body, `click_dog_cycle_results_total{result="skipped"} 0`)
-	mustContain(t, body, "click_dog_last_cycle_duration_seconds 1.234")
-	mustContain(t, body, "click_dog_last_cycle_exported_spans 42")
-	mustContain(t, body, "click_dog_last_cycle_filtered_spans 7")
-	mustContain(t, body, "click_dog_last_cycle_duplicate_spans 3")
+	mustContain(t, body, "click_dog_last_cycle_exported_spans 1")
+	mustContain(t, body, "click_dog_last_cycle_filtered_spans 1")
+	mustContain(t, body, "click_dog_last_cycle_duplicate_spans 1")
 }
 
 // TestProcessor_CanarySuccessCountsAsSuccess pins the canary→outcome routing.

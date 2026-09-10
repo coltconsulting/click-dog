@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -59,7 +60,7 @@ func NewOTLPMetricsExporter(ctx context.Context, opts OTLPMetricsOptions) (*OTLP
 	}
 
 	reader := sdkmetric.NewPeriodicReader(
-		logAndDropMetricExporter{Exporter: metricExp},
+		&logAndDropMetricExporter{Exporter: metricExp},
 		sdkmetric.WithInterval(opts.Interval),
 		sdkmetric.WithTimeout(opts.ExportTimeout),
 	)
@@ -95,13 +96,60 @@ func (o *OTLPMetricsExporter) Shutdown(ctx context.Context) error {
 	return o.provider.Shutdown(ctx)
 }
 
+// logAndDropMetricExporter bounds the log volume of a self-metrics outage: the
+// usual failure never resolves on its own, and at a 10s push interval logging
+// every batch buries real errors. Distinct errors and recovery log at once; an
+// unchanged error repeats at most once per selfMetricsErrorRepeat.
 type logAndDropMetricExporter struct {
 	sdkmetric.Exporter
+
+	mu         sync.Mutex
+	lastErr    string
+	lastLogged time.Time
+	// Two counters because they answer different questions: dropped is the
+	// whole outage (reported on recovery), sinceLogged only what the last
+	// message did not already account for (reported on a repeat).
+	dropped     int
+	sinceLogged int
 }
 
-func (e logAndDropMetricExporter) Export(ctx context.Context, rm *metricdata.ResourceMetrics) error {
-	if err := e.Exporter.Export(ctx, rm); err != nil {
+// selfMetricsErrorRepeat bounds how often an unchanged self-metrics error
+// repeats. Long enough that a persistent misconfiguration costs a handful of
+// lines an hour, short enough that an operator tailing the log still sees it.
+const selfMetricsErrorRepeat = 5 * time.Minute
+
+func (e *logAndDropMetricExporter) Export(ctx context.Context, rm *metricdata.ResourceMetrics) error {
+	err := e.Exporter.Export(ctx, rm)
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if err == nil {
+		if e.lastErr != "" {
+			clicklog.Info("OTLP self-metrics export recovered after %d dropped batch(es)", e.dropped)
+			e.lastErr = ""
+			e.dropped = 0
+			e.sinceLogged = 0
+		}
+		return nil
+	}
+
+	msg := err.Error()
+	now := time.Now()
+	e.dropped++
+	if msg != e.lastErr {
 		clicklog.Error("OTLP self-metrics export failed; dropping batch: %v", err)
+		e.lastErr = msg
+		e.lastLogged = now
+		e.sinceLogged = 0
+		return nil
+	}
+
+	e.sinceLogged++
+	if now.Sub(e.lastLogged) >= selfMetricsErrorRepeat {
+		clicklog.Error("OTLP self-metrics export still failing; %d batch(es) dropped since last message: %v", e.sinceLogged, err)
+		e.lastLogged = now
+		e.sinceLogged = 0
 	}
 	return nil
 }

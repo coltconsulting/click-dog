@@ -15,19 +15,15 @@ const domainLanguageDoc = "../../docs/development/domain-language.md"
 // rule requires a domain-language entry. Adding a Phase 2 analyzer (latency
 // regression, failure spike, hot table) must come with its entry or this fails.
 func TestDomainLanguage_AnalyzersDocumented(t *testing.T) {
-	// See the note in the top-level domain_language_test.go: docs/development is
-	// export-ignored, so it is absent from the public archive tree. Skip there;
-	// enforce on internal where the tree exists.
-	if _, err := os.Stat("../../docs/development"); os.IsNotExist(err) {
-		t.Skip("docs/development is internal-only (export-ignored); domain-language governance runs on the internal repo")
-	}
+	requireInternalDocs(t)
+
 	raw, err := os.ReadFile(domainLanguageDoc)
 	if err != nil {
 		t.Fatalf("read %s: %v", domainLanguageDoc, err)
 	}
 	doc := string(raw)
 
-	for _, name := range NewRegistry().AnalyzerNames() {
+	for _, name := range NewRegistryWithRegression().AnalyzerNames() {
 		if !strings.Contains(doc, name) {
 			t.Errorf("analyzer %q is not documented in %s; add a Query Analysis Concepts entry (see the Keeping This In Sync section)", name, domainLanguageDoc)
 		}

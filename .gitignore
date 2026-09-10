@@ -30,8 +30,13 @@ go.work
 # Integration test output
 testing/otel-output/*.jsonl
 
-# MkDocs build output
+# MkDocs build output. site/ is the pre-rename name, kept ignored so a stale
+# directory in an existing clone cannot dirty the tree.
+target/
 site/
+
+# check-site-escape.sh probe dirs; only a killed run leaves one behind
+docs/escape-probe.*
 
 # Docker buildx scratch context
 .docker-buildx/
@@ -45,8 +50,24 @@ site/
 
 # AI
 .claude/
+.agent-cache/
 # ai/ orchestration workspace: only ai/prompts/ (and ai/README.md) are
 # committed; per-session decision/finding/context files stay local.
 ai/decisions/
 ai/findings/
 ai/extended-context/
+
+# Loose maintainer scratch notes at the repo root. These carry unpublished
+# product and commercial thinking, and nothing in the public-boundary check
+# stops a stray root file: scripts/verify-public-boundary.sh denies known
+# internal paths rather than allowing known public ones. One `git add -A`
+# published "clickdog issues." in the v26.09.1-beta.1 tag. Keep scratch notes
+# ignored so that cannot happen again.
+/clickdog issues.
+/*.notes
+
+# The installer lives at deploy/install.sh and is published from there as a
+# release asset. The same commit that added the scratch notes also left a
+# stale copy of the released installer at the root; ignore the path so a
+# downloaded `install.sh` cannot be committed over it again.
+/install.sh

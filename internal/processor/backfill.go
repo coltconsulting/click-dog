@@ -60,7 +60,10 @@ func ProcessQueriesBatch(
 
 		for _, query := range batch {
 			// Apply filters (query log doesn't have operation names)
-			if f.ShouldFilter("", query.Query, query.ClientAddress) {
+			// The whitelist judges the originating client, so a distributed
+			// query's secondary rows follow the same decision as its initial
+			// row rather than the initiating server's address.
+			if f.ShouldFilter("", query.Query, OriginatingAddress(query)) {
 				result.Filtered++
 				continue
 			}
@@ -70,11 +73,9 @@ func ProcessQueriesBatch(
 				continue
 			}
 
-			// Apply SQL redaction before export (local copy only, caller's slice unchanged)
-			query.Query = f.RedactQuery(query.Query)
-
-			// Export to OTEL
-			exportResult, err := ExportQueryWithDeadline(ctx, cfg, exporter, query)
+			// The final export boundary applies query_text_mode to this local copy
+			// after filtering has inspected the raw query.
+			exportResult, err := ExportQueryWithDeadline(ctx, cfg, exporter, f, query)
 			RecordExportObservability(m, exportResult)
 			if err != nil {
 				clicklog.Error("Error exporting query %s: %v", query.QueryID, err)
@@ -119,9 +120,6 @@ func ProcessQueriesBatch(
 // construction in ProcessQueriesBatch every input is exactly one of
 // exported/filtered/failed, so passing len(queries) separately would only
 // risk drift if that invariant ever broke.
-//
-// TODO: wh.Notify is fire-and-forget; on the failure branches the goroutine
-// races the caller's os.Exit. WebhookNotifier.Drain() would close this.
 func ReportBackfillOutcome(startStr, endStr string, result BatchResult, wh *webhook.WebhookNotifier) error {
 	totalQueries := result.Exported + result.Filtered + result.Failed
 	summary := fmt.Sprintf("%s to %s (queries=%d exported=%d filtered=%d failed=%d)",
@@ -131,16 +129,16 @@ func ReportBackfillOutcome(startStr, endStr string, result BatchResult, wh *webh
 	case result.AllFailed():
 		msg := "Backfill failed: all export attempts failed: " + summary
 		clicklog.Error("%s", msg)
-		wh.Notify(webhook.EventBackfillFailed, msg)
+		wh.NotifySync(context.Background(), webhook.EventBackfillFailed, msg)
 		return fmt.Errorf("%s: %w", msg, result.FirstErr)
 	case result.HasFailures():
 		msg := "Backfill partial failure: " + summary
 		clicklog.Error("%s", msg)
-		wh.Notify(webhook.EventBackfillFailed, msg)
+		wh.NotifySync(context.Background(), webhook.EventBackfillFailed, msg)
 		return fmt.Errorf("%s: %w", msg, result.FirstErr)
 	default:
 		clicklog.Info("Backfill complete: %s", summary)
-		wh.Notify(webhook.EventBackfillComplete, "Backfill complete: "+summary)
+		wh.NotifySync(context.Background(), webhook.EventBackfillComplete, "Backfill complete: "+summary)
 		return nil
 	}
 }

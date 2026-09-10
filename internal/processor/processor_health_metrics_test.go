@@ -1,11 +1,13 @@
 package processor
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/coltconsulting/click-dog/internal/config"
 	"github.com/coltconsulting/click-dog/internal/metrics"
 	"github.com/coltconsulting/click-dog/internal/model"
 )
@@ -17,11 +19,8 @@ import (
 //   3. Enrichment-failure cycle — span_log returns rows, but the
 //                       query_log lookup returns an error.
 //
-// They exercise the helpers recordSpanLogObservation and the metrics
-// package's RecordQueryLogEnrichmentCycle directly. We don't drive the
-// full fetchAndProcessSpans pipeline because it takes a concrete
-// *clickhouse.ClickHouseReader; the helper extraction is intentional —
-// the same metric calls run in production, just wrapped in I/O.
+// They drive Pipeline.Process with a fake LiveReader so the assertions cover
+// the same fetch and enrichment orchestration used in production.
 
 // healthyCycleSpans returns a small representative span slice for a
 // healthy cycle: every span has a clickhouse.query_id, the timestamps
@@ -62,12 +61,22 @@ func TestProcessor_HealthyCycleEmitsExpectedMetrics(t *testing.T) {
 	m := metrics.NewMetrics()
 	now := time.Now()
 	spans := healthyCycleSpans(now)
-
-	// Run the span-log observation path the way fetchAndProcessSpans
-	// does, then the enrichment path with a 100% match (3/3 query_ids
-	// resolved, no error).
-	recordSpanLogObservation(m, spans)
-	m.RecordQueryLogEnrichmentCycle(3, 3, nil)
+	reader := &mockLiveReader{
+		healthy: true,
+		spans:   spans,
+		queryLogs: map[string]model.QueryLog{
+			"q-1": {QueryID: "q-1"},
+			"q-2": {QueryID: "q-2"},
+			"q-3": {QueryID: "q-3"},
+		},
+	}
+	pipeline := mustLivePipeline(t, reader, &mockExporter{}, &config.Config{}, nil, m)
+	if err := pipeline.Process(context.Background()); err != nil {
+		t.Fatalf("Pipeline.Process: %v", err)
+	}
+	if reader.fetchCalls != 1 || reader.queryLogCalls != 1 {
+		t.Fatalf("reader calls = fetch:%d enrichment:%d, want 1/1", reader.fetchCalls, reader.queryLogCalls)
+	}
 
 	body := scrapeMetrics(t, m)
 	assertContains(t, body, "click_dog_span_log_rows_last_cycle 3\n")
@@ -111,6 +120,11 @@ func TestProcessor_HealthyCycleEmitsExpectedMetrics(t *testing.T) {
 // surface.
 func TestProcessor_EmptyCycleKeepsStalenessGrowing(t *testing.T) {
 	m := metrics.NewMetrics()
+	reader := &mockLiveReader{
+		healthy:   true,
+		queryLogs: map[string]model.QueryLog{"q-1": {QueryID: "q-1"}},
+	}
+	pipeline := mustLivePipeline(t, reader, &mockExporter{}, &config.Config{}, nil, m)
 
 	// Cycle 1: a single span observed two minutes ago. Sets the
 	// newest-row timestamp gauge from a fresh observation. We seed
@@ -118,16 +132,22 @@ func TestProcessor_EmptyCycleKeepsStalenessGrowing(t *testing.T) {
 	// — FinishDate is left at the zero value to prove the helper is
 	// not falling back to it.
 	twoMinAgo := time.Now().Add(-2 * time.Minute)
-	recordSpanLogObservation(m, []model.OpenTelemetrySpan{{
+	reader.spans = []model.OpenTelemetrySpan{{
 		SpanID:       1,
 		FinishTimeUs: uint64(twoMinAgo.UnixMicro()),
 		Attributes:   map[string]string{"clickhouse.query_id": "q-1"},
-	}})
+	}}
+	if err := pipeline.Process(context.Background()); err != nil {
+		t.Fatalf("first Pipeline.Process: %v", err)
+	}
 
 	// Cycle 2: empty. rows_last_cycle goes to 0, last_poll_timestamp
 	// advances (so the operator knows click-dog is still alive), and
 	// newest_row_age MUST continue ticking from twoMinAgo, not reset.
-	recordSpanLogObservation(m, nil)
+	reader.spans = nil
+	if err := pipeline.Process(context.Background()); err != nil {
+		t.Fatalf("second Pipeline.Process: %v", err)
+	}
 
 	body := scrapeMetrics(t, m)
 	assertContains(t, body, "click_dog_span_log_rows_last_cycle 0\n")
@@ -163,11 +183,14 @@ func TestProcessor_EmptyCycleKeepsStalenessGrowing(t *testing.T) {
 	// zero it.
 	assertContains(t, body, "click_dog_spans_with_query_id_ratio 1.0000\n")
 
-	// Enrichment was never attempted (no query_ids reached the
-	// FetchQueryLogByQueryIDs caller). All three counters stay at 0.
-	assertContains(t, body, "click_dog_query_log_enrichment_attempts_total 0\n")
-	assertContains(t, body, "click_dog_query_log_enrichment_successes_total 0\n")
+	// Cycle 1 enriched its query_id. Cycle 2 had no rows, so it made no new
+	// enrichment attempt and left the counters unchanged.
+	assertContains(t, body, "click_dog_query_log_enrichment_attempts_total 1\n")
+	assertContains(t, body, "click_dog_query_log_enrichment_successes_total 1\n")
 	assertContains(t, body, "click_dog_query_log_enrichment_failures_total 0\n")
+	if reader.queryLogCalls != 1 {
+		t.Errorf("query-log calls = %d, want 1 across both cycles", reader.queryLogCalls)
+	}
 }
 
 // TestProcessor_EnrichmentFailureCycleTrackedSeparately — span_log
@@ -180,9 +203,21 @@ func TestProcessor_EnrichmentFailureCycleTrackedSeparately(t *testing.T) {
 	m := metrics.NewMetrics()
 	now := time.Now()
 	spans := healthyCycleSpans(now)
-
-	recordSpanLogObservation(m, spans)
-	m.RecordQueryLogEnrichmentCycle(0, 3, errors.New("query_log scan failed"))
+	enrichFailCount.Store(0)
+	t.Cleanup(func() { enrichFailCount.Store(0) })
+	reader := &mockLiveReader{
+		healthy:      true,
+		spans:        spans,
+		queryLogsErr: errors.New("query_log scan failed"),
+	}
+	exporter := &mockExporter{}
+	pipeline := mustLivePipeline(t, reader, exporter, &config.Config{}, nil, m)
+	if err := pipeline.Process(context.Background()); err != nil {
+		t.Fatalf("Pipeline.Process: %v", err)
+	}
+	if reader.queryLogCalls != 1 || exporter.exportSpansCalls != 1 {
+		t.Fatalf("calls = enrichment:%d export:%d, want 1/1", reader.queryLogCalls, exporter.exportSpansCalls)
+	}
 
 	body := scrapeMetrics(t, m)
 	// Span-log fetch was healthy — these gauges all advance.

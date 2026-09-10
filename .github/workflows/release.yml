@@ -2,10 +2,10 @@ name: Release
 
 # Tag-triggered wrapper around ci.yml. The cosign keyless identity is the
 # workflow file that runs the signing step (`.../release.yml@refs/tags/v...`)
-# — the updater (internal/updater/github.go) and the installer
-# (deploy/install.sh) both hardcode that path, so this file must remain
-# the home of the signing step even after ci.yml was generalised into a
-# reusable workflow.
+# — the updater (internal/updater/github.go), shell installer
+# (deploy/install.sh), and Ansible playbook (deploy/ansible/playbook.yaml)
+# hardcode that path, so this file must remain the home of the signing step
+# even after ci.yml was generalised into a reusable workflow.
 
 on:
   push:
@@ -22,24 +22,52 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  classify:
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.channel.outputs.channel }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # Fail closed on malformed tags and on any attempt to place a qualified
+      # alpha tag in public. workflow_dispatch is CI-only and never publishes.
+      - name: Classify release channel
+        id: channel
+        env:
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_REF_NAME: ${{ github.ref_name }}
+        run: |
+          channel="$(scripts/release-channel.sh "$RELEASE_REPOSITORY" "$RELEASE_EVENT" "$RELEASE_REF_NAME")"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "Release channel: $channel"
+
   # Run the full CI gate (test/lint/build/build-arm64/govulncheck/
   # integration-test) via the reusable entry point in ci.yml. Failing here
   # blocks the release step below.
+  # No `secrets: inherit`: ci.yml references no secrets, and GITHUB_TOKEN is
+  # passed to a called workflow automatically. Inheriting would hand the whole
+  # repository secret set to every job in the gate for nothing.
   ci:
     uses: ./.github/workflows/ci.yml
-    secrets: inherit
 
   release:
-    needs: ci
-    # Build/sign/publish only in the PUBLIC repo. release.yml ships to the
-    # public tree, so a GA tag triggers this workflow in BOTH repos; without
-    # this guard GoReleaser runs twice (two Releases, two ghcr pushes) and only
-    # the public one is ever consumed. Internal is gate-only (the `ci` job
-    # above); public is the sole artifact builder, and its cosign identity is
-    # the one deploy/install.sh and internal/updater/github.go pin. See
-    # docs/development/specs/release-build-dedup.md.
-    if: github.repository == 'coltconsulting/click-dog'
+    needs: [classify, ci]
+    # Three channels build artifacts, and where they build is what separates
+    # them. alpha builds here, in the internal repo, behind its access control.
+    # beta and ga build only after being mirrored to public, so everything a
+    # user can install carries the provenance the installer and updater pin.
+    # A beta is a GitHub prerelease, so it never displaces :latest or the
+    # latest-release pointer those tools resolve.
+    if: >-
+      needs.ci.result == 'success' &&
+      (needs.classify.outputs.channel == 'internal_alpha' ||
+       needs.classify.outputs.channel == 'public_beta' ||
+       needs.classify.outputs.channel == 'public_ga')
     runs-on: ubuntu-latest
+    env:
+      CLICK_DOG_IMAGE_REPOSITORY: ghcr.io/${{ github.repository }}
+      CLICK_DOG_SOURCE_REPOSITORY: https://github.com/${{ github.repository }}
     permissions:
       contents: write
       packages: write
@@ -48,25 +76,25 @@ jobs:
       # which exchanges this token for a Fulcio-issued signing certificate.
       id-token: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.6'
           cache: false
 
       - name: Log in to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Check GoReleaser config
         # Keep this separate from the release step so schema/config errors
@@ -87,9 +115,9 @@ jobs:
       - name: Run GoReleaser
         # SHA-pinned for the same reason as cosign-installer above: this
         # step runs the signing flow, and a hijacked @v7 tag could
-        # produce unsigned (or wrongly-signed) artifacts. The other
-        # actions in this workflow stay on floating tags by repo
-        # convention — they don't affect the signed-artifact chain.
+        # produce unsigned (or wrongly-signed) artifacts. Every action
+        # in this privileged job is SHA-pinned because any earlier step
+        # can alter the workspace or request the job's OIDC token.
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: '~> v2'
@@ -102,4 +130,4 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           echo "Released $TAG"
           echo "Binaries: https://github.com/${{ github.repository }}/releases/tag/$TAG"
-          echo "Docker:   ghcr.io/${{ github.repository }}:${TAG#v}"
+          echo "Docker:   ${CLICK_DOG_IMAGE_REPOSITORY}:${TAG#v}"

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"strconv"
@@ -38,7 +39,7 @@ Usage:
 
 Flags:
 `)
-		fs.PrintDefaults()
+		printFlagDefaults(errOut, fs)
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -68,6 +69,11 @@ Flags:
 		if err != nil {
 			_, _ = fmt.Fprintf(out, "Could not find running click-dog process: %v\n", err)
 			_, _ = fmt.Fprintln(out, "Is the service running? Check: systemctl status click-dog")
+			// Process discovery is systemd-only, so this is also the path a
+			// container or non-systemd host always lands on. Both documented
+			// alternatives target the process directly and need no systemctl.
+			_, _ = fmt.Fprintf(out, "Without systemd, flush the process directly: curl -X POST %s/flush (or send SIGUSR1 to the pid)\n",
+				adminFlushURL(cfg.Metrics.AdminListenAddress))
 			return 1
 		}
 
@@ -87,6 +93,25 @@ Flags:
 	}
 
 	return 0
+}
+
+// adminFlushURL renders the admin listener's base URL for operator hints.
+// A wildcard bind is not dialable as written, so an unspecified host is
+// rewritten to loopback — the listener is reachable there whatever it binds.
+func adminFlushURL(listenAddress string) string {
+	addr := listenAddress
+	if addr == "" {
+		addr = "127.0.0.1:9091"
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		// Not host:port; hand it back rather than inventing an address.
+		return "http://" + addr
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port)
 }
 
 // findClickDogPID returns the PID of the running click-dog service.

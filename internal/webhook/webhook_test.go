@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coltconsulting/click-dog/internal/analysis"
 	"github.com/coltconsulting/click-dog/internal/config"
 )
 
@@ -71,6 +72,17 @@ func TestWebhookNotifier_ShouldFire(t *testing.T) {
 				t.Errorf("shouldFire(%q) = %v, want %v", tt.event, !tt.expected, tt.expected)
 			}
 		})
+	}
+}
+
+func TestWebhookNotifier_AnalysisFindingsFiltering(t *testing.T) {
+	allowed := NewWebhookNotifier(config.WebhookConfig{Enabled: true, URL: "https://hooks.example/path", Events: []string{EventAnalysisFindings}})
+	if !allowed.Handles(EventAnalysisFindings) {
+		t.Fatal("analysis_findings should be eligible")
+	}
+	filtered := NewWebhookNotifier(config.WebhookConfig{Enabled: true, URL: "https://hooks.example/path", Events: []string{EventStartup}})
+	if filtered.Handles(EventAnalysisFindings) {
+		t.Fatal("analysis_findings should be filtered")
 	}
 }
 
@@ -154,10 +166,106 @@ func TestWebhookNotifier_DoesNotFollowRedirects(t *testing.T) {
 		t.Fatal("expected non-nil notifier")
 	}
 
-	w.send(context.Background(), "startup", "test")
+	err := w.send(context.Background(), "startup", "test")
+	if err == nil || !strings.Contains(err.Error(), "HTTP 302") {
+		t.Fatalf("redirect error = %v", err)
+	}
 
 	if got := targetHits.Load(); got != 0 {
 		t.Fatalf("webhook followed redirect to target server (%d hits)", got)
+	}
+}
+
+func TestWebhookNotifier_NotifyAnalysisPayloadIsBoundedDTOOnly(t *testing.T) {
+	const (
+		secretSQL  = "SELECT card_number FROM payments"
+		secretPath = "/etc/click-dog/private.yaml"
+		secretUser = "customer-admin"
+	)
+	var body []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	w := NewWebhookNotifier(config.WebhookConfig{Enabled: true, URL: server.URL, Events: []string{EventAnalysisFindings}})
+	report := analysis.AnalysisReport{
+		SchemaVersion: analysis.ReportSchemaVersion,
+		Window:        analysis.AnalysisWindow{Start: time.Unix(100, 0), End: time.Unix(200, 0)},
+		Config:        analysis.ReportConfig{ConfigPath: secretPath},
+		Findings: []analysis.Finding{{
+			ID:                    "resource_hog:family:windowed",
+			Analyzer:              "resource_hog",
+			ConditionScope:        "family",
+			Severity:              analysis.SeverityCritical,
+			FamilyID:              "qf_safe",
+			NormalizedQueryHashes: []string{"100"},
+			RepresentativeQuery:   secretSQL,
+			Title:                 secretUser,
+			Summary:               "api_key=payload-secret",
+			Evidence:              map[string]any{"host": "customer-db.internal"},
+			Recommendation:        "webhook=https://hooks.example/private",
+		}},
+	}
+	summary, err := analysis.BuildNotificationSummary(report, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.NotifyAnalysis(context.Background(), summary); err != nil {
+		t.Fatalf("NotifyAnalysis: %v", err)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	for _, want := range []string{"analysis.condition.v1", "qf_safe", "100", "local JSON report", "analyze trace"} {
+		if !strings.Contains(payload["text"], want) {
+			t.Errorf("payload missing %q: %s", want, body)
+		}
+	}
+	for _, forbidden := range []string{secretSQL, secretPath, secretUser, "payload-secret", "customer-db.internal", "hooks.example"} {
+		if strings.Contains(payload["text"], forbidden) {
+			t.Errorf("payload leaked %q: %s", forbidden, body)
+		}
+	}
+}
+
+func TestWebhookNotifier_NotifySyncResultNon2xxAndSecretSafeTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("echo secret-response"))
+	}))
+	defer server.Close()
+	w := NewWebhookNotifier(config.WebhookConfig{Enabled: true, URL: server.URL + "/webhook-secret", TimeoutS: 5})
+	err := w.NotifySyncResult(context.Background(), EventAnalysisFindings, "safe")
+	if err == nil || err.Error() != "HTTP 502 for event analysis_findings" {
+		t.Fatalf("non-2xx error = %v", err)
+	}
+	if strings.Contains(err.Error(), "secret") {
+		t.Fatalf("response or URL secret leaked: %v", err)
+	}
+
+	w.client.Transport = webhookRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, context.DeadlineExceeded
+	})
+	err = w.NotifySyncResult(context.Background(), EventAnalysisFindings, "safe")
+	if err == nil || strings.Contains(err.Error(), "webhook-secret") || strings.Contains(err.Error(), server.URL) {
+		t.Fatalf("transport error is not secret-safe: %v", err)
+	}
+}
+
+func TestWebhookNotifier_ResponseReadIsCappedAndClosed(t *testing.T) {
+	reader := &webhookCountingReader{remaining: maxWebhookResponseBytes * 4}
+	w := NewWebhookNotifier(config.WebhookConfig{Enabled: true, URL: "https://hooks.example/path", TimeoutS: 5})
+	w.client.Transport = webhookRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: reader, Header: make(http.Header)}, nil
+	})
+	if err := w.NotifySyncResult(context.Background(), EventAnalysisFindings, "safe"); err != nil {
+		t.Fatal(err)
+	}
+	if reader.read > maxWebhookResponseBytes || !reader.closed {
+		t.Fatalf("response read=%d closed=%v", reader.read, reader.closed)
 	}
 }
 
@@ -339,4 +447,31 @@ func TestWebhookNotifier_NotifyKeepsBoundedQueue(t *testing.T) {
 
 	close(releaseRequests)
 	requests.Wait()
+}
+
+type webhookRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f webhookRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+type webhookCountingReader struct {
+	remaining int64
+	read      int64
+	closed    bool
+}
+
+func (r *webhookCountingReader) Read(p []byte) (int, error) {
+	if r.remaining == 0 {
+		return 0, io.EOF
+	}
+	if int64(len(p)) > r.remaining {
+		p = p[:r.remaining]
+	}
+	r.remaining -= int64(len(p))
+	r.read += int64(len(p))
+	return len(p), nil
+}
+
+func (r *webhookCountingReader) Close() error {
+	r.closed = true
+	return nil
 }
