@@ -442,3 +442,57 @@ func TestSanitize_SpaceSeparatedCredentials(t *testing.T) {
 		})
 	}
 }
+
+func TestEscapeTextControls(t *testing.T) {
+	input := "query failed\n[INFO] forged\r\x1b[2J\t\u202eabc\U0001bca0"
+	want := `query failed\n[INFO] forged\r\x1b[2J\t\u202eabc\U0001bca0`
+	if got := escapeTextControls(input); got != want {
+		t.Fatalf("escapeTextControls() = %q, want %q", got, want)
+	}
+}
+
+func TestJSONLogEscapesFormatControls(t *testing.T) {
+	if err := InitLogger("info", "", "json", 0, 0); err != nil {
+		t.Fatalf("InitLogger failed: %v", err)
+	}
+	defer CloseLogger()
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	Info("request: %s", "line1\nline2\u007f\u0085\u009b\u202eabc\U0001bca0")
+	output := strings.TrimSpace(buf.String())
+	if strings.ContainsAny(output, "\u007f\u0085\u009b\u202e\U0001bca0") {
+		t.Fatalf("JSON log contains a raw DEL, C1, or Unicode format control: %q", output)
+	}
+
+	var entry map[string]string
+	if err := json.Unmarshal([]byte(output), &entry); err != nil {
+		t.Fatalf("JSON log is invalid: %v\n%s", err, output)
+	}
+	want := "request: line1\nline2\\u007f\\u0085\\u009b\\u202eabc\\U0001bca0"
+	if entry["msg"] != want {
+		t.Fatalf("JSON msg = %q, want %q", entry["msg"], want)
+	}
+}
+
+func TestTextLogEscapesControls(t *testing.T) {
+	if err := InitLogger("info", "", "text", 0, 0); err != nil {
+		t.Fatalf("InitLogger failed: %v", err)
+	}
+	defer CloseLogger()
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	Info("request: %s", "ok\n[ERROR] forged\x1b[2J")
+	output := strings.TrimSuffix(buf.String(), "\n")
+	if strings.ContainsAny(output, "\r\n\x1b") {
+		t.Fatalf("text log contains a raw control character: %q", output)
+	}
+	if !strings.Contains(output, `ok\n[ERROR] forged\x1b[2J`) {
+		t.Fatalf("text log does not contain escaped message: %q", output)
+	}
+}

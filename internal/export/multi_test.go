@@ -7,6 +7,7 @@ import (
 	"log"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -564,6 +565,57 @@ func TestMultiExporter_ExportQuery_AllSinksAttemptedOnFailure(t *testing.T) {
 	if exp1.exportQueryCalls != 1 || exp2.exportQueryCalls != 1 || exp3.exportQueryCalls != 1 {
 		t.Errorf("expected each sink called once, got %d/%d/%d",
 			exp1.exportQueryCalls, exp2.exportQueryCalls, exp3.exportQueryCalls)
+	}
+}
+
+func TestMultiExporter_ExportQuery_StartsAllSinksTogether(t *testing.T) {
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+	}()
+
+	blockingExporter := func(name string) *mockExporter {
+		return &mockExporter{exportQueryFunc: func(ctx context.Context, _ model.QueryLog) error {
+			started <- name
+			select {
+			case <-release:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}}
+	}
+	multi := NewMultiExporter(
+		[]model.SpanExporter{blockingExporter("otel"), blockingExporter("splunk")},
+		[]string{"otel", "splunk"},
+	)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := multi.ExportQuery(context.Background(), model.QueryLog{QueryID: "q1"})
+		done <- err
+	}()
+
+	gotStarted := make(map[string]bool, 2)
+	for range 2 {
+		select {
+		case name := <-started:
+			gotStarted[name] = true
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("not every query sink started before an earlier sink completed")
+		}
+	}
+	if !gotStarted["otel"] || !gotStarted["splunk"] {
+		t.Fatalf("started sinks = %v, want otel and splunk", gotStarted)
+	}
+	close(release)
+	released = true
+	if err := <-done; err != nil {
+		t.Fatalf("ExportQuery: %v", err)
 	}
 }
 

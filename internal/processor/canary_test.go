@@ -89,7 +89,8 @@ func TestRunCanaryAndExport_Success(t *testing.T) {
 		},
 	}
 
-	err := RunCanaryAndExport(context.Background(), querier, exporter, cfg, cb)
+	qf, _ := filter.NewQueryFilter(cfg.Filters)
+	err := RunCanaryAndExport(context.Background(), querier, exporter, cfg, qf, cb)
 
 	if !errors.Is(err, ErrCanaryRan) {
 		t.Errorf("expected ErrCanaryRan, got %v", err)
@@ -119,7 +120,8 @@ func TestRunCanaryAndExport_QueryFailure(t *testing.T) {
 		},
 	}
 
-	err := RunCanaryAndExport(context.Background(), querier, exporter, cfg, cb)
+	qf, _ := filter.NewQueryFilter(cfg.Filters)
+	err := RunCanaryAndExport(context.Background(), querier, exporter, cfg, qf, cb)
 
 	if err == nil || errors.Is(err, ErrCanaryRan) {
 		t.Errorf("expected real error, got %v", err)
@@ -153,7 +155,8 @@ func TestRunCanaryAndExport_ExportFailure(t *testing.T) {
 		},
 	}
 
-	err := RunCanaryAndExport(context.Background(), querier, exporter, cfg, cb)
+	qf, _ := filter.NewQueryFilter(cfg.Filters)
+	err := RunCanaryAndExport(context.Background(), querier, exporter, cfg, qf, cb)
 
 	if err == nil || errors.Is(err, ErrCanaryRan) {
 		t.Errorf("expected export error, got %v", err)

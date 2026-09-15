@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coltconsulting/click-dog/internal/config"
 	"github.com/coltconsulting/click-dog/internal/filter"
@@ -249,5 +252,63 @@ func TestReportBackfillOutcome(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestReportBackfillOutcome_WaitsForTerminalWebhook(t *testing.T) {
+	requestStarted := make(chan struct{})
+	releaseResponse := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(requestStarted)
+		<-releaseResponse
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	released := false
+	defer func() {
+		if !released {
+			close(releaseResponse)
+		}
+	}()
+
+	notifier := webhook.NewWebhookNotifier(config.WebhookConfig{
+		Enabled:  true,
+		URL:      server.URL,
+		TimeoutS: 2,
+		Events:   []string{webhook.EventBackfillFailed},
+	})
+
+	returned := make(chan error, 1)
+	go func() {
+		returned <- ReportBackfillOutcome(
+			"2024-01-01T00:00:00Z",
+			"2024-01-01T01:00:00Z",
+			BatchResult{Failed: 1, FirstErr: errors.New("send failed")},
+			notifier,
+		)
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("terminal backfill webhook request did not reach server")
+	}
+
+	select {
+	case <-returned:
+		t.Fatal("ReportBackfillOutcome returned before webhook delivery completed")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(releaseResponse)
+	released = true
+	select {
+	case err := <-returned:
+		if err == nil || !strings.Contains(err.Error(), "all export attempts failed") {
+			t.Fatalf("ReportBackfillOutcome error = %v, want all-failed outcome", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ReportBackfillOutcome did not return after webhook delivery completed")
 	}
 }

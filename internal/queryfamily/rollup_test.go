@@ -193,8 +193,11 @@ func TestRollupCoalescesExactGroupsBeforeClustering(t *testing.T) {
 			NormalizedQueryHash: 100,
 			NormalizedQuery:     "SELECT id, name FROM app.users WHERE tenant_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?",
 			ExecutionCount:      7,
+			SuccessfulCount:     6,
+			FailedCount:         1,
 			P95DurationMs:       120,
 			P99DurationMs:       180,
+			TopExceptions:       []model.QueryExceptionCount{{Code: 241, Count: 1}},
 			MaxMemoryUsage:      1024,
 			P95ReadRows:         1000,
 			P95ReadBytes:        8000,
@@ -208,8 +211,11 @@ func TestRollupCoalescesExactGroupsBeforeClustering(t *testing.T) {
 			NormalizedQueryHash: 100,
 			NormalizedQuery:     "SELECT id, name FROM app.users WHERE tenant_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?",
 			ExecutionCount:      5,
+			SuccessfulCount:     4,
+			FailedCount:         1,
 			P95DurationMs:       150,
 			P99DurationMs:       220,
+			TopExceptions:       []model.QueryExceptionCount{{Code: 241, Count: 1}},
 			MaxMemoryUsage:      2048,
 			P95ReadRows:         1200,
 			P95ReadBytes:        9000,
@@ -223,6 +229,7 @@ func TestRollupCoalescesExactGroupsBeforeClustering(t *testing.T) {
 			NormalizedQueryHash: 200,
 			NormalizedQuery:     "SELECT id, name FROM app.users WHERE tenant_id = ? ORDER BY created_at DESC LIMIT ?",
 			ExecutionCount:      11,
+			SuccessfulCount:     11,
 			P95DurationMs:       90,
 			P99DurationMs:       140,
 			MaxMemoryUsage:      512,
@@ -238,6 +245,7 @@ func TestRollupCoalescesExactGroupsBeforeClustering(t *testing.T) {
 			NormalizedQueryHash: 300,
 			NormalizedQuery:     "SELECT count() FROM app.orders WHERE account_id = ?",
 			ExecutionCount:      4,
+			SuccessfulCount:     4,
 			P95DurationMs:       40,
 			P99DurationMs:       60,
 			MaxMemoryUsage:      256,
@@ -266,6 +274,15 @@ func TestRollupCoalescesExactGroupsBeforeClustering(t *testing.T) {
 	}
 	if family.Stats.P95DurationMs != 150 {
 		t.Errorf("P95DurationMs = %.1f, want conservative max 150", family.Stats.P95DurationMs)
+	}
+	if family.Stats.SuccessfulCount != 21 || family.Stats.FailedCount != 2 || family.Stats.FailureRate != float64(2)/23 {
+		t.Errorf("outcome stats = %+v, want 21 successful / 2 failed", family.Stats)
+	}
+	if len(family.Stats.TopExceptions) != 1 || family.Stats.TopExceptions[0] != (model.QueryExceptionCount{Code: 241, Count: 2}) {
+		t.Errorf("TopExceptions = %+v, want code 241 count 2", family.Stats.TopExceptions)
+	}
+	if family.Members[0].SuccessfulCount != 10 || family.Members[0].FailedCount != 2 || family.Members[0].P99DurationMs != 220 {
+		t.Errorf("coalesced exact member metrics = %+v", family.Members[0])
 	}
 	if family.Stats.MaxMemoryUsage != 2048 {
 		t.Errorf("MaxMemoryUsage = %d, want 2048", family.Stats.MaxMemoryUsage)

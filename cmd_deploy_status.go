@@ -60,7 +60,7 @@ otherwise exits 1. The plain-text output is printed regardless of exit code.
 
 Flags:
 `)
-		fs.PrintDefaults()
+		printFlagDefaults(errOut, fs)
 	}
 
 	if err := fs.Parse(args); err != nil {

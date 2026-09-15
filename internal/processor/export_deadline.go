@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/coltconsulting/click-dog/internal/config"
+	"github.com/coltconsulting/click-dog/internal/filter"
 	"github.com/coltconsulting/click-dog/internal/model"
 )
 
@@ -30,7 +31,13 @@ func wrapExportDeadlineError(timeout time.Duration, err error) error {
 	return err
 }
 
-func ExportSpansWithDeadline(ctx context.Context, cfg *config.Config, exporter model.SpanExporter, spans []model.OpenTelemetrySpan) (model.ExportResult, error) {
+// ExportSpansWithDeadline applies the query-text privacy boundary before the
+// first exporter (including MultiExporter) receives the batch.
+func ExportSpansWithDeadline(ctx context.Context, cfg *config.Config, exporter model.SpanExporter, f *filter.QueryFilter, spans []model.OpenTelemetrySpan) (model.ExportResult, error) {
+	if f == nil {
+		return model.ExportResult{}, errors.New("query-text export boundary is not configured")
+	}
+	spans = f.ShapeSpansForExport(spans)
 	timeout, ok := exportDeadline(cfg)
 	if !ok {
 		return exporter.ExportSpans(ctx, spans)
@@ -47,7 +54,13 @@ func ExportSpansWithDeadline(ctx context.Context, cfg *config.Config, exporter m
 	return result, nil
 }
 
-func ExportQueryWithDeadline(ctx context.Context, cfg *config.Config, exporter model.SpanExporter, query model.QueryLog) (model.ExportResult, error) {
+// ExportQueryWithDeadline applies the same privacy boundary to query_log rows
+// used by backfill (and any future continuous query-log source).
+func ExportQueryWithDeadline(ctx context.Context, cfg *config.Config, exporter model.SpanExporter, f *filter.QueryFilter, query model.QueryLog) (model.ExportResult, error) {
+	if f == nil {
+		return model.ExportResult{}, errors.New("query-text export boundary is not configured")
+	}
+	query = f.ShapeQueryForExport(query)
 	timeout, ok := exportDeadline(cfg)
 	if !ok {
 		return exporter.ExportQuery(ctx, query)

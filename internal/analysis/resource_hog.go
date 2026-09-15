@@ -130,6 +130,7 @@ func (a *resourceHogAnalyzer) Analyze(_ context.Context, input AnalysisInput) ([
 		findings = append(findings, Finding{
 			ID:                    FindingID(a.Name(), "family", family.FamilyID, input.Window.Start, family.MemberHashesSorted),
 			Analyzer:              a.Name(),
+			ConditionScope:        "family",
 			Severity:              severity,
 			Confidence:            1.0,
 			Title:                 fmt.Sprintf("Query family %s is %.1fx peer median", strongest.metric.label, strongest.ratio),

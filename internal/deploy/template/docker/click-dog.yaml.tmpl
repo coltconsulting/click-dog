@@ -2,7 +2,7 @@ clickhouse:
   host: localhost
   port: 9000
   database: default
-  username: {{ .ClickHouseUsername }}
+  username: {{ yamlScalar .ClickHouseUsername }}
   password: ${CLICKHOUSE_PASSWORD}
   max_open_conns: 2
   max_idle_conns: 1
@@ -10,7 +10,7 @@ clickhouse:
 
 exporters:
   otel:
-    - collector_address: {{ .CollectorAddress }}
+    - collector_address: {{ yamlScalar .CollectorAddress }}
       service_name: click-dog-monitor
 
 monitor:

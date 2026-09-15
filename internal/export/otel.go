@@ -82,7 +82,11 @@ func NewOTELGRPCConn(cfg config.OTELConfig) (*grpc.ClientConn, error) {
 			return nil, fmt.Errorf("mTLS requires both client_cert and client_key to be specified, got only one")
 		}
 
+		// MinVersion is Go's current client default, stated explicitly so the
+		// floor is a property of this config rather than of the toolchain, and
+		// so it matches internal/leader's Keeper dialer. Not a behavior change.
 		tlsConfig := &tls.Config{
+			MinVersion:         tls.VersionTLS12,
 			InsecureSkipVerify: cfg.InsecureSkipVerify,
 		}
 
@@ -117,7 +121,7 @@ func NewOTELGRPCConn(cfg config.OTELConfig) (*grpc.ClientConn, error) {
 		}
 	} else {
 		transportCreds = insecure.NewCredentials()
-		clicklog.Warn("OTEL export using plaintext connection (secure: false) — spans, including SQL text, travel unencrypted; set exporters.otel[].secure: true for TLS")
+		clicklog.Warn("OTEL export using plaintext connection (secure: false) — span payloads travel unencrypted; set exporters.otel[].secure: true for TLS")
 	}
 
 	// Create gRPC connection to OTEL collector
@@ -196,7 +200,6 @@ func (o *OTELExporter) ExportQuery(ctx context.Context, log model.QueryLog) (mod
 	attrs := []*commonpb.KeyValue{
 		StringAttr("click_dog.source", "query_log"),
 		StringAttr("db.system", "clickhouse"),
-		StringAttr("db.statement", TruncateQuery(log.Query, o.maxQueryLength)),
 		StringAttr("db.user", log.User),
 		StringAttr("db.query_id", log.QueryID),
 		StringAttr("db.query_kind", log.QueryKind),
@@ -211,6 +214,9 @@ func (o *OTELExporter) ExportQuery(ctx context.Context, log model.QueryLog) (mod
 		IntAttr("db.result_rows", int64(log.ResultRows)),
 		IntAttr("db.result_bytes", int64(log.ResultBytes)),
 		IntAttr("db.memory_usage", int64(log.MemoryUsage)),
+	}
+	if statement := TruncateQuery(log.Query, o.maxQueryLength); statement != "" {
+		attrs = append(attrs, StringAttr("db.statement", statement))
 	}
 
 	if len(log.DatabasesVisited) > 0 {

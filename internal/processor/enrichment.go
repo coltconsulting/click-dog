@@ -1,11 +1,14 @@
 package processor
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/coltconsulting/click-dog/internal/export"
 	"github.com/coltconsulting/click-dog/internal/filter"
@@ -163,6 +166,142 @@ func ResolveSpanUser(span model.OpenTelemetrySpan, queryLogMap map[string]model.
 	if qid := span.Attributes["clickhouse.query_id"]; qid != "" {
 		if ql, ok := queryLogMap[qid]; ok {
 			return ql.User
+		}
+	}
+	return ""
+}
+
+// OriginatingAddress returns the address of the client that started the
+// query a query_log row belongs to. A distributed query fans out to other
+// servers as secondary queries whose own `address` is the initiating server,
+// not the client; `initial_address` names the client on every row of the
+// query, so it is the value client-scoped decisions must use. Rows that carry
+// no initial address (an unset or zero value) fall back to their own address.
+func OriginatingAddress(ql model.QueryLog) string {
+	switch ql.InitialAddress {
+	case "", "::", "0.0.0.0", "::ffff:0.0.0.0":
+		return ql.ClientAddress
+	}
+	return ql.InitialAddress
+}
+
+// TraceClientAddresses maps each trace to its originating client address. A
+// trace has exactly one client, but a distributed trace carries several query
+// spans — the initial query and one secondary query per remote server — and
+// only query spans reach the query log, so the map is built once per cycle
+// over every span and applied to the whole trace: resolving per span would
+// admit roots and drop children, or admit or drop a trace's shards by which
+// server's address happened to be seen first.
+//
+// A query-log row wins over a span attribute for the same trace whatever the
+// row order: every row of a query names the same originating client, whereas
+// a client.address attribute (forward-compat — ClickHouse does not emit it on
+// span-log rows today) would be per server.
+func TraceClientAddresses(spans []model.OpenTelemetrySpan, queryLogMap map[string]model.QueryLog) map[uuid.UUID]string {
+	addrs := make(map[uuid.UUID]string)
+	for i := range spans {
+		if _, ok := addrs[spans[i].TraceID]; ok {
+			continue
+		}
+		if addr := queryLogClientAddress(spans[i], queryLogMap); addr != "" {
+			addrs[spans[i].TraceID] = addr
+		}
+	}
+	for i := range spans {
+		if _, ok := addrs[spans[i].TraceID]; ok {
+			continue
+		}
+		if addr := spans[i].Attributes["client.address"]; addr != "" {
+			addrs[spans[i].TraceID] = addr
+		}
+	}
+	return addrs
+}
+
+// UnresolvedTraceIDs lists, in first-seen order, the traces in spans that the
+// address map did not resolve — typically because the page holds children
+// whose query root sits in another page.
+func UnresolvedTraceIDs(spans []model.OpenTelemetrySpan, traceAddrs map[uuid.UUID]string) []uuid.UUID {
+	var missing []uuid.UUID
+	seen := make(map[uuid.UUID]bool)
+	for i := range spans {
+		id := spans[i].TraceID
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		if _, ok := traceAddrs[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	return missing
+}
+
+// ResolveTraceAddressesFromSpanLog resolves the originating client of traces
+// the current span page could not: it reads each trace's query IDs from the
+// span log, fetches those query_log rows, and takes the originating address of
+// the first row found. Traces with no query span inside lookbackDays, or whose
+// rows are missing from query_log, stay unresolved.
+func ResolveTraceAddressesFromSpanLog(ctx context.Context, reader LiveReader, traceIDs []uuid.UUID, lookbackDays int) (map[uuid.UUID]string, error) {
+	byTrace, err := reader.FetchTraceQueryIDs(ctx, traceIDs, lookbackDays)
+	if err != nil {
+		return nil, err
+	}
+	var queryIDs []string
+	seen := make(map[string]bool)
+	for _, qids := range byTrace {
+		for _, qid := range qids {
+			if !seen[qid] {
+				seen[qid] = true
+				queryIDs = append(queryIDs, qid)
+			}
+		}
+	}
+	resolved := make(map[uuid.UUID]string)
+	if len(queryIDs) == 0 {
+		return resolved, nil
+	}
+	rows, err := reader.FetchQueryLogByQueryIDs(ctx, queryIDs, lookbackDays)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range traceIDs {
+		for _, qid := range byTrace[id] {
+			if ql, ok := rows[qid]; ok {
+				if addr := OriginatingAddress(ql); addr != "" {
+					resolved[id] = addr
+					break
+				}
+			}
+		}
+	}
+	return resolved, nil
+}
+
+// ResolveSpanClientAddress returns the originating client address for a span,
+// or "" if it cannot be determined. The trace-level decision from
+// TraceClientAddresses is authoritative so every span of a trace gets the
+// same answer; a span is resolved on its own only when no trace decision
+// exists. A trace whose address cannot be resolved at all returns "" and is
+// dropped by an active whitelist, matching the strict semantics of the user
+// whitelist.
+func ResolveSpanClientAddress(span model.OpenTelemetrySpan, queryLogMap map[string]model.QueryLog, traceAddrs map[uuid.UUID]string) string {
+	if addr, ok := traceAddrs[span.TraceID]; ok {
+		return addr
+	}
+	if addr := queryLogClientAddress(span, queryLogMap); addr != "" {
+		return addr
+	}
+	return span.Attributes["client.address"]
+}
+
+// queryLogClientAddress resolves one span through the query_log enrichment
+// map by clickhouse.query_id, which is the source the IP whitelist is
+// documented to use, returning the originating client of that query.
+func queryLogClientAddress(span model.OpenTelemetrySpan, queryLogMap map[string]model.QueryLog) string {
+	if qid := span.Attributes["clickhouse.query_id"]; qid != "" {
+		if ql, ok := queryLogMap[qid]; ok {
+			return OriginatingAddress(ql)
 		}
 	}
 	return ""

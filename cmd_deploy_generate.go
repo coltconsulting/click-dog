@@ -33,6 +33,7 @@ var (
 	deployLatestVersion = defaultDeployLatestVersion
 	clickDogImageRE     = regexp.MustCompile(`(?m)^(\s*image:\s*ghcr\.io/coltconsulting/click-dog:).*$`)
 	deployUsernameRE    = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_.-]*$`)
+	deployVersionRE     = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$`)
 )
 
 type deployGenerateOptions struct {
@@ -93,26 +94,26 @@ func deployKubernetesUsage(errOut io.Writer, fs *flag.FlagSet) {
 	_, _ = fmt.Fprintf(errOut, `click-dog deploy kubernetes — generate Kubernetes manifests
 
 Usage:
-  click-dog deploy kubernetes -c COLLECTOR -ch-host CH_SERVICE [-cluster NAME] [-o DIR] [-v VERSION]
+  click-dog deploy kubernetes -c COLLECTOR --ch-host CH_SERVICE [--cluster NAME] [-o DIR] [-v VERSION]
 
 Generates a centralized click-dog Deployment that reaches ClickHouse over
--ch-host — the ClickHouse Service DNS (e.g. clickhouse.clickhouse.svc.cluster.local),
-not localhost. Pass -cluster <name> to read all shards via cluster() queries.
+--ch-host — the ClickHouse Service DNS (e.g. clickhouse.clickhouse.svc.cluster.local),
+not localhost. Pass --cluster <name> to read all shards via cluster() queries.
 
 Flags:
 `)
-	fs.PrintDefaults()
+	printFlagDefaults(errOut, fs)
 }
 
 func deployDockerUsage(errOut io.Writer, fs *flag.FlagSet) {
 	_, _ = fmt.Fprintf(errOut, `click-dog deploy docker — generate Docker Compose files
 
 Usage:
-  click-dog deploy docker -c HOST [-out-dir DIR] [--update] [-version VERSION]
+  click-dog deploy docker -c HOST [--out-dir DIR] [--update] [--version VERSION]
 
 Flags:
 `)
-	fs.PrintDefaults()
+	printFlagDefaults(errOut, fs)
 }
 
 func parseDeployGenerateFlags(name string, args []string, opts *deployGenerateOptions, errOut io.Writer, usage func(io.Writer, *flag.FlagSet)) error {
@@ -151,7 +152,8 @@ func parseDeployGenerateFlags(name string, args []string, opts *deployGenerateOp
 
 func deployKubernetes(opts deployGenerateOptions, out, errOut io.Writer) error {
 	if opts.Update {
-		if err := requireDeployUpdateVersion(opts.Version, "kubernetes"); err != nil {
+		version, err := requireDeployUpdateVersion(opts.Version, "kubernetes")
+		if err != nil {
 			return err
 		}
 		// Pre-#199 output dirs hold daemonset.yaml, not deployment.yaml. The
@@ -162,11 +164,11 @@ func deployKubernetes(opts deployGenerateOptions, out, errOut io.Writer) error {
 		if isLegacyDaemonSetOutDir(opts.OutDir) {
 			return fmt.Errorf("%s has daemonset.yaml but no deployment.yaml — it predates the DaemonSet->Deployment migration (#199); an image-tag bump won't migrate it.\n"+
 				"Regenerate:\n"+
-				"  click-dog deploy kubernetes -c <collector> -ch-host <ch-service> [-cluster <name>]\n"+
+				"  click-dog deploy kubernetes -c <collector> --ch-host <ch-service> [--cluster <name>]\n"+
 				"then delete the old workload (apply -k won't remove it):\n"+
 				"  kubectl delete daemonset click-dog -n click-dog", opts.OutDir)
 		}
-		return updateDeploymentImage(opts.OutDir, "deployment.yaml", opts.Version, out, "Kubernetes")
+		return updateDeploymentImage(opts.OutDir, "deployment.yaml", version, out, "Kubernetes")
 	}
 
 	// A standalone click-dog pod has its own network namespace, so it can only
@@ -182,9 +184,9 @@ func deployKubernetes(opts deployGenerateOptions, out, errOut io.Writer) error {
 	// single-node ClickHouse, wrong (silent partial data) for a multi-shard
 	// cluster. Make that implication explicit rather than silently shipping it.
 	if strings.TrimSpace(opts.ClickHouseCluster) == "" {
-		_, _ = fmt.Fprintln(errOut, "WARNING: no -cluster given — the Deployment will read only the single ClickHouse")
+		_, _ = fmt.Fprintln(errOut, "WARNING: no --cluster given — the Deployment will read only the single ClickHouse")
 		_, _ = fmt.Fprintln(errOut, "         pod the Service routes to. Correct for single-node ClickHouse; for a")
-		_, _ = fmt.Fprintln(errOut, "         multi-shard cluster pass -cluster <name> to read all shards via cluster().")
+		_, _ = fmt.Fprintln(errOut, "         multi-shard cluster pass --cluster <name> to read all shards via cluster().")
 	}
 
 	if err := prepareInitialDeployOptions(&opts, out, errOut); err != nil {
@@ -207,17 +209,18 @@ func deployKubernetes(opts deployGenerateOptions, out, errOut io.Writer) error {
 		template string
 		output   string
 		mode     os.FileMode
+		private  bool
 	}{
-		{"k8s/namespace.yaml.tmpl", "namespace.yaml", 0644},
-		{"k8s/serviceaccount.yaml.tmpl", "serviceaccount.yaml", 0644},
-		{"k8s/configmap.yaml.tmpl", "configmap.yaml", 0644},
-		{"k8s/secret.yaml.tmpl", "secret.yaml", 0644},
-		{"k8s/deployment.yaml.tmpl", "deployment.yaml", 0644},
-		{"k8s/kustomization.yaml.tmpl", "kustomization.yaml", 0644},
-		{"k8s/gitignore.tmpl", ".gitignore", 0644},
+		{"k8s/namespace.yaml.tmpl", "namespace.yaml", 0644, false},
+		{"k8s/serviceaccount.yaml.tmpl", "serviceaccount.yaml", 0644, false},
+		{"k8s/configmap.yaml.tmpl", "configmap.yaml", 0644, false},
+		{"k8s/secret.yaml.tmpl", "secret.yaml", 0600, true},
+		{"k8s/deployment.yaml.tmpl", "deployment.yaml", 0644, false},
+		{"k8s/kustomization.yaml.tmpl", "kustomization.yaml", 0644, false},
+		{"k8s/gitignore.tmpl", ".gitignore", 0644, false},
 	}
 	for _, f := range files {
-		if err := writeDeployTemplate(opts.OutDir, f.output, f.template, data, f.mode); err != nil {
+		if err := writeDeployTemplate(opts.OutDir, f.output, f.template, data, f.mode, f.private); err != nil {
 			return err
 		}
 	}
@@ -230,10 +233,11 @@ func deployKubernetes(opts deployGenerateOptions, out, errOut io.Writer) error {
 
 func deployDocker(opts deployGenerateOptions, out, errOut io.Writer) error {
 	if opts.Update {
-		if err := requireDeployUpdateVersion(opts.Version, "docker"); err != nil {
+		version, err := requireDeployUpdateVersion(opts.Version, "docker")
+		if err != nil {
 			return err
 		}
-		return updateDeploymentImage(opts.OutDir, "docker-compose.yml", opts.Version, out, "Docker")
+		return updateDeploymentImage(opts.OutDir, "docker-compose.yml", version, out, "Docker")
 	}
 
 	if err := prepareInitialDeployOptions(&opts, out, errOut); err != nil {
@@ -252,25 +256,20 @@ func deployDocker(opts deployGenerateOptions, out, errOut io.Writer) error {
 		template string
 		output   string
 		mode     os.FileMode
+		private  bool
 	}{
-		{"docker/docker-compose.yml.tmpl", "docker-compose.yml", 0644},
-		{"docker/click-dog.yaml.tmpl", "click-dog.yaml", 0644},
-		{"docker/gitignore.tmpl", ".gitignore", 0644},
+		{"docker/docker-compose.yml.tmpl", "docker-compose.yml", 0644, false},
+		{"docker/click-dog.yaml.tmpl", "click-dog.yaml", 0644, false},
+		{"docker/gitignore.tmpl", ".gitignore", 0644, false},
 	}
 	for _, f := range files {
-		if err := writeDeployTemplate(opts.OutDir, f.output, f.template, data, f.mode); err != nil {
+		if err := writeDeployTemplate(opts.OutDir, f.output, f.template, data, f.mode, f.private); err != nil {
 			return err
 		}
 	}
 
 	envPath := filepath.Join(opts.OutDir, ".env")
-	// Remove any pre-existing .env so WriteFile creates fresh with 0600 -
-	// WriteFile honors the perm bits only on create, so a pre-existing
-	// world-readable file would keep its old mode.
-	if err := os.Remove(envPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("removing pre-existing .env: %w", err)
-	}
-	if err := os.WriteFile(envPath, []byte("CLICKHOUSE_PASSWORD="+escapeComposeEnv(opts.ClickHousePass)+"\n"), 0600); err != nil {
+	if err := writePrivateFile(envPath, []byte("CLICKHOUSE_PASSWORD="+escapeComposeEnv(opts.ClickHousePass)+"\n"), 0600); err != nil {
 		return fmt.Errorf("writing .env: %w", err)
 	}
 
@@ -285,13 +284,13 @@ func prepareInitialDeployOptions(opts *deployGenerateOptions, out, errOut io.Wri
 		return errors.New("-c collector address is required")
 	}
 	if strings.TrimSpace(opts.OutDir) == "" {
-		return errors.New("-out-dir cannot be empty")
+		return errors.New("--out-dir cannot be empty")
 	}
 	if !deployUsernameRE.MatchString(opts.ClickHouseUser) {
 		return fmt.Errorf("username must start with a letter or underscore and contain only letters, digits, underscore, dot, or hyphen (got %q)", opts.ClickHouseUser)
 	}
 	if opts.PasswordFromFlag {
-		_, _ = fmt.Fprintln(errOut, "WARNING: -p/-password exposes the password in process listings and shell history.")
+		_, _ = fmt.Fprintln(errOut, "WARNING: -p/--password exposes the password in process listings and shell history.")
 		_, _ = fmt.Fprintln(errOut, "         Prefer: export CLICKHOUSE_PASSWORD=...")
 	}
 	if opts.ClickHousePass == "" {
@@ -308,23 +307,35 @@ func prepareInitialDeployOptions(opts *deployGenerateOptions, out, errOut io.Wri
 			return errors.New("ClickHouse password required. Set CLICKHOUSE_PASSWORD env var or use -p")
 		}
 	}
+	resolvedLatest := false
 	if opts.Version == "" {
 		resolved, err := deployLatestVersion()
 		if err != nil {
 			return fmt.Errorf("could not resolve latest release version from GitHub API: %w", err)
 		}
 		opts.Version = resolved
-		_, _ = fmt.Fprintf(out, "Latest version: %s\n", imageTag(opts.Version))
+		resolvedLatest = true
 	}
-	opts.Version = cleanVersion(opts.Version)
+	version, err := validateDeployVersion(opts.Version)
+	if err != nil {
+		return err
+	}
+	opts.Version = version
+	if resolvedLatest {
+		_, _ = fmt.Fprintf(out, "Latest version: %s\n", opts.Version)
+	}
 	return nil
 }
 
-func requireDeployUpdateVersion(version, mode string) error {
+func requireDeployUpdateVersion(version, mode string) (string, error) {
 	if strings.TrimSpace(version) == "" {
-		return fmt.Errorf("-v VERSION is required for %s update", mode)
+		return "", fmt.Errorf("-v VERSION is required for %s update", mode)
 	}
-	return nil
+	cleaned, err := validateDeployVersion(version)
+	if err != nil {
+		return "", err
+	}
+	return cleaned, nil
 }
 
 // isLegacyDaemonSetOutDir reports whether an output dir was generated before
@@ -347,7 +358,7 @@ func isLegacyDaemonSetOutDir(outDir string) bool {
 func validateClickHouseHostForK8s(host string) error {
 	h := strings.TrimSpace(host)
 	if h == "" {
-		return errors.New("-ch-host is required for kubernetes: set it to the ClickHouse Service DNS (e.g. clickhouse.clickhouse.svc.cluster.local)")
+		return errors.New("--ch-host is required for kubernetes: set it to the ClickHouse Service DNS (e.g. clickhouse.clickhouse.svc.cluster.local)")
 	}
 	// Reject host:port — the port is a separate config field (fixed at 9000). A
 	// bare host:port here renders `host: localhost:9000` alongside `port: 9000`,
@@ -355,24 +366,31 @@ func validateClickHouseHostForK8s(host string) error {
 	// SplitHostPort errors when there's no port (including a bracketless IPv6
 	// literal), which is exactly the input we want to allow through.
 	if _, _, err := net.SplitHostPort(h); err == nil {
-		return fmt.Errorf("-ch-host %q must not include a port — pass just the host (the ClickHouse port is fixed at 9000)", host)
+		return fmt.Errorf("--ch-host %q must not include a port — pass just the host (the ClickHouse port is fixed at 9000)", host)
 	}
 	// Reject loopback. "localhost" is a name (ParseIP won't catch it); the rest
 	// is any IP in 127.0.0.0/8 or ::1 — exact 127.0.0.1 isn't special, the whole
 	// /8 is loopback. A standalone pod reaches none of these.
 	ip := net.ParseIP(strings.Trim(h, "[]")) // unwrap a bracketed IPv6 literal
 	if strings.EqualFold(h, "localhost") || (ip != nil && ip.IsLoopback()) {
-		return fmt.Errorf("-ch-host %q is unreachable from a standalone click-dog Deployment (separate pod network namespace); use the ClickHouse Service DNS, e.g. clickhouse.clickhouse.svc.cluster.local", host)
+		return fmt.Errorf("--ch-host %q is unreachable from a standalone click-dog Deployment (separate pod network namespace); use the ClickHouse Service DNS, e.g. clickhouse.clickhouse.svc.cluster.local", host)
 	}
 	return nil
 }
 
-func writeDeployTemplate(outDir, output, templatePath string, data deployTemplateData, mode os.FileMode) error {
+func writeDeployTemplate(outDir, output, templatePath string, data deployTemplateData, mode os.FileMode, private bool) error {
 	rendered, err := deploytemplate.Render(templatePath, data)
 	if err != nil {
 		return fmt.Errorf("rendering %s: %w", templatePath, err)
 	}
-	if err := os.WriteFile(filepath.Join(outDir, output), rendered, mode); err != nil {
+	path := filepath.Join(outDir, output)
+	if private {
+		if err := writePrivateFile(path, rendered, mode); err != nil {
+			return fmt.Errorf("writing %s: %w", output, err)
+		}
+		return nil
+	}
+	if err := os.WriteFile(path, rendered, mode); err != nil {
 		return fmt.Errorf("writing %s: %w", output, err)
 	}
 	return nil
@@ -380,7 +398,7 @@ func writeDeployTemplate(outDir, output, templatePath string, data deployTemplat
 
 func updateDeploymentImage(outDir, filename, version string, out io.Writer, label string) error {
 	if strings.TrimSpace(outDir) == "" {
-		return errors.New("-out-dir cannot be empty")
+		return errors.New("--out-dir cannot be empty")
 	}
 	if info, err := os.Stat(outDir); err != nil {
 		if os.IsNotExist(err) {
@@ -450,6 +468,14 @@ func defaultDeployLatestVersion() (string, error) {
 
 func cleanVersion(v string) string {
 	return strings.TrimPrefix(strings.TrimSpace(v), "v")
+}
+
+func validateDeployVersion(v string) (string, error) {
+	cleaned := cleanVersion(v)
+	if !deployVersionRE.MatchString(cleaned) {
+		return "", fmt.Errorf("--version %q must be X.Y.Z with an optional alphanumeric prerelease suffix", v)
+	}
+	return cleaned, nil
 }
 
 // imageTag is the container image tag pinned for a version. GoReleaser

@@ -9,13 +9,14 @@ Specifically, the following are NOT yet stable:
 
   * YAML config schema and field names (the `health` block is new; others
     may be renamed or restructured)
-  * HTTP endpoint JSON shapes on :9090 (/metrics, /health, /flush) and
+  * HTTP endpoint JSON shapes on :9090 (/metrics, /health), the loopback
+    admin listener on :9091 (/flush), and
     :8686 (/healthz, /readyz, /status)
   * Prometheus metric names and labels on /metrics
   * Exported Go types and function signatures in internal/ packages
     (these are internal/ to begin with, but calling them from tests or
     forks means breakage is on you)
-  * CLI subcommand behavior (flush, check, init, test-span,
+  * CLI subcommand behavior (flush, check, init, test, test-span,
     create-dashboards, self-update)
 
 What is relatively stable:

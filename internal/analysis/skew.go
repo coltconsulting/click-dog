@@ -68,6 +68,7 @@ func (a *skewAnalyzer) Analyze(_ context.Context, input AnalysisInput) ([]Findin
 			findings = append(findings, Finding{
 				ID:                    FindingID(a.Name(), dim.name, family.FamilyID, input.Window.Start, family.MemberHashesSorted),
 				Analyzer:              a.Name(),
+				ConditionScope:        dim.name,
 				Severity:              severity,
 				Confidence:            1.0,
 				Title:                 fmt.Sprintf("One %s dominates query family executions", dim.label),

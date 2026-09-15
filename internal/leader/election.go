@@ -95,6 +95,12 @@ type LeaderElection struct {
 	// createCandidate).
 	mu     sync.RWMutex
 	closed bool
+
+	// ready is closed once Run has finished its initial join and first
+	// leadership check, or given up because ctx was canceled. AwaitJoin waits
+	// on it; readyOnce makes the close idempotent across Run's exit paths.
+	ready     chan struct{}
+	readyOnce sync.Once
 }
 
 // NewLeaderElection connects to Keeper and joins the election.
@@ -122,6 +128,7 @@ func NewLeaderElection(cfg config.LeaderElectionConfig, onPromoted, onDemoted fu
 		basePath:   cfg.BasePath,
 		onPromoted: onPromoted,
 		onDemoted:  onDemoted,
+		ready:      make(chan struct{}),
 	}
 
 	if err := le.connect(); err != nil {
@@ -139,10 +146,16 @@ func (le *LeaderElection) connect() error {
 	var conn *zk.Conn
 	var events <-chan zk.Event
 	var err error
+	// The client's own logger defaults to the stdlib logger on stderr, outside
+	// clicklog's level and format. During a Keeper partition it emitted over
+	// 5,000 lines per instance in two minutes ("re-submitting `0` credentials
+	// after reconnect" alone a thousand times), burying the election's own
+	// WARN lines. Route it through clicklog at debug level instead.
+	logger := zk.WithLogger(keeperClientLogger{})
 	if le.config.Secure {
-		conn, events, err = zk.Connect(le.config.Hosts, sessionTimeout, zk.WithDialer(keeperTLSDialer()))
+		conn, events, err = zk.Connect(le.config.Hosts, sessionTimeout, logger, zk.WithDialer(keeperTLSDialer()))
 	} else {
-		conn, events, err = zk.Connect(le.config.Hosts, sessionTimeout)
+		conn, events, err = zk.Connect(le.config.Hosts, sessionTimeout, logger)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to connect to Keeper: %w", err)
@@ -160,6 +173,15 @@ func (le *LeaderElection) connect() error {
 	le.conn = conn
 	le.events = events
 	return nil
+}
+
+// keeperClientLogger adapts the ZooKeeper client's Printf-style logger to
+// clicklog so its connection chatter lands at debug level in the service log
+// rather than unformatted on stderr.
+type keeperClientLogger struct{}
+
+func (keeperClientLogger) Printf(format string, args ...interface{}) {
+	clicklog.Debug("keeper client: "+format, args...)
 }
 
 // reconnect closes the old connection and establishes a fresh one.
@@ -199,6 +221,8 @@ func (le *LeaderElection) Run(ctx context.Context) (err error) {
 			le.failOpen()
 		}
 	}()
+	// Release AwaitJoin on every exit path, not only the happy one.
+	defer le.signalReady()
 
 	// Initial join, retrying through transient Keeper errors until ctx is
 	// canceled. Candidate state stays cleared during the retry window so the
@@ -219,6 +243,7 @@ func (le *LeaderElection) Run(ctx context.Context) (err error) {
 	if err := le.checkLeadership(); err != nil {
 		clicklog.Warn("Initial leadership check failed (re-checked in watch loop): %v", err)
 	}
+	le.signalReady()
 
 	// Watch loop
 	for {
@@ -463,6 +488,42 @@ func (le *LeaderElection) backoffSleep(ctx context.Context) bool {
 // IsLeader returns true if this instance is the current leader.
 func (le *LeaderElection) IsLeader() bool {
 	return le.isLeader.Load()
+}
+
+// signalReady marks the initial join attempt as finished. Safe to call more
+// than once and on a zero-value election (tests), where there is no channel.
+func (le *LeaderElection) signalReady() {
+	if le.ready == nil {
+		return
+	}
+	le.readyOnce.Do(func() { close(le.ready) })
+}
+
+// AwaitJoin blocks until the initial join attempt has completed — the
+// candidate znode exists and leadership has been checked once — or ctx is
+// canceled or timeout elapses, and reports whether the instance is joined.
+//
+// A cluster reader runs its startup cycle only after this. Run joins in its
+// own goroutine, so without the wait a standby's first cycle sees
+// Joined()==false, fails open, and exports one full lookback window that the
+// leader is already exporting: a duplicate burst on every restart, and a
+// nonzero last-success gauge on an instance the docs promise stays at zero.
+// An unreachable Keeper keeps the wait bounded by timeout, so startup still
+// fails open rather than stalling.
+func (le *LeaderElection) AwaitJoin(ctx context.Context, timeout time.Duration) bool {
+	if le.ready == nil {
+		return le.Joined()
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-le.ready:
+		return le.Joined()
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return false
+	}
 }
 
 // Joined reports whether this instance currently holds a candidate znode —

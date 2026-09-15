@@ -14,6 +14,7 @@ Subcommands:
   kubernetes  Generate Kubernetes manifests
   docker      Generate Docker Compose files
   status      Report installed version, systemd state, and health endpoint
+  uninstall   Remove a standard systemd installation
 
 Run "click-dog deploy <subcommand> --help" for subcommand flags.
 `
@@ -30,6 +31,8 @@ func runDeploy(args []string, out, errOut io.Writer) int {
 		return 0
 	case "status":
 		return runDeployStatus(args[1:], out, errOut)
+	case "uninstall":
+		return runDeployUninstall(args[1:], out, errOut)
 	case "kubernetes":
 		return runDeployKubernetes(args[1:], out, errOut)
 	case "docker":

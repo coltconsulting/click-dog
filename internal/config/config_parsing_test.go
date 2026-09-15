@@ -434,6 +434,39 @@ filters:
 	}
 }
 
+func TestLoadConfig_QueryTextModes(t *testing.T) {
+	tests := []struct {
+		name     string
+		filters  string
+		wantMode QueryTextMode
+		wantErr  string
+	}{
+		{name: "raw", filters: "  query_text_mode: raw\n", wantMode: QueryTextModeRaw},
+		{name: "redacted", filters: "  query_text_mode: redacted\n  redact_queries:\n    - pattern: secret\n", wantMode: QueryTextModeRedacted},
+		{name: "normalized only", filters: "  query_text_mode: normalized_only\n", wantMode: QueryTextModeNormalizedOnly},
+		{name: "none", filters: "  query_text_mode: none\n", wantMode: QueryTextModeNone},
+		{name: "ambiguous normalized", filters: "  query_text_mode: normalized\n", wantErr: "normalized_only"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			yaml := validMinimalYAML + "\nfilters:\n" + tt.filters
+			cfg, err := LoadConfig(writeConfigFile(t, yaml))
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("LoadConfig error = %v, want substring %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+			if cfg.Filters.QueryTextMode != tt.wantMode {
+				t.Fatalf("query_text_mode = %q, want %q", cfg.Filters.QueryTextMode, tt.wantMode)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // LoadConfig: canary explicit config
 // ---------------------------------------------------------------------------

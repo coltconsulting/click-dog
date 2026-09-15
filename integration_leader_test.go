@@ -55,8 +55,6 @@ func TestIntegration_LeaderElection_TwoNodes(t *testing.T) {
 	waitForKeeper(t, 30*time.Second)
 
 	basePath := uniqueBasePath(t)
-	promoted1 := make(chan struct{}, 1)
-	promoted2 := make(chan struct{}, 1)
 
 	le1, err := leader.NewLeaderElection(
 		config.LeaderElectionConfig{
@@ -64,7 +62,7 @@ func TestIntegration_LeaderElection_TwoNodes(t *testing.T) {
 			SessionTimeout: 30,
 			BasePath:       basePath,
 		},
-		func() { promoted1 <- struct{}{} },
+		func() {},
 		func() {},
 	)
 	if err != nil {
@@ -77,7 +75,7 @@ func TestIntegration_LeaderElection_TwoNodes(t *testing.T) {
 			SessionTimeout: 30,
 			BasePath:       basePath,
 		},
-		func() { promoted2 <- struct{}{} },
+		func() {},
 		func() {},
 	)
 	if err != nil {
@@ -90,40 +88,17 @@ func TestIntegration_LeaderElection_TwoNodes(t *testing.T) {
 	go le1.Run(ctx)
 	go le2.Run(ctx)
 
-	// Wait for initial election to settle (allow time for Keeper replication)
-	time.Sleep(5 * time.Second)
+	elections := []*leader.LeaderElection{le1, le2}
+	leaderIdx := waitForExactlyOneLeader(t, 15*time.Second, elections)
 
-	// Exactly one should be leader
-	if le1.IsLeader() == le2.IsLeader() {
-		t.Fatalf("Expected exactly one leader: le1=%v le2=%v", le1.IsLeader(), le2.IsLeader())
+	if err := elections[leaderIdx].Resign(); err != nil {
+		t.Fatalf("leader resign failed: %v", err)
 	}
-
-	// Resign the leader, verify failover
-	if le1.IsLeader() {
-		le1.Resign()
-		select {
-		case <-promoted2:
-			// ok
-		case <-time.After(20 * time.Second):
-			t.Fatal("le2 did not promote after le1 resigned")
-		}
-		if !le2.IsLeader() {
-			t.Error("le2 should be leader after le1 resigned")
-		}
-		le2.Resign()
-	} else {
-		le2.Resign()
-		select {
-		case <-promoted1:
-			// ok
-		case <-time.After(20 * time.Second):
-			t.Fatal("le1 did not promote after le2 resigned")
-		}
-		if !le1.IsLeader() {
-			t.Error("le1 should be leader after le2 resigned")
-		}
-		le1.Resign()
+	followerIdx := 1 - leaderIdx
+	if !pollUntil(20*time.Second, elections[followerIdx].IsLeader) {
+		t.Fatalf("node %d did not promote after node %d resigned", followerIdx, leaderIdx)
 	}
+	elections[followerIdx].Resign()
 
 	cancel()
 }
@@ -134,28 +109,24 @@ func TestIntegration_LeaderElection_ThreeNodes(t *testing.T) {
 	basePath := uniqueBasePath(t)
 
 	type nodeInfo struct {
-		le       *leader.LeaderElection
-		promoted chan struct{}
-		demoted  chan struct{}
+		le *leader.LeaderElection
 	}
 
 	nodes := make([]nodeInfo, 3)
 	for i := range nodes {
-		p := make(chan struct{}, 2)
-		d := make(chan struct{}, 2)
 		le, err := leader.NewLeaderElection(
 			config.LeaderElectionConfig{
 				Hosts:          integrationAllKeeperAddrs(),
 				SessionTimeout: 30,
 				BasePath:       basePath,
 			},
-			func() { p <- struct{}{} },
-			func() { d <- struct{}{} },
+			func() {},
+			func() {},
 		)
 		if err != nil {
 			t.Fatalf("NewLeaderElection (%d) failed: %v", i, err)
 		}
-		nodes[i] = nodeInfo{le: le, promoted: p, demoted: d}
+		nodes[i] = nodeInfo{le: le}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -165,44 +136,22 @@ func TestIntegration_LeaderElection_ThreeNodes(t *testing.T) {
 		go n.le.Run(ctx)
 	}
 
-	// Wait for election (allow time for Keeper replication)
-	time.Sleep(5 * time.Second)
-
-	// Count leaders
-	leaderCount := 0
-	leaderIdx := -1
-	for i, n := range nodes {
-		t.Logf("Node %d: IsLeader=%v", i, n.le.IsLeader())
-		if n.le.IsLeader() {
-			leaderCount++
-			leaderIdx = i
-		}
+	elections := make([]*leader.LeaderElection, len(nodes))
+	for i := range nodes {
+		elections[i] = nodes[i].le
 	}
-
-	if leaderCount != 1 {
-		t.Fatalf("Expected exactly 1 leader among 3 nodes, got %d", leaderCount)
-	}
-
-	t.Logf("Node %d is leader", leaderIdx)
+	leaderIdx := waitForExactlyOneLeader(t, 15*time.Second, elections)
 
 	// Resign the leader and wait for a new one to emerge
-	nodes[leaderIdx].le.Resign()
-	time.Sleep(10 * time.Second)
-
-	// A new leader should emerge
-	newLeaderCount := 0
-	for i, n := range nodes {
-		if i == leaderIdx {
-			continue // resigned node
-		}
-		t.Logf("After resign: Node %d IsLeader=%v", i, n.le.IsLeader())
-		if n.le.IsLeader() {
-			newLeaderCount++
-		}
+	if err := nodes[leaderIdx].le.Resign(); err != nil {
+		t.Fatalf("leader resign failed: %v", err)
 	}
-
-	if newLeaderCount != 1 {
-		t.Errorf("Expected 1 new leader after resignation, got %d", newLeaderCount)
+	if !pollUntil(20*time.Second, func() bool {
+		count, idx := currentLeader(elections)
+		return count == 1 && idx != leaderIdx
+	}) {
+		count, idx := currentLeader(elections)
+		t.Fatalf("expected one replacement leader after node %d resigned; count=%d leader=%d", leaderIdx, count, idx)
 	}
 
 	cancel()
@@ -261,6 +210,7 @@ func TestIntegration_LeaderElection_BasePath(t *testing.T) {
 
 	// Deeply nested base path
 	basePath := uniqueBasePath(t) + "/nested/deep"
+	promoted := make(chan struct{}, 1)
 
 	le, err := leader.NewLeaderElection(
 		config.LeaderElectionConfig{
@@ -268,7 +218,7 @@ func TestIntegration_LeaderElection_BasePath(t *testing.T) {
 			SessionTimeout: 30,
 			BasePath:       basePath,
 		},
-		func() {},
+		func() { promoted <- struct{}{} },
 		func() {},
 	)
 	if err != nil {
@@ -279,11 +229,13 @@ func TestIntegration_LeaderElection_BasePath(t *testing.T) {
 	defer cancel()
 
 	go le.Run(ctx)
-	time.Sleep(2 * time.Second)
-
-	// Should be running without error (base path created recursively)
+	select {
+	case <-promoted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("nested base-path candidate did not become leader")
+	}
 	if !le.IsLeader() {
-		t.Error("Should be leader (single node)")
+		t.Error("nested base-path candidate should report leader after promotion")
 	}
 
 	cancel()
@@ -294,7 +246,7 @@ func TestIntegration_LeaderElection_BasePath(t *testing.T) {
 // ensemble; stopping all three takes Keeper fully offline (a "flap").
 var keeperContainers = []string{"clickhouse-int-1", "clickhouse-int-2", "clickhouse-int-3"}
 
-// pollUntil polls cond every 500ms until it returns true or timeout elapses.
+// pollUntil polls cond every 100ms until it returns true or timeout elapses.
 // Returns the final cond() result so callers can assert on it.
 func pollUntil(timeout time.Duration, cond func() bool) bool {
 	deadline := time.Now().Add(timeout)
@@ -302,9 +254,47 @@ func pollUntil(timeout time.Duration, cond func() bool) bool {
 		if cond() {
 			return true
 		}
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 	return cond()
+}
+
+func currentLeader(elections []*leader.LeaderElection) (count, index int) {
+	index = -1
+	for i, election := range elections {
+		if election.IsLeader() {
+			count++
+			index = i
+		}
+	}
+	return count, index
+}
+
+func waitForExactlyOneLeader(t *testing.T, timeout time.Duration, elections []*leader.LeaderElection) int {
+	t.Helper()
+	if !pollUntil(timeout, func() bool {
+		count, _ := currentLeader(elections)
+		if count != 1 {
+			return false
+		}
+		for _, election := range elections {
+			if !election.Joined() {
+				return false
+			}
+		}
+		return true
+	}) {
+		count, index := currentLeader(elections)
+		joined := 0
+		for _, election := range elections {
+			if election.Joined() {
+				joined++
+			}
+		}
+		t.Fatalf("expected all %d candidates joined with exactly one leader within %v; joined=%d leaders=%d leader=%d", len(elections), timeout, joined, count, index)
+	}
+	_, index := currentLeader(elections)
+	return index
 }
 
 // restartKeeperEnsemble brings every Keeper node back and waits for readiness.
@@ -411,7 +401,8 @@ func TestIntegration_LeaderElection_ResignDuringOutageDoesNotRejoin(t *testing.T
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go le.Run(ctx)
+	runDone := make(chan error, 1)
+	go func() { runDone <- le.Run(ctx) }()
 
 	if !pollUntil(15*time.Second, le.IsLeader) {
 		t.Fatal("single node did not become leader")
@@ -427,8 +418,23 @@ func TestIntegration_LeaderElection_ResignDuringOutageDoesNotRejoin(t *testing.T
 		dockerStop(t, c)
 	}
 
-	// Resign mid-outage: marks closed (best-effort delete/close on a dead conn).
-	le.Resign()
+	// Wait until the outage has been observed before resigning. This keeps the
+	// lifecycle under test (closed while Keeper is down) while avoiding a race
+	// between fault injection and the assertion itself.
+	if !pollUntil(30*time.Second, func() bool { return !le.Joined() }) {
+		t.Fatal("election did not drop candidate state during Keeper outage")
+	}
+	if err := le.Resign(); err != nil {
+		t.Fatalf("Resign during Keeper outage: %v", err)
+	}
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("Run returned an error after resign: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not exit after resign during Keeper outage")
+	}
 
 	for _, c := range keeperContainers {
 		dockerStart(t, c)
@@ -436,55 +442,9 @@ func TestIntegration_LeaderElection_ResignDuringOutageDoesNotRejoin(t *testing.T
 	waitForKeeper(t, 60*time.Second)
 	ensembleRestored = true
 
-	// A resigned instance must not rejoin even though Keeper is healthy again.
-	// IsLeader is the durable contract: had it rejoined it would be the only
-	// candidate and would re-take leadership within a session TTL, so a sustained
-	// false here proves it stayed out. We deliberately do NOT assert !Joined():
-	// Resign() intentionally leaves myNode set during teardown (see Resign), and
-	// the closed-guard makes rejoinWithRetry bail before dropCandidate, so nothing
-	// clears myNode afterwards. Joined() only reads false here if the outage's
-	// fail-open dropCandidate happened to run before Resign — an incidental race,
-	// not a guarantee.
-	if pollUntil(25*time.Second, le.IsLeader) {
-		t.Fatal("resigned instance rejoined and became leader after Keeper returned")
+	// Run has terminated, so recovery cannot resurrect this closed election.
+	if le.IsLeader() {
+		t.Fatal("resigned instance reported leader after Keeper returned")
 	}
 	cancel()
-}
-
-func TestIntegration_LeaderElection_MultipleKeeperEndpoints(t *testing.T) {
-	waitForKeeper(t, 30*time.Second)
-
-	// Connect using all 3 Keeper endpoints for HA
-	basePath := uniqueBasePath(t)
-	allAddrs := integrationAllKeeperAddrs()
-	t.Logf("Connecting to Keeper endpoints: %v", allAddrs)
-
-	promoted := make(chan struct{}, 1)
-	le, err := leader.NewLeaderElection(
-		config.LeaderElectionConfig{
-			Hosts:          allAddrs,
-			SessionTimeout: 30,
-			BasePath:       basePath,
-		},
-		func() { promoted <- struct{}{} },
-		func() {},
-	)
-	if err != nil {
-		t.Fatalf("NewLeaderElection with 3 endpoints failed: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	go le.Run(ctx)
-
-	select {
-	case <-promoted:
-		t.Log("Successfully elected leader using 3 Keeper endpoints")
-	case <-time.After(10 * time.Second):
-		t.Fatal("Did not become leader using 3 Keeper endpoints")
-	}
-
-	cancel()
-	le.Resign()
 }

@@ -1,0 +1,93 @@
+name: DCO
+
+# CONTRIBUTING.md makes acceptance conditional on a Signed-off-by trailer on
+# every commit, but nothing enforced it: there is no DCO bot, and
+# import-public-pr.sh git-am's a patch without looking. This is the gate.
+#
+# It runs on every push to a PR rather than at merge, deliberately. Public
+# contributor PRs are never merged on GitHub -- they are reviewed there and
+# then imported into the internal tree (docs/development/contributing-flow.md),
+# so there is no merge event to hook. Failing on push also lets contributors
+# fix their own sign-off before a maintainer spends review time.
+#
+# pull_request_target, NOT pull_request. Under pull_request both the workflow
+# file and the repository tree come from the PR, so a contributor could make
+# this check pass on unsigned commits by editing dco.yml or appending
+# `dco_verify_commits() { return 0; }` to the verifier in the same PR. A gate
+# an attacker can rewrite proves nothing. pull_request_target runs the workflow
+# definition and the checkout from the base branch instead.
+#
+# The trade of pull_request_target is that the job holds a token for the base
+# repository, so PR code must never run here. It never does: nothing is checked
+# out from the PR. The PR's commits are fetched as objects only, and the check
+# reads commit metadata (author, message trailers), which executes nothing. Do
+# not add a build, a test, an install, or a checkout of the PR ref to this file.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# pull_request_target defaults to a read/write token. Nothing here writes.
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    name: Signed-off-by on every commit
+    # PUBLIC REPO ONLY. This file is published to coltconsulting/click-dog by
+    # `make update-public` (workflows are not export-ignored), so it also lands
+    # in the internal repo, where DCO does not apply -- internal development
+    # commits are the maintainer's own and are not contributions under the DCO.
+    # Without this guard every internal PR would fail.
+    if: github.repository == 'coltconsulting/click-dog'
+    runs-on: ubuntu-latest
+    steps:
+      # No `ref:`. Under pull_request_target this checks out the BASE branch --
+      # the trusted tree the verifier below is sourced from.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Objects only: this makes the PR's commits readable without putting a
+      # single contributor-controlled file in the workspace.
+      - name: Fetch the PR's commits
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git fetch --no-tags --quiet origin \
+            "+refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
+
+      - name: Check sign-off
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # From the base checkout, never the PR.
+          . scripts/lib/dco-verify-commits.sh
+
+          # Advisory, printed first so it is visible whether or not the gate
+          # fails: a merge's own changes never survive the .patch import.
+          dco_warn_merges "$BASE_SHA" "$HEAD_SHA"
+
+          if ! dco_verify_commits "$BASE_SHA" "$HEAD_SHA"; then
+            cat <<'EOF'
+
+          Every commit needs a Developer Certificate of Origin sign-off whose
+          name and email match the commit author. See CONTRIBUTING.md.
+
+          Rebasing is the usual fix, and it also drops any merge commits --
+          which matters, because contributions are imported with `git am` over
+          this PR's .patch, and that patch omits merges entirely:
+
+            git rebase --signoff origin/master
+            git push --force-with-lease
+
+          For a single commit:  git commit --amend --signoff
+          Sign future commits:  git commit -s
+
+          EOF
+            exit 1
+          fi
+
+          echo "All commits carry a matching Signed-off-by trailer."

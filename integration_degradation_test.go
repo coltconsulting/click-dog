@@ -76,61 +76,65 @@ func ensureAllRunning(t *testing.T) {
 }
 
 // -------------------------------------------------------------------
-// Test 1: Single Node Down — Cluster Query Continues
+// Test 1: Single Node Down — Strict Cluster Fails, Then Recovers
 // -------------------------------------------------------------------
 
-func TestDegradation_SingleNodeDown_ClusterQueryContinues(t *testing.T) {
+func TestDegradation_SingleNodeDown_StrictClusterFailsAndRecovers(t *testing.T) {
 	t.Cleanup(func() { ensureAllRunning(t) })
 
-	// Wait for all nodes to be ready
 	conns := waitForAllClickHouse(t, 60*time.Second)
 	for _, c := range conns {
 		defer c.Close()
 	}
 
-	// Seed traced queries on all 3 nodes
-	for i, conn := range conns {
-		t.Logf("Seeding traced queries on node %d", i+1)
-		seedTracedQueries(t, conn, 3)
+	fixtures := make([]tracedQueryFixture, 0, len(conns))
+	for _, conn := range conns {
+		fixtures = append(fixtures, seedTracedQueryFixture(t, conn, 2))
 	}
 
-	// Create a cluster reader via node 1
 	clusterReader := newClusterCHReader(t, 1, "test_cluster")
 	defer clusterReader.Close()
 
-	// Verify we can fetch spans across the cluster
 	spans, err := clusterReader.FetchOpenTelemetrySpans(
 		context.Background(), 0, 0, 0, 0, 5*time.Minute, 1000,
 	)
 	if err != nil {
-		t.Fatalf("Pre-stop cluster query failed: %v", err)
+		t.Fatalf("pre-stop cluster query failed: %v", err)
 	}
-	preStopCount := len(spans)
-	t.Logf("Pre-stop: fetched %d spans from cluster", preStopCount)
+	exactFixtureSpans(t, spans, fixtures...)
 
-	// Stop node 2
 	dockerStop(t, "clickhouse-int-2")
 
-	// Wait a moment for the cluster to stabilize
-	time.Sleep(3 * time.Second)
-
-	// Query cluster via node 1 — should still work (nodes 1+3 respond)
-	spans, err = clusterReader.FetchOpenTelemetrySpans(
+	// The surviving local node is still readable while the configured strict
+	// cluster correctly rejects an incomplete result.
+	localReader := newCHReader(t, 1)
+	defer localReader.Close()
+	localSpans, err := localReader.FetchOpenTelemetrySpans(
 		context.Background(), 0, 0, 0, 0, 5*time.Minute, 1000,
 	)
 	if err != nil {
-		t.Logf("Cluster query with node 2 down returned error (may be expected with strict cluster): %v", err)
-		// Not fatal — some cluster configs may error. The key test is no panic.
-	} else {
-		t.Logf("Post-stop: fetched %d spans from cluster (node 2 down)", len(spans))
+		t.Fatalf("local node query failed while node 2 was down: %v", err)
+	}
+	exactFixtureSpans(t, localSpans, fixtures[0])
+
+	queryCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	_, err = clusterReader.FetchOpenTelemetrySpans(
+		queryCtx, 0, 0, 0, 0, 5*time.Minute, 1000,
+	)
+	cancel()
+	if err == nil {
+		t.Fatal("strict cluster query succeeded with a shard down; expected an incomplete-cluster error")
 	}
 
-	// Restart node 2
 	dockerStart(t, "clickhouse-int-2")
+	recoveredConn := waitForClickHouse(t, 2, 60*time.Second)
+	recoveredConn.Close()
 
-	// Wait for node 2 to be ready again
-	waitForClickHouse(t, 2, 60*time.Second)
-	t.Log("Node 2 recovered successfully")
+	recoveryFixtures := make([]tracedQueryFixture, 0, len(conns))
+	for _, conn := range conns {
+		recoveryFixtures = append(recoveryFixtures, seedTracedQueryFixture(t, conn, 1))
+	}
+	waitForFixtureSpansFromReader(t, clusterReader, recoveryFixtures, 15*time.Second)
 }
 
 // -------------------------------------------------------------------
@@ -140,110 +144,79 @@ func TestDegradation_SingleNodeDown_ClusterQueryContinues(t *testing.T) {
 func TestDegradation_CollectorDown_CircuitBreakerTrips(t *testing.T) {
 	t.Cleanup(func() { ensureAllRunning(t) })
 
-	// Wait for services
 	conns := waitForAllClickHouse(t, 60*time.Second)
 	defer conns[0].Close()
 	defer conns[1].Close()
 	defer conns[2].Close()
 	waitForOTELCollector(t, 30*time.Second)
 
-	// Seed some spans
-	seedTracedQueries(t, conns[0], 3)
-
-	// Create components
-	chReader := newCHReader(t, 1)
-	defer chReader.Close()
-
 	otelExp := newOTELExporter(t, "degradation-test-cb")
 	defer otelExp.Close(context.Background())
 
-	filter, _ := filter.NewQueryFilter(config.FiltersConfig{})
+	queryFilter, err := filter.NewQueryFilter(config.FiltersConfig{})
+	if err != nil {
+		t.Fatalf("NewQueryFilter: %v", err)
+	}
 
-	cb := resilience.NewCircuitBreaker(config.CircuitBreakerConfig{
+	clock := newFakeClock()
+	cb := resilience.NewCircuitBreakerWithClock(config.CircuitBreakerConfig{
 		Enabled:          true,
 		FailureThreshold: 2,
 		SuccessThreshold: 1,
-		ResetTimeoutS:    3, // Short for testing
-	})
+		ResetTimeoutS:    3,
+	}, clock)
 
-	// Pause the OTEL collector
 	dockerPause(t, "otel-integration")
-	t.Log("OTEL collector paused — exports should fail")
 
-	// Attempt exports — they should fail and trip the circuit breaker
-	for i := 0; i < 3; i++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		err := runIntegrationProcessorCycle(t, ctx, chReader, otelExp, filter, &config.Config{
-			Monitor: config.MonitorConfig{
-				MinTraceDurationMs: 0,
-				CheckIntervalS:     30,
-				LookbackS:          300,
-				MaxSpansPerCycle:   100,
-				DedupCacheSize:     1000,
-			},
-		}, cb, nil)
+	for attempt := 1; attempt <= 2; attempt++ {
+		// A new trace per cycle prevents an empty/no-op cycle from resetting the
+		// consecutive-failure count.
+		seedTracedQueryFixture(t, conns[0], 1)
+		chReader := newCHReader(t, 1)
+		pipeline := newIntegrationProcessor(t, chReader, otelExp, queryFilter, degradationConfig(), cb, nil)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		err := pipeline.Process(ctx)
 		cancel()
-
-		t.Logf("Attempt %d: err=%v, circuit_state=%s, failures=%d",
-			i+1, err, cb.State(), cb.Failures())
+		chReader.Close()
+		if err == nil {
+			t.Fatalf("collector-down cycle %d succeeded; expected an export error", attempt)
+		}
+		if cb.Failures() != attempt {
+			t.Fatalf("after failure %d, circuit failures = %d", attempt, cb.Failures())
+		}
 	}
 
-	// Circuit should be open
 	if cb.State() != resilience.CircuitOpen {
-		t.Errorf("expected circuit breaker to be open, got %s", cb.State())
+		t.Fatalf("expected circuit breaker to be open, got %s", cb.State())
 	}
-
-	// Verify Allow() returns false while open
 	if cb.Allow() {
-		// It might transition to half-open if reset timeout is very short
-		t.Log("Circuit breaker transitioned to half-open (reset timeout may have elapsed)")
-	} else {
-		t.Log("Circuit breaker correctly blocking requests")
+		t.Fatal("circuit breaker allowed a request before its reset deadline")
 	}
 
-	// Unpause collector
 	dockerUnpause(t, "otel-integration")
-	t.Log("OTEL collector unpaused — waiting for circuit breaker reset")
-
-	// Wait for reset timeout
-	time.Sleep(4 * time.Second)
-
-	// Should transition to half-open and allow a probe
-	if !cb.Allow() {
-		t.Error("expected circuit breaker to allow request after reset timeout")
-	}
-	t.Logf("Circuit breaker state after reset: %s", cb.State())
-
-	// Successful export should close the circuit
+	waitForOTELCollector(t, 30*time.Second)
+	clock.Advance(4 * time.Second)
+	recoveryFixture := seedTracedQueryFixture(t, conns[0], 1)
+	recoveryReader := newCHReader(t, 1)
+	defer recoveryReader.Close()
+	pipeline := newIntegrationProcessor(t, recoveryReader, otelExp, queryFilter, degradationConfig(), cb, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	err := runIntegrationProcessorCycle(t, ctx, chReader, otelExp, filter, &config.Config{
-		Monitor: config.MonitorConfig{
-			MinTraceDurationMs: 0,
-			CheckIntervalS:     30,
-			LookbackS:          300,
-			MaxSpansPerCycle:   100,
-			DedupCacheSize:     1000,
-		},
-	}, cb, nil)
+	err = pipeline.Process(ctx)
 	cancel()
-
 	if err != nil {
-		t.Logf("Post-recovery export error (may be transient): %v", err)
+		t.Fatalf("post-recovery cycle failed: %v", err)
 	}
-
-	// Record success manually if the export itself had no spans to send
-	if err == nil {
-		cb.RecordSuccess()
+	if cb.State() != resilience.CircuitClosed {
+		t.Fatalf("circuit state after successful recovery = %s, want closed", cb.State())
 	}
-
-	t.Logf("Final circuit breaker state: %s", cb.State())
+	waitForFixtureTraceIDs(t, "degradation-test-cb", recoveryFixture, 10*time.Second)
 }
 
 // -------------------------------------------------------------------
-// Test 3: Slow Node — Backoff Increases
+// Test 3: Unavailable Node — Backoff Increases, Then Resets
 // -------------------------------------------------------------------
 
-func TestDegradation_SlowNode_BackoffIncreases(t *testing.T) {
+func TestDegradation_UnavailableNode_BackoffIncreasesAndRecovers(t *testing.T) {
 	t.Cleanup(func() { ensureAllRunning(t) })
 
 	conns := waitForAllClickHouse(t, 60*time.Second)
@@ -251,7 +224,6 @@ func TestDegradation_SlowNode_BackoffIncreases(t *testing.T) {
 	defer conns[1].Close()
 	defer conns[2].Close()
 
-	// Create reader on node 2
 	chReader := newCHReader(t, 2)
 	defer chReader.Close()
 
@@ -262,232 +234,33 @@ func TestDegradation_SlowNode_BackoffIncreases(t *testing.T) {
 		BackoffFactor: 2.0,
 	})
 
-	initialInterval := poller.CurrentInterval()
-	t.Logf("Initial backoff interval: %v", initialInterval)
+	dockerStop(t, "clickhouse-int-2")
 
-	// Pause node 2 — reads will timeout
-	dockerPause(t, "clickhouse-int-2")
-	t.Log("Node 2 paused — reads should timeout")
-
-	// Attempt reads with short timeout — they should fail
-	for i := 0; i < 3; i++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		healthy := chReader.IsHealthy(ctx)
-		cancel()
-
-		if healthy {
-			t.Log("Node unexpectedly reported healthy (race with pause)")
-		} else {
-			poller.RecordFailure()
-		}
-		t.Logf("Attempt %d: healthy=%v, interval=%v",
-			i+1, healthy, poller.CurrentInterval())
-	}
-
-	// Backoff should have increased
-	backedOffInterval := poller.CurrentInterval()
-	if backedOffInterval <= initialInterval {
-		t.Errorf("expected backoff to increase interval from %v, got %v", initialInterval, backedOffInterval)
-	}
-	t.Logf("Backoff increased: %v -> %v", initialInterval, backedOffInterval)
-
-	// Unpause node 2
-	dockerUnpause(t, "clickhouse-int-2")
-	t.Log("Node 2 unpaused — waiting for recovery")
-
-	// Wait for node to recover
-	time.Sleep(3 * time.Second)
-
-	// Verify node is healthy again
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	healthy := chReader.IsHealthy(ctx)
 	cancel()
-
-	if !healthy {
-		t.Error("node 2 should be healthy after unpause")
+	if healthy {
+		t.Fatal("stopped node 2 still reported healthy")
 	}
-
-	// A successful poll resets backoff to the base interval (the second call
-	// is a harmless no-op once already at base).
-	poller.RecordSuccess()
-	poller.RecordSuccess()
-	resetInterval := poller.CurrentInterval()
-	t.Logf("After recovery: interval=%v, is_backed_off=%v", resetInterval, poller.IsBackedOff())
-
-	if resetInterval != baseInterval {
-		t.Errorf("expected interval to reset to %v after success, got %v", baseInterval, resetInterval)
-	}
-}
-
-// -------------------------------------------------------------------
-// Test 4: Majority Down — Graceful Degradation
-// -------------------------------------------------------------------
-
-func TestDegradation_MajorityDown_GracefulDegradation(t *testing.T) {
-	t.Cleanup(func() { ensureAllRunning(t) })
-
-	conns := waitForAllClickHouse(t, 60*time.Second)
-	defer conns[0].Close()
-	defer conns[1].Close()
-	defer conns[2].Close()
-
-	// Create cluster reader via node 1
-	clusterReader := newClusterCHReader(t, 1, "test_cluster")
-	defer clusterReader.Close()
-
-	// Pause nodes 2 and 3
-	dockerPause(t, "clickhouse-int-2")
-	dockerPause(t, "clickhouse-int-3")
-	t.Log("Nodes 2+3 paused — majority down")
-
-	time.Sleep(2 * time.Second)
-
-	// Attempt cluster query — should return error or partial data, NOT panic
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	spans, err := clusterReader.FetchOpenTelemetrySpans(
-		ctx, 0, 0, 0, 0, 5*time.Minute, 100,
-	)
-	cancel()
-
-	if err != nil {
-		t.Logf("Cluster query with majority down returned error (expected): %v", err)
-	} else {
-		t.Logf("Cluster query returned %d spans despite majority down (partial results)", len(spans))
-	}
-
-	// The key assertion: we got here without panicking
-	t.Log("Graceful degradation verified — no panic with majority down")
-
-	// Restore nodes
-	dockerUnpause(t, "clickhouse-int-2")
-	dockerUnpause(t, "clickhouse-int-3")
-
-	// Wait for recovery
-	waitForClickHouse(t, 2, 60*time.Second)
-	waitForClickHouse(t, 3, 60*time.Second)
-	t.Log("All nodes recovered")
-}
-
-// -------------------------------------------------------------------
-// Test 5: Full Recovery — All Mechanisms Reset
-// -------------------------------------------------------------------
-
-func TestDegradation_FullRecovery_AllMechanismsReset(t *testing.T) {
-	t.Cleanup(func() { ensureAllRunning(t) })
-
-	conns := waitForAllClickHouse(t, 60*time.Second)
-	defer conns[0].Close()
-	defer conns[1].Close()
-	defer conns[2].Close()
-	waitForOTELCollector(t, 30*time.Second)
-
-	// Seed spans
-	seedTracedQueries(t, conns[0], 3)
-
-	chReader := newCHReader(t, 1)
-	defer chReader.Close()
-
-	otelExp := newOTELExporter(t, "degradation-test-recovery")
-	defer otelExp.Close(context.Background())
-
-	filter, _ := filter.NewQueryFilter(config.FiltersConfig{})
-
-	// Circuit breaker with short reset
-	cb := resilience.NewCircuitBreaker(config.CircuitBreakerConfig{
-		Enabled:          true,
-		FailureThreshold: 2,
-		SuccessThreshold: 1,
-		ResetTimeoutS:    3,
-	})
-
-	// Adaptive backoff
-	baseInterval := 10 * time.Second
-	poller := resilience.NewAdaptivePoller(baseInterval, config.BackoffConfig{
-		Enabled:       true,
-		MaxIntervalS:  120,
-		BackoffFactor: 2.0,
-	})
-
-	// Break everything: pause collector + node 2
-	dockerPause(t, "otel-integration")
-	dockerPause(t, "clickhouse-int-2")
-	t.Log("Collector and node 2 paused — everything broken")
-
-	// Drive failures to trip both mechanisms
-	for i := 0; i < 3; i++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		err := runIntegrationProcessorCycle(t, ctx, chReader, otelExp, filter, &config.Config{
-			Monitor: config.MonitorConfig{
-				MinTraceDurationMs: 0,
-				CheckIntervalS:     30,
-				LookbackS:          300,
-				MaxSpansPerCycle:   100,
-				DedupCacheSize:     1000,
-			},
-		}, cb, nil)
-		cancel()
-
-		if err != nil {
-			poller.RecordFailure()
-		}
-
-		t.Logf("Failure %d: circuit=%s, backoff=%v", i+1, cb.State(), poller.CurrentInterval())
-	}
-
-	// Verify both mechanisms are activated
-	if cb.State() == resilience.CircuitClosed {
-		t.Log("Circuit breaker may not have opened (health check passed to node 1)")
+	poller.RecordFailure()
+	if got, want := poller.CurrentInterval(), 20*time.Second; got != want {
+		t.Fatalf("interval after one failed poll = %v, want %v", got, want)
 	}
 	if !poller.IsBackedOff() {
-		t.Log("Backoff may not have increased (export may have succeeded partially)")
-	}
-	backedOffInterval := poller.CurrentInterval()
-
-	// Restore everything
-	dockerUnpause(t, "otel-integration")
-	dockerUnpause(t, "clickhouse-int-2")
-	t.Log("All services restored — waiting for recovery")
-
-	// Wait for circuit breaker reset timeout
-	time.Sleep(4 * time.Second)
-
-	// Wait for services to be ready
-	waitForClickHouse(t, 2, 30*time.Second)
-	waitForOTELCollector(t, 30*time.Second)
-
-	// Drive successes to reset both mechanisms
-	for i := 0; i < 3; i++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		err := runIntegrationProcessorCycle(t, ctx, chReader, otelExp, filter, &config.Config{
-			Monitor: config.MonitorConfig{
-				MinTraceDurationMs: 0,
-				CheckIntervalS:     30,
-				LookbackS:          300,
-				MaxSpansPerCycle:   100,
-				DedupCacheSize:     1000,
-			},
-		}, cb, nil)
-		cancel()
-
-		if err == nil {
-			poller.RecordSuccess()
-		}
-		t.Logf("Recovery %d: err=%v, circuit=%s, backoff=%v",
-			i+1, err, cb.State(), poller.CurrentInterval())
+		t.Fatal("poller did not report backed-off state after a failed poll")
 	}
 
-	// Verify both mechanisms have reset
-	finalState := cb.State()
-	finalInterval := poller.CurrentInterval()
+	dockerStart(t, "clickhouse-int-2")
+	recoveredConn := waitForClickHouse(t, 2, 60*time.Second)
+	recoveredConn.Close()
+	waitForReaderHealthy(t, chReader, 15*time.Second)
 
-	t.Logf("Final state: circuit=%s, backoff_interval=%v (base=%v)", finalState, finalInterval, baseInterval)
-	t.Logf("Backed off interval was: %v", backedOffInterval)
-
-	if finalState == resilience.CircuitOpen {
-		t.Error("circuit breaker should not be open after successful recovery")
+	poller.RecordSuccess()
+	if got := poller.CurrentInterval(); got != baseInterval {
+		t.Fatalf("interval after recovery = %v, want %v", got, baseInterval)
 	}
 	if poller.IsBackedOff() {
-		t.Error("backoff should have reset after successful recovery")
+		t.Fatal("poller remained backed off after a successful health check")
 	}
 }
 
@@ -504,16 +277,27 @@ func mustLRU(t *testing.T, size int) *lru.Cache[model.SpanKey, bool] {
 	return cache
 }
 
-func runIntegrationProcessorCycle(
+func degradationConfig() *config.Config {
+	return &config.Config{
+		Monitor: config.MonitorConfig{
+			MinTraceDurationMs: 0,
+			CheckIntervalS:     30,
+			LookbackS:          300,
+			MaxSpansPerCycle:   1000,
+			DedupCacheSize:     1000,
+		},
+	}
+}
+
+func newIntegrationProcessor(
 	t *testing.T,
-	ctx context.Context,
 	reader *clickhouse.ClickHouseReader,
 	exporter model.SpanExporter,
 	f *filter.QueryFilter,
 	cfg *config.Config,
 	cb *resilience.CircuitBreaker,
 	poller *resilience.AdaptivePoller,
-) error {
+) *processor.Pipeline {
 	t.Helper()
 	dedupCacheSize := cfg.Monitor.DedupCacheSize
 	if dedupCacheSize <= 0 {
@@ -533,5 +317,77 @@ func runIntegrationProcessorCycle(
 	if err != nil {
 		t.Fatalf("NewPipeline: %v", err)
 	}
-	return pipeline.Process(ctx)
+	return pipeline
+}
+
+func waitForReaderHealthy(t *testing.T, reader *clickhouse.ClickHouseReader, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		healthy := reader.IsHealthy(ctx)
+		cancel()
+		if healthy {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("ClickHouse reader did not become healthy within %v", timeout)
+}
+
+func waitForFixtureSpansFromReader(
+	t *testing.T,
+	reader *clickhouse.ClickHouseReader,
+	fixtures []tracedQueryFixture,
+	timeout time.Duration,
+) {
+	t.Helper()
+	wanted := make(map[string]struct{})
+	for _, fixture := range fixtures {
+		for _, traceID := range fixture.TraceIDs {
+			wanted[traceID.String()] = struct{}{}
+		}
+	}
+	found := make(map[string]struct{}, len(wanted))
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		spans, err := reader.FetchOpenTelemetrySpans(ctx, 0, 0, 0, 0, 5*time.Minute, 1000)
+		cancel()
+		lastErr = err
+		if err == nil {
+			for _, span := range spans {
+				traceID := span.TraceID.String()
+				if _, ok := wanted[traceID]; ok {
+					found[traceID] = struct{}{}
+				}
+			}
+			if len(found) == len(wanted) {
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("reader recovered but returned %d/%d exact fixture traces within %v (last error: %v)", len(found), len(wanted), timeout, lastErr)
+}
+
+func waitForFixtureTraceIDs(t *testing.T, serviceName string, fixture tracedQueryFixture, timeout time.Duration) {
+	t.Helper()
+	wanted := make(map[string]struct{}, len(fixture.TraceIDs))
+	for _, traceID := range fixture.TraceIDs {
+		wanted[traceID.String()] = struct{}{}
+	}
+	waitForOTELFileObservations(t, timeout, func(observations []otelSpanObservation) bool {
+		remaining := make(map[string]struct{}, len(wanted))
+		for traceID := range wanted {
+			remaining[traceID] = struct{}{}
+		}
+		for _, observation := range observations {
+			if observation.ServiceName == serviceName {
+				delete(remaining, observation.TraceID.String())
+			}
+		}
+		return len(remaining) == 0
+	}, "recovered pipeline did not export every exact fixture trace")
 }

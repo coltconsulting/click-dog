@@ -3,13 +3,50 @@ package processor
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coltconsulting/click-dog/internal/config"
 	"github.com/coltconsulting/click-dog/internal/filter"
 	"github.com/coltconsulting/click-dog/internal/metrics"
 )
+
+func TestPipeline_ProcessPassesLiveReaderOptions(t *testing.T) {
+	reader := &mockLiveReader{healthy: true}
+	m := metrics.NewMetrics()
+	cfg := &config.Config{
+		Monitor: config.MonitorConfig{
+			MinTraceDurationMs: 1200,
+			MaxTraceDurationMs: 9300,
+			MinSpanDurationMs:  45,
+			MaxSpanDurationMs:  6700,
+			LookbackS:          75,
+			MaxSpansPerCycle:   321,
+		},
+		Filters: config.FiltersConfig{
+			BlacklistOperations: []string{"SYSTEM", "internal"},
+		},
+	}
+	pipeline := mustLivePipeline(t, reader, &mockExporter{}, cfg, nil, m)
+
+	if err := pipeline.Process(context.Background()); err != nil {
+		t.Fatalf("Pipeline.Process: %v", err)
+	}
+	if reader.healthCalls != 1 || reader.fetchCalls != 1 {
+		t.Fatalf("reader calls = health:%d fetch:%d, want 1/1", reader.healthCalls, reader.fetchCalls)
+	}
+	if reader.lastMinTraceMs != 1200 || reader.lastLookback != 75*time.Second || reader.lastLimit != 321 {
+		t.Errorf("reader args = min:%d lookback:%v limit:%d", reader.lastMinTraceMs, reader.lastLookback, reader.lastLimit)
+	}
+	if reader.lastFetchOpts.MaxTraceDurationMs != 9300 ||
+		reader.lastFetchOpts.MinSpanDurationMs != 45 ||
+		reader.lastFetchOpts.MaxSpanDurationMs != 6700 ||
+		!slices.Equal(reader.lastFetchOpts.BlacklistOperations, []string{"SYSTEM", "internal"}) {
+		t.Errorf("reader options = %+v", reader.lastFetchOpts)
+	}
+}
 
 func TestNewPipeline_ValidatesRequiredDependencies(t *testing.T) {
 	_, err := NewPipeline(Pipeline{})

@@ -8,49 +8,26 @@ import (
 	"github.com/google/uuid"
 	lru "github.com/hashicorp/golang-lru/v2"
 
+	"github.com/coltconsulting/click-dog/internal/config"
+	"github.com/coltconsulting/click-dog/internal/metrics"
 	"github.com/coltconsulting/click-dog/internal/model"
 )
 
-// runDedupLoop replicates the dedup core of fetchAndProcessSpans (processor.go).
-// Keep in sync if that loop's key-handling changes.
-//
-// Returns (exported, duplicates) — exactly the same counters the real
-// loop maintains for the seenSpans cache.
-func runDedupLoop(
+func runLiveDedupCycle(
 	t *testing.T,
-	ctx context.Context,
+	reader *mockLiveReader,
 	seenSpans *lru.Cache[model.SpanKey, bool],
 	exporter model.SpanExporter,
 	spans []model.OpenTelemetrySpan,
-) (exported, duplicates int, err error) {
+) (metrics.CycleSnapshot, error) {
 	t.Helper()
 
-	seenThisCycle := make(map[model.SpanKey]struct{}, len(spans))
-	var toExport []model.OpenTelemetrySpan
-	for _, s := range spans {
-		key := model.KeyOf(s)
-		if seenSpans.Contains(key) {
-			duplicates++
-			continue
-		}
-		if _, ok := seenThisCycle[key]; ok {
-			duplicates++
-			continue
-		}
-		seenThisCycle[key] = struct{}{}
-		toExport = append(toExport, s)
-	}
-	if len(toExport) == 0 {
-		return 0, duplicates, nil
-	}
-	result, err := exporter.ExportSpans(ctx, toExport)
-	if err != nil {
-		return 0, duplicates, err
-	}
-	for _, k := range result.Accepted {
-		seenSpans.Add(k, true)
-	}
-	return len(result.Accepted), duplicates, nil
+	reader.spans = spans
+	m := metrics.NewMetrics()
+	pipeline := mustLivePipeline(t, reader, exporter, &config.Config{}, seenSpans, m)
+
+	err := pipeline.Process(context.Background())
+	return m.Snapshot().LastCycle, err
 }
 
 func mustDedupCache(t *testing.T) *lru.Cache[model.SpanKey, bool] {
@@ -77,16 +54,17 @@ func TestDedup_SameSpanIDDifferentTraces_BothExported(t *testing.T) {
 
 	exp := &mockExporter{}
 	cache := mustDedupCache(t)
+	reader := &mockLiveReader{healthy: true}
 
-	exported, duplicates, err := runDedupLoop(t, context.Background(), cache, exp, spans)
+	cycle, err := runLiveDedupCycle(t, reader, cache, exp, spans)
 	if err != nil {
-		t.Fatalf("runDedupLoop returned err: %v", err)
+		t.Fatalf("Pipeline.Process returned err: %v", err)
 	}
-	if exported != 2 {
-		t.Errorf("exported = %d, want 2 (both spans must be exported despite shared span_id)", exported)
+	if cycle.Exported != 2 {
+		t.Errorf("exported = %d, want 2 (both spans must be exported despite shared span_id)", cycle.Exported)
 	}
-	if duplicates != 0 {
-		t.Errorf("duplicates = %d, want 0 (different trace_ids are not duplicates)", duplicates)
+	if cycle.Duplicates != 0 {
+		t.Errorf("duplicates = %d, want 0 (different trace_ids are not duplicates)", cycle.Duplicates)
 	}
 	if !cache.Contains(model.SpanKey{TraceID: traceA, SpanID: collidingSpanID}) {
 		t.Error("cache missing key for trace A")
@@ -104,24 +82,25 @@ func TestDedup_SameTraceAndSpanIDReplay_SuppressedAfterExport(t *testing.T) {
 
 	exp := &mockExporter{}
 	cache := mustDedupCache(t)
+	reader := &mockLiveReader{healthy: true}
 
-	exported1, dup1, err := runDedupLoop(t, context.Background(), cache, exp, []model.OpenTelemetrySpan{span})
+	cycle1, err := runLiveDedupCycle(t, reader, cache, exp, []model.OpenTelemetrySpan{span})
 	if err != nil {
 		t.Fatalf("first cycle err: %v", err)
 	}
-	if exported1 != 1 || dup1 != 0 {
-		t.Fatalf("first cycle: exported=%d duplicates=%d, want 1/0", exported1, dup1)
+	if cycle1.Exported != 1 || cycle1.Duplicates != 0 {
+		t.Fatalf("first cycle: exported=%d duplicates=%d, want 1/0", cycle1.Exported, cycle1.Duplicates)
 	}
 
-	exported2, dup2, err := runDedupLoop(t, context.Background(), cache, exp, []model.OpenTelemetrySpan{span})
+	cycle2, err := runLiveDedupCycle(t, reader, cache, exp, []model.OpenTelemetrySpan{span})
 	if err != nil {
 		t.Fatalf("second cycle err: %v", err)
 	}
-	if exported2 != 0 {
-		t.Errorf("second cycle exported = %d, want 0 (replay must be suppressed)", exported2)
+	if cycle2.Exported != 0 {
+		t.Errorf("second cycle exported = %d, want 0 (replay must be suppressed)", cycle2.Exported)
 	}
-	if dup2 != 1 {
-		t.Errorf("second cycle duplicates = %d, want 1", dup2)
+	if cycle2.Duplicates != 1 {
+		t.Errorf("second cycle duplicates = %d, want 1", cycle2.Duplicates)
 	}
 	if exp.exportSpansCalls != 1 {
 		t.Errorf("ExportSpans calls = %d, want 1 (no second export)", exp.exportSpansCalls)
@@ -148,16 +127,17 @@ func TestDedup_SameCycleDuplicate_SuppressedBeforeExport(t *testing.T) {
 		},
 	}
 	cache := mustDedupCache(t)
+	reader := &mockLiveReader{healthy: true}
 
-	exported, duplicates, err := runDedupLoop(t, context.Background(), cache, exp, []model.OpenTelemetrySpan{first, second})
+	cycle, err := runLiveDedupCycle(t, reader, cache, exp, []model.OpenTelemetrySpan{first, second})
 	if err != nil {
-		t.Fatalf("runDedupLoop returned err: %v", err)
+		t.Fatalf("Pipeline.Process returned err: %v", err)
 	}
-	if exported != 1 {
-		t.Errorf("exported = %d, want 1", exported)
+	if cycle.Exported != 1 {
+		t.Errorf("exported = %d, want 1", cycle.Exported)
 	}
-	if duplicates != 1 {
-		t.Errorf("duplicates = %d, want 1", duplicates)
+	if cycle.Duplicates != 1 {
+		t.Errorf("duplicates = %d, want 1", cycle.Duplicates)
 	}
 	if len(sent) != 1 {
 		t.Fatalf("exporter received %d spans, want 1", len(sent))
@@ -183,8 +163,9 @@ func TestDedup_ExportFailure_DoesNotMarkSeen(t *testing.T) {
 		},
 	}
 	cache := mustDedupCache(t)
+	reader := &mockLiveReader{healthy: true}
 
-	if _, _, err := runDedupLoop(t, context.Background(), cache, exp, []model.OpenTelemetrySpan{span}); err == nil {
+	if _, err := runLiveDedupCycle(t, reader, cache, exp, []model.OpenTelemetrySpan{span}); err == nil {
 		t.Fatal("expected error from failing exporter")
 	}
 	if cache.Contains(model.KeyOf(span)) {
@@ -224,9 +205,14 @@ func TestDedup_PartialSuccess_OnlyReturnedKeysMarkedSeen(t *testing.T) {
 		},
 	}
 	cache := mustDedupCache(t)
+	reader := &mockLiveReader{healthy: true}
 
-	if _, _, err := runDedupLoop(t, context.Background(), cache, exp, spans); err != nil {
+	cycle, err := runLiveDedupCycle(t, reader, cache, exp, spans)
+	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
+	}
+	if cycle.Exported != 2 {
+		t.Errorf("exported = %d, want 2 accepted spans", cycle.Exported)
 	}
 
 	if !cache.Contains(model.SpanKey{TraceID: traceA, SpanID: 1}) {
@@ -270,8 +256,9 @@ func TestDedup_SameCycleDuplicatePartialSuccess_UnacceptedKeyRetriesNextCycle(t 
 		},
 	}
 	cache := mustDedupCache(t)
+	reader := &mockLiveReader{healthy: true}
 
-	exported1, duplicates1, err := runDedupLoop(t, context.Background(), cache, exp, []model.OpenTelemetrySpan{
+	cycle1, err := runLiveDedupCycle(t, reader, cache, exp, []model.OpenTelemetrySpan{
 		spanA,
 		spanB,
 		spanBDuplicate,
@@ -280,11 +267,11 @@ func TestDedup_SameCycleDuplicatePartialSuccess_UnacceptedKeyRetriesNextCycle(t 
 	if err != nil {
 		t.Fatalf("first cycle err: %v", err)
 	}
-	if exported1 != 2 {
-		t.Errorf("first cycle exported = %d, want 2", exported1)
+	if cycle1.Exported != 2 {
+		t.Errorf("first cycle exported = %d, want 2", cycle1.Exported)
 	}
-	if duplicates1 != 1 {
-		t.Errorf("first cycle duplicates = %d, want 1", duplicates1)
+	if cycle1.Duplicates != 1 {
+		t.Errorf("first cycle duplicates = %d, want 1", cycle1.Duplicates)
 	}
 	if len(calls) != 1 {
 		t.Fatalf("export calls after first cycle = %d, want 1", len(calls))
@@ -301,15 +288,15 @@ func TestDedup_SameCycleDuplicatePartialSuccess_UnacceptedKeyRetriesNextCycle(t 
 		t.Error("unaccepted span B must not be marked seen after first cycle")
 	}
 
-	exported2, duplicates2, err := runDedupLoop(t, context.Background(), cache, exp, []model.OpenTelemetrySpan{spanB})
+	cycle2, err := runLiveDedupCycle(t, reader, cache, exp, []model.OpenTelemetrySpan{spanB})
 	if err != nil {
 		t.Fatalf("second cycle err: %v", err)
 	}
-	if exported2 != 1 {
-		t.Errorf("second cycle exported = %d, want 1", exported2)
+	if cycle2.Exported != 1 {
+		t.Errorf("second cycle exported = %d, want 1", cycle2.Exported)
 	}
-	if duplicates2 != 0 {
-		t.Errorf("second cycle duplicates = %d, want 0", duplicates2)
+	if cycle2.Duplicates != 0 {
+		t.Errorf("second cycle duplicates = %d, want 0", cycle2.Duplicates)
 	}
 	if len(calls) != 2 {
 		t.Fatalf("export calls after second cycle = %d, want 2", len(calls))

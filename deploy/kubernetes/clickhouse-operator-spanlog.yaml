@@ -12,7 +12,7 @@
 # grants, and an explicit readonly=2 profile). Adapt the
 # cluster name, shard/replica layout, and image tag to your environment.
 #
-# Full walkthrough: docs/kubernetes-clickhouse.md
+# Full walkthrough: docs/kubernetes.md
 #
 # Apply with the operator already installed:
 #   kubectl apply -f clickhouse-operator-spanlog.yaml
@@ -71,10 +71,15 @@ spec:
       click_dog_monitor/password_sha256_hex: REPLACE_WITH_SHA256_HEX_OF_PASSWORD
       click_dog_monitor/profile: click_dog_readonly
       click_dog_monitor/quota: default
-      # SELECT-only on exactly the two tables click-dog reads. Nothing else.
+      # SELECT-only on the two tables click-dog reads, plus what the centralized
+      # Deployment's cluster() reads need: REMOTE (ClickHouse gates the table
+      # function behind it) and system.columns for the replica capability
+      # probes. A same-pod sidecar needs only the two SELECTs.
       click_dog_monitor/grants/query:
         - "GRANT SELECT ON system.opentelemetry_span_log TO click_dog_monitor"
         - "GRANT SELECT ON system.query_log TO click_dog_monitor"
+        - "GRANT REMOTE ON *.* TO click_dog_monitor"
+        - "GRANT SELECT ON system.columns TO click_dog_monitor"
 
     # ── 3. Cluster layout ─────────────────────────────────────────────────
     # Expand shards/replicas to match your topology. The span-log config and

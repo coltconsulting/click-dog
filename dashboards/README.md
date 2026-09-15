@@ -22,7 +22,7 @@ Creates all three dashboards. Use `--dashboard query`, `--dashboard activity`,
 or `--dashboard health` for just one.
 
 **Re-running is safe.** Each dashboard is stamped with a version marker (the
-click-dog version + a content hash) appended to its description — it shows as a
+click-dog version + a content hash) appended to its description: it shows as a
 small `<!-- clickdog: … -->` line at the end of the description in Datadog, and
 lets a later run know whether the live dashboard matches this build:
 
@@ -43,8 +43,8 @@ DD_API_KEY=... DD_APP_KEY=... click-dog create-dashboards \
 ```
 
 > Selectively merging only the *new* widgets into a dashboard you've customized
-> is a separate, not-yet-implemented capability — see
-> [`docs/development/specs/dashboard-updates.md`](../docs/development/specs/dashboard-updates.md).
+> is a separate, not-yet-implemented capability. The private development
+> repository carries the dashboard-update design spec.
 
 ### Option 2: Datadog API
 
@@ -110,26 +110,28 @@ The higher-level query-family rollup API groups aggregated exact normalized-quer
 
 | Section | Widgets | Out of box? |
 |---------|---------|-------------|
-| **Key metrics** | Exported queries (1h), p95/p99 latency (with sparkline), slow query count, top user, top client | Yes — `query_log.*` enrichment + duration |
+| **Key metrics** | Exported queries (1h), p95/p99 latency (with sparkline), slow query count, top user, top client | Yes: `query_log.*` enrichment + duration |
 | **Query overview** | Exported queries/min, p50/p95/p99 latency | Yes |
-| **Failures** | Failed query count and top failing query families | Yes — `query_log.exception_code` (blank until a query fails) |
-| **By ClickHouse user & client** | Top users by exported query volume and p95 latency, top client libraries | Yes — `query_log.user`, `query_log.client_name` |
-| **Per-host** | Exported-query distribution across ClickHouse nodes | Yes — `hostname` |
-| **Resource usage** | Top query families by total query time, rows read and peak memory, plus tables/databases accessed | Yes — `@duration` plus numeric `query_log.read_rows` / `query_log.memory_usage`, plus `query_log.tables` and `query_log.databases` (family widgets need `query_log.normalized_query_hash`) |
-| **Exact query families** | Slowest query shapes grouped deterministically by `query_log.normalized_query_hash` with `query_log.normalized_query` preview | Yes — preferred over raw SQL grouping |
-| **By application** | Top apps by exported query volume, latency, slow query count | No — requires `log_comment.app` tagging |
-| **By named query** | Top named queries by p95 latency and exported volume | No — requires `log_comment.query_name` tagging |
+| **Failures** | Failed query count and top failing query families | Yes: `query_log.exception_code` (blank until a query fails) |
+| **By ClickHouse user & client** | Top users by exported query volume and p95 latency, top client libraries | Yes: `query_log.user`, `query_log.client_name` |
+| **Per-host** | Exported-query distribution across ClickHouse nodes | Yes: `hostname` |
+| **Resource usage** | Top query families by total query time, rows read and peak memory, plus tables/databases accessed | Yes: `@duration` plus numeric `query_log.read_rows` / `query_log.memory_usage`, plus `query_log.tables` and `query_log.databases` (family widgets need `query_log.normalized_query_hash`) |
+| **Exact query families** | Slowest query shapes grouped deterministically by `query_log.normalized_query_hash` with `query_log.normalized_query` preview | Yes: preferred over raw SQL grouping |
+| **By application** | Top apps by exported query volume, latency, slow query count | No: requires `log_comment.app` tagging |
+| **By named query** | Top named queries by p95 latency and exported volume | No: requires `log_comment.query_name` tagging |
 
 ### Out-of-box vs. `log_comment` enhancement
 
-Everything above the **By application** section works on a fresh install with no client-side changes — click-dog's `query_log` enrichment populates the user, client, host, table, rows-read, memory, total-query-time, and exception dimensions automatically. Normalized-query dimensions appear when `click_dog.normalized_query_supported` is `1`; in cluster query mode that means every replica passed the startup compatibility probe. The key-metrics row gives a single-screen "are query traces flowing, what does the current p95/p99 look like, who's the top contributor right now" answer the moment the dashboard imports.
+Everything above the **By application** section works on a fresh install with no client-side changes: click-dog's `query_log` enrichment populates the user, client, host, table, rows-read, memory, total-query-time, and exception dimensions automatically. Normalized-query dimensions appear when `click_dog.normalized_query_supported` is `1`; in cluster query mode that means every replica passed the startup compatibility probe. The key-metrics row gives a single-screen "are query traces flowing, what does the current p95/p99 look like, who's the top contributor right now" answer the moment the dashboard imports.
 
-The **By application** and **By named query** sections add richer attribution that ClickHouse's automatic fields can't capture — they require the client to set `log_comment` (e.g. `SET log_comment='{"app":"my-app","query_name":"home_dashboard"}'`). Until tagging is in place those widgets render blank, which is the expected first-run state.
+The **By application** and **By named query** sections require the client to set
+`log_comment` (for example, `SET log_comment='{"app":"my-app","query_name":"home_dashboard"}'`).
+Those widgets remain blank until tagging is in place.
 
 ### Tuning latency thresholds (optional)
 
 The **p95 latency** and **p99 latency** tiles ship with a sparkline but **no
-color thresholds** — what counts as "slow" depends entirely on your workload,
+color thresholds**: what counts as "slow" depends entirely on your workload,
 and the dashboard makes no assumption about your target. If you have an SLO,
 add a `conditional_formats` block to those tiles to color them.
 
@@ -193,9 +195,9 @@ only; use `inherit_otel_connection: true` when the collector requires the
 span exporter's CA or mTLS client certificate settings.
 
 In the default one-sidecar-per-ClickHouse-node deployment the cockpit tiles
-aggregate worst-case across active exporters — `max` circuit breaker state,
+aggregate worst-case across active exporters: `max` circuit breaker state,
 `max` backoff interval, and oldest (`min`) `role:active` last-success
-timestamp — so a single unhealthy active sidecar is never hidden behind
+timestamp, so a single unhealthy active sidecar is never hidden behind
 healthy peers (averaging would also yield fractional breaker values that never
 match the `0`/`1`/`2` conditional formats). The **Per-host health** table
 directly below ranks sidecars worst-first so the degraded active host is
@@ -204,7 +206,7 @@ leader column without contributing to stale-export age.
 
 | Section | Widgets |
 |---------|---------|
-| **Operational cockpit** | Last success age, circuit breaker state (`0=closed`, `1=half-open`, `2=open`), current error rate, export throughput, backoff interval — fleet worst-case |
+| **Operational cockpit** | Last success age, circuit breaker state (`0=closed`, `1=half-open`, `2=open`), current error rate, export throughput, backoff interval: fleet worst-case |
 | **Per-host health** | Per-sidecar circuit breaker, last-success age, and backoff, ranked worst-first by breaker state |
 | **Current trends** | Exported/filtered/duplicate rates, cycle and error rates, backoff and circuit breaker timelines |
 | **Last cycle** | Most recent cycle duration and exported/filtered/duplicate span counts |
@@ -225,7 +227,7 @@ instances:
   - openmetrics_endpoint: http://localhost:9090/metrics
     namespace: click_dog
     metrics:
-      # Counters — Datadog appends `.count` and submits as a monotonic rate.
+      # Counters: Datadog appends `.count` and submits as a monotonic rate.
       - click_dog_spans_exported_total: spans_exported
       - click_dog_spans_filtered_total: spans_filtered
       - click_dog_spans_duplicates_total: spans_duplicates
@@ -233,7 +235,7 @@ instances:
       - click_dog_export_accepted_total: export.accepted
       - click_dog_export_errors_total: export.errors
       - click_dog_cycle_results_total: cycle_results
-      # Gauges — submitted as-is under the namespace.
+      # Gauges: submitted as-is under the namespace.
       - click_dog_circuit_breaker_state: circuit_breaker.state
       - click_dog_leader: leader
       - click_dog_backoff_interval_seconds: backoff_interval.seconds
@@ -254,7 +256,7 @@ instances:
       - click_dog_spans_with_query_id_ratio: spans_with_query_id_ratio
       - click_dog_normalized_query_supported: normalized_query_supported
       - click_dog_query_operation_supported: query_operation_supported
-      # Topology self-audit — detects the sidecar + use_cluster_queries anti-pattern.
+      # Topology self-audit: detects the sidecar + use_cluster_queries anti-pattern.
       - click_dog_topology_warning: topology_warning
 ```
 
@@ -292,15 +294,15 @@ default names directly; Datadog appends `.count` to OTLP monotonic sums.
 | `click_dog_query_operation_supported`         | gauge   | `click_dog.query_operation_supported`     |
 | `click_dog_topology_warning`                  | gauge   | `click_dog.topology_warning` (tag: `reason`) |
 
-The bottom block carries ClickHouse data-plane health signals (#183) — see
-[Datadog Integration: ClickHouse data-plane health signals](../docs/integrations/datadog.md#clickhouse-data-plane-health-signals-183).
+The bottom block carries ClickHouse data-plane health signals (#183). See
+[Datadog Self-Monitoring: ClickHouse data-plane health signals](https://click-dog.com/integrations/datadog/self-monitoring/#clickhouse-data-plane-health-signals).
 
 ### Recommended monitors
 
 Once the Health dashboard is rendering data, the canonical alerting tiers
 (stale exports, circuit breaker not closed, cycle error ratio, OTLP self-metrics
 no-data, plus the optional webhook events) are documented in
-[Datadog Integration — Recommended Monitors](../docs/integrations/datadog.md#recommended-monitors).
+[Datadog: Recommended Monitors](https://click-dog.com/integrations/datadog/monitors/).
 
 ### Troubleshooting
 
@@ -320,7 +322,7 @@ If health-dashboard widgets show "No data" after import:
 - Click-dog running and exporting spans
 - Datadog Agent receiving OTLP traces (for query analysis)
 - `metrics.otlp.enabled: true` for the health dashboard
-- Legacy scrape users only: Datadog Agent OpenMetrics check — see the explicit
+- Legacy scrape users only: Datadog Agent OpenMetrics check. See the explicit
   rename list above
 
 ## Other Platforms

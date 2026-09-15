@@ -12,7 +12,8 @@ func TestRunDeploy_NoArgsPrintsHelp(t *testing.T) {
 		t.Errorf("exit = %d, want 0", code)
 	}
 
-	if got := out.String(); !strings.Contains(got, "Subcommands:") || !strings.Contains(got, "status") {
+	if got := out.String(); !strings.Contains(got, "Subcommands:") ||
+		!strings.Contains(got, "status") || !strings.Contains(got, "uninstall") {
 		t.Errorf("stdout missing help block:\n%s", got)
 	}
 	if errOut.Len() != 0 {

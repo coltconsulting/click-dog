@@ -509,6 +509,34 @@ func TestExportQuery_ResultOnSendError(t *testing.T) {
 	}
 }
 
+func TestExportQuery_OmitsAbsentRawStatement(t *testing.T) {
+	mock := &mockTraceClient{}
+	exp := newTestExporter(mock)
+	result, err := exp.ExportQuery(context.Background(), model.QueryLog{
+		QueryID:             "q-normalized-only",
+		EventTime:           time.Now(),
+		NormalizedQueryHash: 123,
+		NormalizedQuery:     "SELECT ?",
+		ExceptionCode:       62,
+	})
+	if err != nil {
+		t.Fatalf("ExportQuery: %v", err)
+	}
+	if result.TotalAccepted != 1 {
+		t.Fatalf("result = %+v, want one accepted", result)
+	}
+	span := firstExportedSpan(t, mock)
+	if attrByKey(span.Attributes, "db.statement") != nil {
+		t.Fatal("OTLP exporter emitted db.statement for a shaped query without raw text")
+	}
+	if got := stringAttrValue(t, span.Attributes, "db.normalized_query"); got != "SELECT ?" {
+		t.Fatalf("db.normalized_query = %q, want SELECT ?", got)
+	}
+	if attrByKey(span.Attributes, "db.exception_code") == nil {
+		t.Fatal("error metadata was lost when raw query text was omitted")
+	}
+}
+
 // Multi-chunk batch where the first send fails: the streaming chunker must
 // stop after the first flush rather than push the rest of the chunks.
 // Locks down "stops on error" for the chunked path (the small-batch test

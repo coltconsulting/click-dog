@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/coltconsulting/click-dog/internal/clicklog"
 	"github.com/coltconsulting/click-dog/internal/model"
@@ -97,7 +98,11 @@ func normalizeExporterNames(exporterCount int, names []string) []string {
 	return normalized
 }
 
-// ExportSpans calls ExportSpans on every backend sequentially.
+// ExportSpans calls ExportSpans on every backend concurrently. Starting every
+// call together means a caller-supplied deadline gives each sink the full
+// configured interval instead of leaving later sinks only the time consumed by
+// earlier ones. Results are still reduced in configured order for deterministic
+// statuses and error text.
 //
 // Under PolicyAllRequired, on full success, returns the intersection of
 // (trace_id, span_id) keys each sink reported as exported (a span is "seen"
@@ -121,25 +126,39 @@ func (m *MultiExporter) ExportSpans(ctx context.Context, spans []model.OpenTelem
 		union = make(map[model.SpanKey]struct{})
 	}
 
+	type spanOutcome struct {
+		result model.ExportResult
+		err    error
+	}
+	outcomes := make([]spanOutcome, len(m.exporters))
+	var wg sync.WaitGroup
+	wg.Add(len(m.exporters))
 	for i, exp := range m.exporters {
-		result, err := exp.ExportSpans(ctx, spans)
+		go func(i int, exp model.SpanExporter) {
+			defer wg.Done()
+			outcomes[i].result, outcomes[i].err = exp.ExportSpans(ctx, spans)
+		}(i, exp)
+	}
+	wg.Wait()
+
+	for i, outcome := range outcomes {
 		// MultiExporter reports one top-level status per configured sink name.
 		// Inner result.Sinks are intentionally not merged so fan-out metrics/logs
 		// remain keyed to the configured sink labels.
 		statuses = append(statuses, model.ExportSinkStatus{
 			Name:     m.names[i],
 			Sent:     len(spans),
-			Accepted: result.TotalAccepted,
-			Error:    err,
+			Accepted: outcome.result.TotalAccepted,
+			Error:    outcome.err,
 		})
-		if err != nil {
-			clicklog.Error("MultiExporter: %s ExportSpans failed: %v", m.names[i], err)
-			sinkErrs = append(sinkErrs, fmt.Errorf("%s: %w", m.names[i], err))
+		if outcome.err != nil {
+			clicklog.Error("MultiExporter: %s ExportSpans failed: %v", m.names[i], outcome.err)
+			sinkErrs = append(sinkErrs, fmt.Errorf("%s: %w", m.names[i], outcome.err))
 			continue
 		}
 
-		keySet := make(map[model.SpanKey]struct{}, len(result.Accepted))
-		for _, k := range result.Accepted {
+		keySet := make(map[model.SpanKey]struct{}, len(outcome.result.Accepted))
+		for _, k := range outcome.result.Accepted {
 			keySet[k] = struct{}{}
 			if union != nil {
 				union[k] = struct{}{}
@@ -205,7 +224,9 @@ func spanKeysFromSet(set map[model.SpanKey]struct{}) []model.SpanKey {
 	return keys
 }
 
-// ExportQuery calls ExportQuery on every backend.
+// ExportQuery calls ExportQuery on every backend concurrently, then reduces
+// results in configured order. As with ExportSpans, this gives every sink the
+// complete caller-supplied deadline.
 //
 // All sinks are required: if any sink fails, returns a non-nil error
 // joining the per-sink failures. Backfill mode counts the query as
@@ -222,20 +243,34 @@ func (m *MultiExporter) ExportQuery(ctx context.Context, log model.QueryLog) (mo
 	var sinkErrs []error
 	statuses := make([]model.ExportSinkStatus, 0, len(m.exporters))
 
+	type queryOutcome struct {
+		result model.ExportResult
+		err    error
+	}
+	outcomes := make([]queryOutcome, len(m.exporters))
+	var wg sync.WaitGroup
+	wg.Add(len(m.exporters))
 	for i, exp := range m.exporters {
-		result, err := exp.ExportQuery(ctx, log)
+		go func(i int, exp model.SpanExporter) {
+			defer wg.Done()
+			outcomes[i].result, outcomes[i].err = exp.ExportQuery(ctx, log)
+		}(i, exp)
+	}
+	wg.Wait()
+
+	for i, outcome := range outcomes {
 		// MultiExporter reports one top-level status per configured sink name.
 		// Inner result.Sinks are intentionally not merged so fan-out metrics/logs
 		// remain keyed to the configured sink labels.
 		statuses = append(statuses, model.ExportSinkStatus{
 			Name:     m.names[i],
 			Sent:     1,
-			Accepted: result.TotalAccepted,
-			Error:    err,
+			Accepted: outcome.result.TotalAccepted,
+			Error:    outcome.err,
 		})
-		if err != nil {
-			clicklog.Error("MultiExporter: %s ExportQuery failed: %v", m.names[i], err)
-			sinkErrs = append(sinkErrs, fmt.Errorf("%s: %w", m.names[i], err))
+		if outcome.err != nil {
+			clicklog.Error("MultiExporter: %s ExportQuery failed: %v", m.names[i], outcome.err)
+			sinkErrs = append(sinkErrs, fmt.Errorf("%s: %w", m.names[i], outcome.err))
 		}
 	}
 

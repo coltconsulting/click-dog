@@ -52,6 +52,7 @@ log_level: info                     # debug, info, warn, error
 # ── ClickHouse Connection Tuning ─────────────────────────────────────
 #
 # clickhouse:
+#   password_file: ${CLICKHOUSE_PASSWORD_FILE}  # Alternative to password; file contents are read at load
 #
 #   # Connection pool
 #   max_open_conns: 2               # Maximum open connections (default: 2)
@@ -125,6 +126,7 @@ log_level: info                     # debug, info, warn, error
 #   splunk_hec:
 #     - endpoint: https://splunk.internal:8088  # HTTPS by default for HEC token transport
 #       token: ${SPLUNK_HEC_TOKEN}
+#       token_file: ${SPLUNK_HEC_TOKEN_FILE}    # Alternative to token; file contents are read at load
 #       index: clickhouse                # Target index (optional)
 #       source: click-dog                # Event source (default: click-dog)
 #       source_type: _json               # Event source type (default: _json)
@@ -194,10 +196,24 @@ log_level: info                     # debug, info, warn, error
 #     enabled: true                  # Enabled by installer / production profile configs
 #     max_interval_s: 300            # Max 5 min between polls
 #     backoff_factor: 2.0            # Double interval on each failure
+#
+#   # Degraded-mode canary queries
+#   canary:
+#     enabled: false
+#     threshold_duration_ms: 60000   # Count queries slower than this while degraded
+#
+#   # Whole-cluster reader topology self-audit (no-op unless cluster queries are enabled)
+#   topology_audit:
+#     enabled: true
+#     interval_s: 300
+#     debounce_count: 2
+#     query_log_lookback_minutes: 15
 
 # ── Filtering (advanced) ─────────────────────────────────────────────
 #
 # filters:
+#   query_text_mode: raw              # raw, redacted, normalized_only, or none
+#
 #   # Drop internal ClickHouse pipeline spans at the SQL level (substring match).
 #   # This is the primary volume knob — cuts ~90-99% of noise spans.
 #   blacklist_operations:
@@ -219,6 +235,10 @@ log_level: info                     # debug, info, warn, error
 #   whitelist_ips: []
 #     # - "10.0.0.0/8"
 #     # - "192.168.1.100"
+#
+#   # Include or exclude spans by ClickHouse query_log user
+#   whitelist_users: []
+#   blacklist_users: []
 #
 #   # Rewrite sensitive SQL fragments before export. Runs after blacklist
 #   # filtering; if a query is blacklisted, it is dropped rather than redacted.
@@ -247,10 +267,11 @@ log_level: info                     # debug, info, warn, error
 #       - "keeper-02:9181"
 #       - "keeper-03:9181"
 #     session_timeout_s: 10
-#     # secure: true  # Enable TLS to Keeper when supported
+#     secure: true  # Enable TLS to Keeper when supported
 #     base_path: "/click-dog/election"
-#     # auth_user: ${KEEPER_USER}
-#     # auth_password: ${KEEPER_PASSWORD}
+#     auth_user: ${KEEPER_USER}
+#     auth_password: ${KEEPER_PASSWORD}
+#     auth_password_file: ${KEEPER_PASSWORD_FILE}  # Alternative to auth_password
 
 # ── Logging ──────────────────────────────────────────────────────────
 #
@@ -281,10 +302,11 @@ log_level: info                     # debug, info, warn, error
 #     enabled: false
 #     inherit_otel_connection: true       # Reuse exporters.otel[0] when enabled
 #     interval_seconds: 10
-#     # collector_address: metrics-collector:4317  # Required if inherit=false
-#     # secure: true
-#     # host: clickhouse-prod-01
-#     # service_name: click-dog-monitor
+#     collector_address: metrics-collector:4317  # Required if inherit=false
+#     secure: true
+#     host: clickhouse-prod-01
+#     service_name: click-dog-monitor
+#     rename: {}                          # Optional canonical-name to emitted-name map
 
 # ── Kubernetes-shaped Health Endpoints ─────────────────────────────
 #
@@ -313,7 +335,8 @@ log_level: info                     # debug, info, warn, error
 
 # ── Webhook Notifications ──────────────────────────────────────────
 #
-# Sends HTTP POST to a webhook URL on critical events.
+# Sends HTTP POST to a webhook URL on selected lifecycle, failure, and explicit
+# query-analysis events.
 # Compatible with Slack incoming webhooks (sends {"text": "..."}).
 # Discord requires its Slack-compatible /slack endpoint. PagerDuty Events API
 # v2 requires an adapter because its payload contract is different.
@@ -323,6 +346,7 @@ log_level: info                     # debug, info, warn, error
 #   url: ${SLACK_WEBHOOK_URL}            # Webhook URL (env var recommended)
 #   timeout_s: 10                        # HTTP timeout (default: 10s)
 #   events:                              # Which events to notify (default: all)
+#     - analysis_findings                # Explicit `analyze queries --notify` run found eligible conditions
 #     - circuit_breaker_opened           # ClickHouse protection activated
 #     - circuit_breaker_closed           # Recovery successful
 #     - backfill_complete                # Historical export finished cleanly
@@ -330,3 +354,23 @@ log_level: info                     # debug, info, warn, error
 #     - error_spike                      # Error threshold exceeded
 #     - startup                          # Click-Dog started
 #     - shutdown                         # Click-Dog shutting down
+
+# ── Datadog Event Management ──────────────────────────────────────
+#
+# Optional destination for structured analysis_findings events. This is
+# separate from OTLP traces/metrics and is used only by an explicit
+# `click-dog analyze queries --notify` run. Both Datadog credentials are
+# required. Put each secret in exactly one of the inline/env-backed field or
+# its *_file alternative. The configured site is used to derive the official
+# Events API v2 intake hostname; redirects are rejected.
+#
+# datadog_events:
+#   enabled: false
+#   site: datadoghq.com                  # e.g. datadoghq.com, datadoghq.eu, us3.datadoghq.com
+#   api_key: ${DD_API_KEY}
+#   api_key_file: ""                     # Alternative: set a path and remove api_key
+#   application_key: ${DD_APP_KEY}
+#   application_key_file: ""             # Alternative: set a path and remove application_key
+#   timeout_s: 10                        # 1-60 seconds (default: 10)
+#   environment: production              # Required low-cardinality event tag
+#   service: click-dog                    # Required low-cardinality event tag

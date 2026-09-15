@@ -298,11 +298,20 @@ func evaluateReadiness(obs readinessObs) []ReadinessCheck {
 	}
 	lookbackDesc := formatLookback(obs.lookback)
 
+	// In cluster query mode the reads go through the cluster() table function,
+	// which ClickHouse gates behind REMOTE on top of the table SELECT grants.
+	// Without naming it here an operator holding exactly the documented
+	// per-table grants is told to grant what they already have.
+	clusterGrant := ""
+	if obs.useClusterQueries {
+		clusterGrant = "; cluster query mode also needs GRANT REMOTE ON *.* (cluster() reads use the remote table function)"
+	}
+
 	// --- span_log selectable + recent data + duration distribution ---
 	if obs.spanLogErr != nil {
 		add("span_log readable", ReadinessFail,
 			fmt.Sprintf("system.opentelemetry_span_log is missing or unreadable: %v", obs.spanLogErr),
-			"enable OpenTelemetry span logging in ClickHouse and grant SELECT on system.opentelemetry_span_log to the monitoring user")
+			"enable OpenTelemetry span logging in ClickHouse and grant SELECT on system.opentelemetry_span_log to the monitoring user"+clusterGrant)
 	} else {
 		add("span_log readable", ReadinessPass, "system.opentelemetry_span_log is selectable", "")
 		if obs.spanTotal == 0 {
@@ -358,7 +367,7 @@ func evaluateReadiness(obs readinessObs) []ReadinessCheck {
 			detail += " (not required by current config)"
 		}
 		add("query_log readable", status, detail,
-			"grant SELECT on system.query_log (needed for enrichment, backfill, user filters, and query-family dashboards)")
+			"grant SELECT on system.query_log (needed for enrichment, backfill, user filters, and query-family dashboards)"+clusterGrant)
 	} else {
 		add("query_log readable", ReadinessPass,
 			fmt.Sprintf("system.query_log is selectable (%d rows in the last %s)", obs.queryLogCount, lookbackDesc), "")

@@ -65,7 +65,7 @@ func (a *coverageAnalyzer) Analyze(_ context.Context, input AnalysisInput) ([]Fi
 				"min_executions":     input.Config.MinExecutions,
 				"lookback":           input.Config.Lookback,
 			},
-			"Widen -lookback or lower -min-executions if query traffic is expected in this window.",
+			"Widen --lookback or lower --min-executions if query traffic is expected in this window.",
 		))
 	}
 
@@ -113,6 +113,7 @@ func (a *coverageAnalyzer) finding(input AnalysisInput, scope string, severity S
 	return Finding{
 		ID:             FindingID(a.Name(), scope, subject, input.Window.Start, nil),
 		Analyzer:       a.Name(),
+		ConditionScope: scope,
 		Severity:       severity,
 		Confidence:     1.0,
 		Title:          title,

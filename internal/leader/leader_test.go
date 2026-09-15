@@ -1,9 +1,11 @@
 package leader
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/coltconsulting/click-dog/internal/config"
 )
@@ -404,5 +406,48 @@ ha:
 
 	if cfg.HA.Keeper.AuthPassword != "env-secret" {
 		t.Errorf("Expected env-expanded password 'env-secret', got %q", cfg.HA.Keeper.AuthPassword)
+	}
+}
+
+func TestLeaderElection_AwaitJoin_TimesOutBeforeJoin(t *testing.T) {
+	le := &LeaderElection{ready: make(chan struct{})}
+	start := time.Now()
+	if le.AwaitJoin(context.Background(), 20*time.Millisecond) {
+		t.Fatal("AwaitJoin reported joined before Run signalled ready")
+	}
+	if time.Since(start) < 20*time.Millisecond {
+		t.Fatal("AwaitJoin returned before the timeout without a ready signal")
+	}
+}
+
+func TestLeaderElection_AwaitJoin_ReturnsJoinedStateOnceReady(t *testing.T) {
+	le := &LeaderElection{ready: make(chan struct{})}
+	le.myNode = "/click-dog/election/_c_x-candidate-0000000001"
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		le.signalReady()
+		le.signalReady() // idempotent: a second exit path must not panic
+	}()
+	if !le.AwaitJoin(context.Background(), time.Second) {
+		t.Fatal("AwaitJoin should report joined once Run signalled ready with a candidate node")
+	}
+	// Ready but not joined (ctx canceled before the join): reports false.
+	le2 := &LeaderElection{ready: make(chan struct{})}
+	le2.signalReady()
+	if le2.AwaitJoin(context.Background(), time.Second) {
+		t.Fatal("AwaitJoin should report not joined when Run gave up before creating a candidate")
+	}
+}
+
+func TestLeaderElection_AwaitJoin_ZeroValueAndCanceledContext(t *testing.T) {
+	var le LeaderElection // no ready channel: fall back to the live Joined() answer
+	if le.AwaitJoin(context.Background(), time.Second) {
+		t.Fatal("zero-value election is not joined")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	le2 := &LeaderElection{ready: make(chan struct{})}
+	if le2.AwaitJoin(ctx, time.Second) {
+		t.Fatal("canceled context must not report joined")
 	}
 }

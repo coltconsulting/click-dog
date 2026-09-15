@@ -19,7 +19,18 @@ import (
 	"time"
 
 	"golang.org/x/term"
+
+	"github.com/coltconsulting/click-dog/internal/config"
 )
+
+// maxDashboardResponseBytes bounds a Datadog dashboard API response. The list
+// endpoint returns a summary per dashboard in the org, so the cap is far above
+// the event client's 64 KiB, but an unbounded io.ReadAll would still let a
+// misbehaving endpoint pin memory — and on a non-2xx the body is interpolated
+// into the returned error, holding it a second time. Oversize is an error
+// rather than a silent truncation, so a cut-off body never reaches json.Unmarshal
+// as a confusing parse failure.
+const maxDashboardResponseBytes int64 = 8 << 20
 
 //go:embed dashboards/datadog-query-analysis.json dashboards/datadog-user-activity.json dashboards/datadog-clickdog-health.json
 var embeddedDashboards embed.FS
@@ -74,7 +85,7 @@ var shippedDashboards = []dashboardDef{
 			"Set `metrics.otlp.host` in containers if you want a stable host.name",
 			"dashboard variable instead of the container/pod hostname.",
 			"Prometheus-only users can still scrape :9090/metrics with the legacy",
-			"Datadog Agent OpenMetrics rename list documented in docs/integrations/datadog.md.",
+			"Datadog Agent OpenMetrics rename list documented in docs/integrations/datadog/self-monitoring.md.",
 		},
 	},
 }
@@ -86,7 +97,7 @@ var onExistsActions = map[string]bool{"skip": true, "overwrite": true, "new": tr
 func runCreateDashboards(args []string, out, errOut io.Writer) int {
 	fs := flag.NewFlagSet("create-dashboards", flag.ContinueOnError)
 	fs.SetOutput(errOut)
-	ddSite := fs.String("site", envOrDefault("DD_SITE", "datadoghq.com"), "Datadog site (e.g. datadoghq.com, datadoghq.eu)")
+	ddSite := fs.String("site", envOrDefault("DD_SITE", "datadoghq.com"), "trusted Datadog API hostname (e.g. datadoghq.com, datadoghq.eu)")
 	which := fs.String("dashboard", "all", "Which dashboard to create: query, activity, health, or all")
 	onExists := fs.String("on-exists", "", "Action when a stock dashboard already exists: skip, overwrite, or new. Default: prompt on a terminal, else skip.")
 	dashID := fs.String("id", "", "Dashboard ID to act on when several dashboards share the same title")
@@ -113,7 +124,7 @@ is left untouched; if it differs you are offered overwrite / new / skip
 Required environment variables:
   DD_API_KEY   Datadog API key
   DD_APP_KEY   Datadog application key
-  DD_SITE      Datadog site (default: datadoghq.com)
+  DD_SITE      Trusted Datadog API hostname (default: datadoghq.com)
 
 Your keys are sent directly to Datadog and are NOT stored by click-dog.
 
@@ -122,7 +133,7 @@ Usage:
 
 Flags:
 `)
-		fs.PrintDefaults()
+		printFlagDefaults(errOut, fs)
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -145,11 +156,12 @@ Flags:
 		return 1
 	}
 
-	// Validate site — a typo like "datadoghq.com/path" would produce a malformed URL
-	if strings.ContainsAny(*ddSite, "/ ?#") {
-		_, _ = fmt.Fprintf(errOut, "Error: invalid DD_SITE %q (must be a bare hostname, e.g. datadoghq.com)\n", *ddSite)
+	site, err := validateDatadogSite(*ddSite)
+	if err != nil {
+		_, _ = fmt.Fprintf(errOut, "Error: invalid DD_SITE %q: %v\n", *ddSite, err)
 		return 1
 	}
+	*ddSite = site
 
 	// Select dashboards to act on. Valid names come from shippedDashboards
 	// directly so adding a new dashboard only requires one change.
@@ -175,7 +187,7 @@ Flags:
 	_, _ = fmt.Fprintf(out, "  Site: %s\n", *ddSite)
 	_, _ = fmt.Fprintln(out)
 
-	client := &httpDDClient{site: *ddSite, apiKey: apiKey, appKey: appKey, http: &http.Client{Timeout: 30 * time.Second}}
+	client := &httpDDClient{site: *ddSite, apiKey: apiKey, appKey: appKey, http: newDatadogHTTPClient()}
 	opts := reconcileOpts{
 		site:     *ddSite,
 		onExists: *onExists,
@@ -199,6 +211,25 @@ Flags:
 		return 1
 	}
 	return 0
+}
+
+// validateDatadogSite accepts a strict DNS hostname without encoding Datadog's
+// evolving site catalogue. DD_SITE is trusted operator configuration; this
+// validation prevents URL-authority smuggling through userinfo, ports, paths,
+// or encoded delimiters while allowing future and custom Datadog sites.
+func validateDatadogSite(raw string) (string, error) {
+	return config.ValidateDatadogSite(raw)
+}
+
+func newDatadogHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 30 * time.Second,
+		// Dashboard API calls do not require redirects. Refusing them prevents a
+		// future or malicious endpoint from forwarding Datadog credentials.
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 }
 
 // reconcileOpts carries the per-run update policy down to reconcileDashboard.
@@ -481,9 +512,14 @@ func (c *httpDDClient) do(method, url string, body []byte) ([]byte, error) {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	respBody, err := io.ReadAll(resp.Body)
+	// Read one byte past the cap so an oversize body is reported rather than
+	// silently truncated (same posture as the updater's asset fetches).
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxDashboardResponseBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("reading response body: %w", err)
+	}
+	if int64(len(respBody)) > maxDashboardResponseBytes {
+		return nil, fmt.Errorf("response from Datadog exceeds %d bytes", maxDashboardResponseBytes)
 	}
 	// Datadog's v1 dashboard API returns 200 for list/create/update today, but
 	// accept any 2xx so a 201 from a future API version or region doesn't read
@@ -495,7 +531,7 @@ func (c *httpDDClient) do(method, url string, body []byte) ([]byte, error) {
 }
 
 func (c *httpDDClient) list() ([]ddDashboardSummary, error) {
-	respBody, err := c.do("GET", fmt.Sprintf("https://api.%s/api/v1/dashboard", c.site), nil)
+	respBody, err := c.do("GET", datadogAPIURL(c.site, "api", "v1", "dashboard"), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -509,7 +545,7 @@ func (c *httpDDClient) list() ([]ddDashboardSummary, error) {
 }
 
 func (c *httpDDClient) create(body []byte) (string, error) {
-	respBody, err := c.do("POST", fmt.Sprintf("https://api.%s/api/v1/dashboard", c.site), body)
+	respBody, err := c.do("POST", datadogAPIURL(c.site, "api", "v1", "dashboard"), body)
 	if err != nil {
 		return "", err
 	}
@@ -517,11 +553,27 @@ func (c *httpDDClient) create(body []byte) (string, error) {
 }
 
 func (c *httpDDClient) update(id string, body []byte) (string, error) {
-	respBody, err := c.do("PUT", fmt.Sprintf("https://api.%s/api/v1/dashboard/%s", c.site, url.PathEscape(id)), body)
+	respBody, err := c.do("PUT", datadogAPIURL(c.site, "api", "v1", "dashboard", id), body)
 	if err != nil {
 		return "", err
 	}
 	return urlFromResponse(respBody), nil
+}
+
+func datadogAPIURL(site string, pathSegments ...string) string {
+	var path, rawPath strings.Builder
+	for _, segment := range pathSegments {
+		path.WriteByte('/')
+		path.WriteString(segment)
+		rawPath.WriteByte('/')
+		rawPath.WriteString(url.PathEscape(segment))
+	}
+	return (&url.URL{
+		Scheme:  "https",
+		Host:    "api." + site,
+		Path:    path.String(),
+		RawPath: rawPath.String(),
+	}).String()
 }
 
 func urlFromResponse(respBody []byte) string {

@@ -10,7 +10,7 @@ Please report suspected security vulnerabilities privately. Do not open a public
 
 Preferred channels:
 
-1. **GitHub Security Advisory** — <https://github.com/coltconsulting/click-dog/security/advisories/new>. This is the fastest path and keeps coordination in one place.
+1. **GitHub Security Advisory**: <https://github.com/coltconsulting/click-dog/security/advisories/new>. This is the fastest way to coordinate disclosure.
 
 Include in your report:
 
@@ -41,4 +41,8 @@ Out of scope:
 
 ## Hardening Guidance
 
-Operational hardening recommendations are documented in [docs/observability.md](docs/observability.md), [docs/configuration.md](docs/configuration.md), and the install script's generated configs (least-privilege ClickHouse role, `readonly=2` enforced on the connection, no write access).
+Operational hardening recommendations are documented in
+[Observability](https://click-dog.com/observability/),
+[Configuration](https://click-dog.com/configuration/), and the install script's
+generated configs (least-privilege ClickHouse role, `readonly=2` enforced on
+the connection, no write access).

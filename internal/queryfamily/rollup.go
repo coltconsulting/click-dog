@@ -14,6 +14,10 @@ import (
 )
 
 const (
+	// AlgorithmVersion identifies the family clustering and aggregation
+	// contract recorded in query-analysis baseline artifacts.
+	AlgorithmVersion = "query-family.v1"
+
 	// DefaultSimilarityThreshold is intentionally conservative. False
 	// negatives are preferable to surprising family merges.
 	DefaultSimilarityThreshold = 0.75
@@ -229,6 +233,12 @@ func buildRollup(builder familyBuilder, maxPreviewLength int) model.QueryFamilyR
 			NormalizedQueryHash: group.NormalizedQueryHash,
 			NormalizedQuery:     TruncatePreview(group.NormalizedQuery, maxPreviewLength),
 			ExecutionCount:      group.ExecutionCount,
+			SuccessfulCount:     group.SuccessfulCount,
+			FailedCount:         group.FailedCount,
+			FailureRate:         failureRate(group.SuccessfulCount, group.FailedCount),
+			P95DurationMs:       group.P95DurationMs,
+			P99DurationMs:       group.P99DurationMs,
+			TopExceptions:       append([]model.QueryExceptionCount(nil), group.TopExceptions...),
 		})
 	}
 	// MemberHashesSorted is sorted by hash for deterministic FamilyID generation.
@@ -273,8 +283,11 @@ func coalesceExactGroups(groups []model.QueryFamilyExactGroup, maxPreviewLength 
 			NormalizedQueryHash: representative.NormalizedQueryHash,
 			NormalizedQuery:     representative.NormalizedQuery,
 			ExecutionCount:      stats.ExecutionCount,
+			SuccessfulCount:     stats.SuccessfulCount,
+			FailedCount:         stats.FailedCount,
 			P95DurationMs:       stats.P95DurationMs,
 			P99DurationMs:       stats.P99DurationMs,
+			TopExceptions:       append([]model.QueryExceptionCount(nil), stats.TopExceptions...),
 			MaxMemoryUsage:      stats.MaxMemoryUsage,
 			P95ReadRows:         stats.P95ReadRows,
 			P95ReadBytes:        stats.P95ReadBytes,
@@ -292,6 +305,8 @@ func aggregateStats(groups []model.QueryFamilyExactGroup) model.QueryFamilyStats
 	var stats model.QueryFamilyStats
 	for _, group := range groups {
 		stats.ExecutionCount += group.ExecutionCount
+		stats.SuccessfulCount += group.SuccessfulCount
+		stats.FailedCount += group.FailedCount
 		stats.P95DurationMs = math.Max(stats.P95DurationMs, group.P95DurationMs)
 		stats.P99DurationMs = math.Max(stats.P99DurationMs, group.P99DurationMs)
 		if group.MaxMemoryUsage > stats.MaxMemoryUsage {
@@ -306,10 +321,45 @@ func aggregateStats(groups []model.QueryFamilyExactGroup) model.QueryFamilyStats
 			stats.LastSeen = group.LastSeen
 		}
 	}
+	stats.FailureRate = failureRate(stats.SuccessfulCount, stats.FailedCount)
+	stats.TopExceptions = aggregateTopExceptions(groups)
 	stats.TopUsers = weightedTopValues(groups, func(g model.QueryFamilyExactGroup) []string { return g.TopUsers })
 	stats.TopClients = weightedTopValues(groups, func(g model.QueryFamilyExactGroup) []string { return g.TopClients })
 	stats.TopTables = weightedTopValues(groups, func(g model.QueryFamilyExactGroup) []string { return g.TopTables })
 	return stats
+}
+
+func failureRate(successful, failed uint64) float64 {
+	total := successful + failed
+	if total == 0 {
+		return 0
+	}
+	return float64(failed) / float64(total)
+}
+
+func aggregateTopExceptions(groups []model.QueryFamilyExactGroup) []model.QueryExceptionCount {
+	counts := make(map[int32]uint64)
+	for _, group := range groups {
+		for _, exception := range group.TopExceptions {
+			if exception.Count > 0 {
+				counts[exception.Code] += exception.Count
+			}
+		}
+	}
+	out := make([]model.QueryExceptionCount, 0, len(counts))
+	for code, count := range counts {
+		out = append(out, model.QueryExceptionCount{Code: code, Count: count})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Code < out[j].Code
+	})
+	if len(out) > TopKLimit {
+		out = out[:TopKLimit]
+	}
+	return out
 }
 
 func weightedTopValues(groups []model.QueryFamilyExactGroup, values func(model.QueryFamilyExactGroup) []string) []string {

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/coltconsulting/click-dog/internal/config"
+	"github.com/coltconsulting/click-dog/internal/model"
 )
 
 func TestQueryFilter_NewQueryFilter_EmptyConfig(t *testing.T) {
@@ -26,6 +27,23 @@ func TestQueryFilter_NewQueryFilter_EmptyConfig(t *testing.T) {
 	}
 	if len(filter.queryBlacklistPatterns) != 0 {
 		t.Errorf("Expected 0 blacklist patterns, got %d", len(filter.queryBlacklistPatterns))
+	}
+}
+
+func TestQueryFilter_NewQueryFilter_IgnoresInertRulesInStricterModes(t *testing.T) {
+	for _, mode := range []config.QueryTextMode{config.QueryTextModeNormalizedOnly, config.QueryTextModeNone} {
+		t.Run(string(mode), func(t *testing.T) {
+			qf, err := NewQueryFilter(config.FiltersConfig{
+				QueryTextMode: mode,
+				RedactQueries: []config.RedactionRule{{Pattern: "[invalid("}},
+			})
+			if err != nil {
+				t.Fatalf("NewQueryFilter: %v", err)
+			}
+			if len(qf.redactionRules) != 0 {
+				t.Fatalf("compiled %d inert redaction rules", len(qf.redactionRules))
+			}
+		})
 	}
 }
 
@@ -365,6 +383,42 @@ func TestQueryFilter_WhitelistIPs_MixedExactAndCIDR(t *testing.T) {
 	}
 }
 
+// TestQueryFilter_WhitelistIPs_MatchesClickHouseAddressForms pins #511 M4.
+// ClickHouse reports clients through IPv6NumToString, so an IPv4 client arrives
+// as ::ffff:a.b.c.d. The documented exact entry "10.0.1.50" must match it, and
+// equal IPv6 addresses must match whatever their spelling.
+func TestQueryFilter_WhitelistIPs_MatchesClickHouseAddressForms(t *testing.T) {
+	filter, err := NewQueryFilter(config.FiltersConfig{
+		WhitelistIPs: []string{"10.0.1.50", "2001:DB8::1", "::ffff:192.0.2.7", "172.16.0.0/12"},
+	})
+	if err != nil {
+		t.Fatalf("NewQueryFilter: %v", err)
+	}
+	for _, tc := range []struct {
+		clientIP string
+		allowed  bool
+	}{
+		{"::ffff:10.0.1.50", true},
+		{"10.0.1.50", true},
+		{"2001:db8::1", true},
+		{"2001:0db8:0000:0000:0000:0000:0000:0001", true},
+		{"192.0.2.7", true},
+		{"::ffff:172.20.1.1", true},
+		{"::ffff:10.0.1.51", false},
+		{"::10.0.1.50", false}, // IPv4-compatible, not IPv4-mapped: a different address
+		{"", false},
+		{"not-an-ip", false},
+	} {
+		if got := !filter.ShouldFilter("", "", tc.clientIP); got != tc.allowed {
+			t.Errorf("client %q allowed = %t, want %t", tc.clientIP, got, tc.allowed)
+		}
+	}
+
+	if _, err := NewQueryFilter(config.FiltersConfig{WhitelistIPs: []string{"10.0.1.300"}}); err == nil {
+		t.Error("an invalid exact IP was accepted")
+	}
+}
+
 func TestQueryFilter_BlacklistQueries(t *testing.T) {
 	cfg := config.FiltersConfig{
 		BlacklistQueries: []string{
@@ -568,23 +622,26 @@ func TestQueryFilter_NoWhitelists(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// RedactQuery
+// redactQueryForExport
 // ---------------------------------------------------------------------------
 
-func TestRedactQuery_NoRules(t *testing.T) {
+func TestRedactQueryForExport_NoRules(t *testing.T) {
 	filter, err := NewQueryFilter(config.FiltersConfig{})
 	if err != nil {
 		t.Fatalf("Failed to create filter: %v", err)
 	}
 
 	input := "SELECT * FROM users WHERE password = 'secret'"
-	got := filter.RedactQuery(input)
+	got, matched := filter.redactQueryForExport(input)
 	if got != input {
-		t.Errorf("RedactQuery with no rules should return input unchanged, got %q", got)
+		t.Errorf("redactQueryForExport with no rules should return input unchanged, got %q", got)
+	}
+	if matched {
+		t.Error("redactQueryForExport with no rules reported a match")
 	}
 }
 
-func TestRedactQuery_SingleRule(t *testing.T) {
+func TestRedactQueryForExport_SingleRule(t *testing.T) {
 	filter, err := NewQueryFilter(config.FiltersConfig{
 		RedactQueries: []config.RedactionRule{
 			{Pattern: `(?i)identified\s+by\s+'[^']*'`, Replacement: "IDENTIFIED BY '[REDACTED]'"},
@@ -596,13 +653,16 @@ func TestRedactQuery_SingleRule(t *testing.T) {
 
 	input := "CREATE USER foo IDENTIFIED BY 'supersecret'"
 	want := "CREATE USER foo IDENTIFIED BY '[REDACTED]'"
-	got := filter.RedactQuery(input)
+	got, matched := filter.redactQueryForExport(input)
 	if got != want {
-		t.Errorf("RedactQuery = %q, want %q", got, want)
+		t.Errorf("redactQueryForExport = %q, want %q", got, want)
+	}
+	if !matched {
+		t.Error("redactQueryForExport did not report a match")
 	}
 }
 
-func TestRedactQuery_MultipleRules(t *testing.T) {
+func TestRedactQueryForExport_MultipleRules(t *testing.T) {
 	filter, err := NewQueryFilter(config.FiltersConfig{
 		RedactQueries: []config.RedactionRule{
 			{Pattern: `(?i)identified\s+by\s+'[^']*'`, Replacement: "IDENTIFIED BY '[REDACTED]'"},
@@ -614,16 +674,19 @@ func TestRedactQuery_MultipleRules(t *testing.T) {
 	}
 
 	input := "CREATE USER foo IDENTIFIED BY 'secret' AND password = 'abc123'"
-	got := filter.RedactQuery(input)
+	got, matched := filter.redactQueryForExport(input)
 	if !strings.Contains(got, "IDENTIFIED BY '[REDACTED]'") {
 		t.Errorf("First rule should have matched, got %q", got)
 	}
 	if !strings.Contains(got, "password='[REDACTED]'") {
 		t.Errorf("Second rule should have matched, got %q", got)
 	}
+	if !matched {
+		t.Error("redactQueryForExport did not report a match")
+	}
 }
 
-func TestRedactQuery_DefaultReplacement(t *testing.T) {
+func TestRedactQueryForExport_DefaultReplacement(t *testing.T) {
 	filter, err := NewQueryFilter(config.FiltersConfig{
 		RedactQueries: []config.RedactionRule{
 			{Pattern: `secret_value`}, // empty replacement -> default [REDACTED]
@@ -635,13 +698,16 @@ func TestRedactQuery_DefaultReplacement(t *testing.T) {
 
 	input := "SELECT secret_value FROM table"
 	want := "SELECT [REDACTED] FROM table"
-	got := filter.RedactQuery(input)
+	got, matched := filter.redactQueryForExport(input)
 	if got != want {
-		t.Errorf("RedactQuery = %q, want %q", got, want)
+		t.Errorf("redactQueryForExport = %q, want %q", got, want)
+	}
+	if !matched {
+		t.Error("redactQueryForExport did not report a match")
 	}
 }
 
-func TestRedactQuery_NoMatch(t *testing.T) {
+func TestRedactQueryForExport_NoMatch(t *testing.T) {
 	filter, err := NewQueryFilter(config.FiltersConfig{
 		RedactQueries: []config.RedactionRule{
 			{Pattern: `IDENTIFIED BY`, Replacement: "***"},
@@ -652,13 +718,16 @@ func TestRedactQuery_NoMatch(t *testing.T) {
 	}
 
 	input := "SELECT * FROM users"
-	got := filter.RedactQuery(input)
+	got, matched := filter.redactQueryForExport(input)
 	if got != input {
-		t.Errorf("RedactQuery should return input unchanged when no match, got %q", got)
+		t.Errorf("redactQueryForExport should return input unchanged when no match, got %q", got)
+	}
+	if matched {
+		t.Error("redactQueryForExport reported a match for an unmatched query")
 	}
 }
 
-func TestRedactQuery_WhitespaceTrimmed(t *testing.T) {
+func TestRedactQueryForExport_WhitespaceTrimmed(t *testing.T) {
 	// Simulates YAML block scalar with trailing newline
 	filter, err := NewQueryFilter(config.FiltersConfig{
 		RedactQueries: []config.RedactionRule{
@@ -671,9 +740,12 @@ func TestRedactQuery_WhitespaceTrimmed(t *testing.T) {
 
 	input := "SELECT redacted_regex FROM table"
 	want := "SELECT *** FROM table"
-	got := filter.RedactQuery(input)
+	got, matched := filter.redactQueryForExport(input)
 	if got != want {
-		t.Errorf("RedactQuery = %q, want %q", got, want)
+		t.Errorf("redactQueryForExport = %q, want %q", got, want)
+	}
+	if !matched {
+		t.Error("redactQueryForExport did not report a match")
 	}
 }
 
@@ -803,5 +875,409 @@ func TestQueryFilter_EmptyStrings(t *testing.T) {
 	result = filter.ShouldFilter("ValidOp", "", "192.168.1.1")
 	if result {
 		t.Error("Empty query should not match blacklist patterns")
+	}
+}
+
+func TestQueryFilter_ShapeSpanForExport_QueryTextModes(t *testing.T) {
+	original := model.OpenTelemetrySpan{
+		Attributes: map[string]string{
+			"db.statement":               "SELECT * FROM users WHERE email = 'secret@example.com'",
+			"db.normalized_query":        "SELECT * FROM users WHERE email = ?",
+			"query_log.normalized_query": "SELECT * FROM users WHERE email = ?",
+			"query_log.user":             "app",
+		},
+	}
+	tests := []struct {
+		name            string
+		cfg             config.FiltersConfig
+		wantStatement   string
+		wantStatementOK bool
+		wantNormalized  bool
+	}{
+		{
+			name:            "raw preserves original",
+			cfg:             config.FiltersConfig{QueryTextMode: config.QueryTextModeRaw},
+			wantStatement:   "SELECT * FROM users WHERE email = 'secret@example.com'",
+			wantStatementOK: true,
+			wantNormalized:  true,
+		},
+		{
+			name: "redacted emits matched replacement",
+			cfg: config.FiltersConfig{
+				QueryTextMode: config.QueryTextModeRedacted,
+				RedactQueries: []config.RedactionRule{{Pattern: `'[^']*'`, Replacement: "?"}},
+			},
+			wantStatement:   "SELECT * FROM users WHERE email = ?",
+			wantStatementOK: true,
+			wantNormalized:  true,
+		},
+		{
+			name: "redacted omits an unmatched raw statement",
+			cfg: config.FiltersConfig{
+				QueryTextMode: config.QueryTextModeRedacted,
+				RedactQueries: []config.RedactionRule{{Pattern: `password=[^ ]+`}},
+			},
+			wantStatementOK: false,
+			wantNormalized:  true,
+		},
+		{
+			name:            "normalized only removes raw and keeps explicitly labeled normalized text",
+			cfg:             config.FiltersConfig{QueryTextMode: config.QueryTextModeNormalizedOnly},
+			wantStatementOK: false,
+			wantNormalized:  true,
+		},
+		{
+			name:            "none removes raw and normalized text",
+			cfg:             config.FiltersConfig{QueryTextMode: config.QueryTextModeNone},
+			wantStatementOK: false,
+			wantNormalized:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			qf, err := NewQueryFilter(tt.cfg)
+			if err != nil {
+				t.Fatalf("NewQueryFilter: %v", err)
+			}
+			got := qf.ShapeSpanForExport(original)
+			statement, ok := got.Attributes["db.statement"]
+			if ok != tt.wantStatementOK || statement != tt.wantStatement {
+				t.Errorf("db.statement = %q, present=%v; want %q, present=%v", statement, ok, tt.wantStatement, tt.wantStatementOK)
+			}
+			for _, key := range []string{"db.normalized_query", "query_log.normalized_query"} {
+				_, present := got.Attributes[key]
+				if present != tt.wantNormalized {
+					t.Errorf("%s present=%v, want %v", key, present, tt.wantNormalized)
+				}
+			}
+			if got.Attributes["query_log.user"] != "app" {
+				t.Error("privacy-safe enrichment was removed")
+			}
+			if original.Attributes["db.statement"] == "" {
+				t.Error("ShapeSpanForExport mutated the input")
+			}
+		})
+	}
+}
+
+func TestQueryFilter_ShapeSpanForExport_NormalizedUnavailableNeverFallsBack(t *testing.T) {
+	qf, err := NewQueryFilter(config.FiltersConfig{QueryTextMode: config.QueryTextModeNormalizedOnly})
+	if err != nil {
+		t.Fatalf("NewQueryFilter: %v", err)
+	}
+	got := qf.ShapeSpanForExport(model.OpenTelemetrySpan{Attributes: map[string]string{
+		"db.statement":        "SELECT secret FROM vault",
+		"clickhouse.query_id": "q-1",
+	}})
+	if _, ok := got.Attributes["db.statement"]; ok {
+		t.Fatal("normalized_only fell back to raw text when normalization was unavailable")
+	}
+}
+
+// TestQueryFilter_ShapeSpanForExport_RemovesExceptionText pins #511 H3:
+// ClickHouse quotes a failing statement, literals included, in the exception
+// message it writes to the query span. Every privacy-restricting mode must drop
+// it, while raw keeps it and exception codes survive everywhere.
+func TestQueryFilter_ShapeSpanForExport_RemovesExceptionText(t *testing.T) {
+	leak := "Syntax error: failed at position 1 ('SELEC'): SELEC * FROM users WHERE ssn = '123-45-6789'"
+	original := model.OpenTelemetrySpan{
+		Attributes: map[string]string{
+			"db.statement":                 "SELEC * FROM users WHERE ssn = '123-45-6789'",
+			"clickhouse.exception":         leak,
+			"clickhouse.exception_code":    "62",
+			"exception.message":            leak,
+			"exception.stacktrace":         leak,
+			"query_log.exception_code":     "62",
+			"clickhouse.Exception_Details": leak,
+			"clickhouse.query_id":          "q-1",
+		},
+		StringSliceAttributes: map[string][]string{
+			"clickhouse.exceptions": {leak},
+		},
+	}
+	dropped := []string{"clickhouse.exception", "exception.message", "exception.stacktrace", "clickhouse.Exception_Details"}
+	kept := []string{"clickhouse.exception_code", "query_log.exception_code", "clickhouse.query_id"}
+
+	for _, mode := range []config.QueryTextMode{
+		config.QueryTextModeRedacted,
+		config.QueryTextModeNormalizedOnly,
+		config.QueryTextModeNone,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			cfg := config.FiltersConfig{QueryTextMode: mode}
+			if mode == config.QueryTextModeRedacted {
+				cfg.RedactQueries = []config.RedactionRule{{Pattern: `'[^']*'`, Replacement: "?"}}
+			}
+			qf, err := NewQueryFilter(cfg)
+			if err != nil {
+				t.Fatalf("NewQueryFilter: %v", err)
+			}
+			got := qf.ShapeSpanForExport(original)
+			for _, key := range dropped {
+				if _, ok := got.Attributes[key]; ok {
+					t.Errorf("%s exported %s", mode, key)
+				}
+			}
+			if _, ok := got.StringSliceAttributes["clickhouse.exceptions"]; ok {
+				t.Errorf("%s exported the clickhouse.exceptions slice", mode)
+			}
+			for _, key := range kept {
+				if got.Attributes[key] != original.Attributes[key] {
+					t.Errorf("%s dropped %s", mode, key)
+				}
+			}
+			if _, ok := original.Attributes["clickhouse.exception"]; !ok {
+				t.Error("ShapeSpanForExport mutated the input")
+			}
+		})
+	}
+
+	raw, err := NewQueryFilter(config.FiltersConfig{QueryTextMode: config.QueryTextModeRaw})
+	if err != nil {
+		t.Fatalf("NewQueryFilter: %v", err)
+	}
+	if got := raw.ShapeSpanForExport(original); got.Attributes["clickhouse.exception"] != leak {
+		t.Error("raw mode dropped the exception message")
+	}
+}
+
+func TestQueryFilter_ShapeSpanForExport_RemovesRawQueryURIAttributes(t *testing.T) {
+	unsafeURL := `/?query=SELECT%20*%20FROM%20users%20WHERE%20email%3D%27a%40b.com%27&log_comment=x`
+	unsafeEncodedName := `/?foo=1&%71uery=SELECT+secret`
+	unsafeBareComponent := `query=SELECT * FROM t WHERE msg = 'why?'`
+	original := model.OpenTelemetrySpan{
+		Attributes: map[string]string{
+			"db.statement":         "SELECT * FROM users WHERE email = 'a@b.com'",
+			"http.url":             unsafeURL,
+			"http.target":          unsafeEncodedName,
+			"clickhouse.uri":       `/?query=SELECT+secret`,
+			"url.query":            unsafeBareComponent,
+			"http.query":           unsafeBareComponent,
+			"http.query_string":    unsafeBareComponent,
+			"request.query_string": unsafeBareComponent,
+			"safe.url":             `/?foo=1&log_comment=x`,
+		},
+		StringSliceAttributes: map[string][]string{
+			"http.urls": {unsafeURL, `/?foo=1`},
+		},
+	}
+
+	for _, mode := range []config.QueryTextMode{
+		config.QueryTextModeRedacted,
+		config.QueryTextModeNormalizedOnly,
+		config.QueryTextModeNone,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			cfg := config.FiltersConfig{QueryTextMode: mode}
+			if mode == config.QueryTextModeRedacted {
+				cfg.RedactQueries = []config.RedactionRule{{Pattern: `'[^']*'`, Replacement: "?"}}
+			}
+			qf, err := NewQueryFilter(cfg)
+			if err != nil {
+				t.Fatalf("NewQueryFilter: %v", err)
+			}
+			got := qf.ShapeSpanForExport(original)
+			for _, key := range []string{
+				"http.url",
+				"http.target",
+				"clickhouse.uri",
+				"url.query",
+				"http.query",
+				"http.query_string",
+				"request.query_string",
+			} {
+				if _, ok := got.Attributes[key]; ok {
+					t.Errorf("%s retained a URI carrying raw query text", key)
+				}
+			}
+			if got.Attributes["safe.url"] != `/?foo=1&log_comment=x` {
+				t.Errorf("safe URI changed: %q", got.Attributes["safe.url"])
+			}
+			if values := got.StringSliceAttributes["http.urls"]; len(values) != 1 || values[0] != `/?foo=1` {
+				t.Errorf("URI slice = %v, want only safe value", values)
+			}
+			if original.Attributes["http.url"] != unsafeURL || len(original.StringSliceAttributes["http.urls"]) != 2 {
+				t.Fatal("query-text shaping mutated the input URI attributes")
+			}
+		})
+	}
+
+	qf, err := NewQueryFilter(config.FiltersConfig{QueryTextMode: config.QueryTextModeRaw})
+	if err != nil {
+		t.Fatalf("NewQueryFilter(raw): %v", err)
+	}
+	got := qf.ShapeSpanForExport(original)
+	if got.Attributes["http.url"] != unsafeURL {
+		t.Fatal("raw mode unexpectedly removed the original URI")
+	}
+}
+
+func TestContainsRawQueryParameter_QueryComponentVariants(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   string
+		value string
+		want  bool
+	}{
+		{
+			name:  "literal question mark stays in parameter value",
+			key:   "url.query",
+			value: `query=SELECT * FROM t WHERE msg = 'why?'`,
+			want:  true,
+		},
+		{
+			name:  "leading question mark is tolerated",
+			key:   "url.query",
+			value: `?query=SELECT+secret`,
+			want:  true,
+		},
+		{
+			name:  "misplaced request target is tolerated",
+			key:   "url.query",
+			value: `/?query=SELECT+secret`,
+			want:  true,
+		},
+		{
+			name:  "ordinary bare component is detected",
+			key:   "url.query",
+			value: `foo=1&query=SELECT+secret`,
+			want:  true,
+		},
+		{
+			name:  "safe bare component is retained",
+			key:   "url.query",
+			value: `foo=1&bar=2`,
+			want:  false,
+		},
+		{
+			name:  "legacy separator whitespace is tolerated",
+			key:   "url.query",
+			value: `/?foo=1;+query=SELECT+secret`,
+			want:  true,
+		},
+		{
+			name:  "fragment does not become a query parameter",
+			key:   "url.query",
+			value: `a=1#query=SELECT+secret`,
+			want:  false,
+		},
+		{
+			name:  "full URL query is detected",
+			key:   "http.url",
+			value: `/?query=SELECT+secret`,
+			want:  true,
+		},
+		{
+			name:  "safe full URL is retained",
+			key:   "http.url",
+			value: `/?foo=1`,
+			want:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := containsRawQueryParameter(tt.key, tt.value); got != tt.want {
+				t.Fatalf("containsRawQueryParameter(%q, %q) = %v, want %v", tt.key, tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestQueryFilter_ShapeSpanForExport_URISweepDoesNotPreemptTextPolicy(t *testing.T) {
+	qf, err := NewQueryFilter(config.FiltersConfig{
+		QueryTextMode: config.QueryTextModeRedacted,
+		RedactQueries: []config.RedactionRule{{
+			Pattern:     `(?i)token\s*=\s*'[^']*'`,
+			Replacement: "token = ?",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NewQueryFilter: %v", err)
+	}
+
+	statement := `SELECT * FROM events WHERE url = 'https://api.example.com/s?query=abc' AND token = 'sekret'`
+	got := qf.ShapeSpanForExport(model.OpenTelemetrySpan{Attributes: map[string]string{
+		"db.statement": statement,
+	}})
+	want := `SELECT * FROM events WHERE url = 'https://api.example.com/s?query=abc' AND token = ?`
+	if got.Attributes["db.statement"] != want {
+		t.Fatalf("db.statement = %q, want %q", got.Attributes["db.statement"], want)
+	}
+
+	normalized, err := NewQueryFilter(config.FiltersConfig{QueryTextMode: config.QueryTextModeNormalizedOnly})
+	if err != nil {
+		t.Fatalf("NewQueryFilter(normalized_only): %v", err)
+	}
+	got = normalized.ShapeSpanForExport(model.OpenTelemetrySpan{Attributes: map[string]string{
+		"db.statement":        statement,
+		"db.normalized_query": `SELECT * FROM events WHERE url = 'https://x/s?query=1'`,
+	}})
+	if got.Attributes["db.normalized_query"] != `SELECT * FROM events WHERE url = 'https://x/s?query=1'` {
+		t.Fatalf("normalized query was mistaken for a URI: %q", got.Attributes["db.normalized_query"])
+	}
+}
+
+func TestQueryFilter_ShapeSpanForExport_URISweepPreservesNonURIMetadata(t *testing.T) {
+	qf, err := NewQueryFilter(config.FiltersConfig{QueryTextMode: config.QueryTextModeNone})
+	if err != nil {
+		t.Fatalf("NewQueryFilter: %v", err)
+	}
+
+	dashboard := "https://grafana.example.com/d/abc?query=cpu&from=now-1h"
+	got := qf.ShapeSpanForExport(model.OpenTelemetrySpan{Attributes: map[string]string{
+		"log_comment.dashboard": dashboard,
+		"custom.metadata":       "query=cpu&from=now-1h",
+		"query_log.tables_csv":  "default.events",
+		"http.url":              "/",
+	}})
+	if got.Attributes["log_comment.dashboard"] != dashboard {
+		t.Fatalf("log_comment.dashboard = %q, want preserved dashboard link", got.Attributes["log_comment.dashboard"])
+	}
+	if got.Attributes["custom.metadata"] != "query=cpu&from=now-1h" {
+		t.Fatalf("non-URI metadata was removed: %q", got.Attributes["custom.metadata"])
+	}
+	if got.Attributes["query_log.tables_csv"] != "default.events" {
+		t.Fatal("privacy-safe query metadata was removed")
+	}
+}
+
+func TestQueryFilter_ShapeQueryForExport_PreservesExceptionMetadata(t *testing.T) {
+	query := model.QueryLog{
+		QueryID:             "q-error",
+		Query:               "SELECT secret FROM vault",
+		NormalizedQuery:     "SELECT secret FROM vault",
+		NormalizedQueryHash: 42,
+		ExceptionCode:       62,
+		TablesVisited:       []string{"default.vault"},
+	}
+	qf, err := NewQueryFilter(config.FiltersConfig{QueryTextMode: config.QueryTextModeNone})
+	if err != nil {
+		t.Fatalf("NewQueryFilter: %v", err)
+	}
+	got := qf.ShapeQueryForExport(query)
+	if got.Query != "" || got.NormalizedQuery != "" {
+		t.Fatalf("none retained query text: raw=%q normalized=%q", got.Query, got.NormalizedQuery)
+	}
+	if got.ExceptionCode != 62 || got.NormalizedQueryHash != 42 || len(got.TablesVisited) != 1 {
+		t.Fatalf("none removed privacy-safe error metadata: %+v", got)
+	}
+}
+
+func TestQueryFilter_ShapeQueryForExport_NormalizedUnavailableNeverFallsBack(t *testing.T) {
+	qf, err := NewQueryFilter(config.FiltersConfig{QueryTextMode: config.QueryTextModeNormalizedOnly})
+	if err != nil {
+		t.Fatalf("NewQueryFilter: %v", err)
+	}
+	got := qf.ShapeQueryForExport(model.QueryLog{
+		QueryID: "q-no-normalization",
+		Query:   "SELECT secret FROM vault",
+	})
+	if got.Query != "" || got.NormalizedQuery != "" {
+		t.Fatalf("normalized_only fell back to query text: raw=%q normalized=%q", got.Query, got.NormalizedQuery)
+	}
+	if got.QueryID != "q-no-normalization" {
+		t.Fatal("normalized_only removed the privacy-safe query identifier")
 	}
 }

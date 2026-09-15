@@ -89,6 +89,9 @@ assert_not_contains() {
 # ── Source install.sh functions ───────────────────────────────
 # We need to source the functions without running the main flow.
 # Extract just the function definitions.
+# The globals below are read by install.sh's functions, which arrive through
+# the eval at the end rather than a source, so the linter sees only the writes.
+# shellcheck disable=SC2034
 source_functions() {
     # Set required globals so sourced functions don't fail
     CLICKHOUSE_USER="monitoring"
@@ -208,19 +211,25 @@ COLLECTOR_ADDRESS="$saved_COLLECTOR"
 CLICKHOUSE_USER="$saved_USER"
 
 echo ""
-echo "=== uninstall without systemctl (issue #383) ==="
+echo "=== legacy installer uninstall delegates safely ==="
 
-# Run the real function under a private PATH containing an rm recorder but no
-# systemctl. The child shell keeps errexit enabled, so an unguarded
-# `systemctl daemon-reload` exits before the later removal calls are logged.
+# The compatibility verb must delegate confirmation and removal to the
+# installed Go command. In particular, the shell must never bypass its
+# installer-ownership checks with direct userdel/groupdel calls.
 uninstall_sandbox=$(make_temp_dir)
 TEST_TEMP_DIRS+=("$uninstall_sandbox")
-uninstall_removal_log="$uninstall_sandbox/removals.log"
-cat > "$uninstall_sandbox/rm" <<'STUB'
+uninstall_delegate_log="$uninstall_sandbox/delegate.log"
+cat > "$uninstall_sandbox/click-dog" <<'STUB'
 #!/bin/sh
-printf '%s\n' "$*" >> "$UNINSTALL_REMOVAL_LOG"
+if [ "${UNINSTALL_UNSUPPORTED:-}" = "1" ]; then
+    exit 2
+fi
+if [ "$*" = "deploy uninstall --help" ]; then
+    exit 0
+fi
+printf '%s\n' "$*" > "$UNINSTALL_DELEGATE_LOG"
 STUB
-chmod +x "$uninstall_sandbox/rm"
+chmod +x "$uninstall_sandbox/click-dog"
 
 cat > "$uninstall_sandbox/run-uninstall.sh" <<'HARNESS'
 #!/usr/bin/env bash
@@ -234,25 +243,48 @@ installer_source=$(sed -n '1,/^# ── Dispatch/p' "$INSTALL_SCRIPT" \
     | grep -v '^set -euo pipefail')
 eval "$installer_source"
 
-# Deliberately exclude systemctl and every other external command. The rm
-# recorder proves execution continues beyond daemon-reload without touching
-# the host filesystem; userdel/groupdel are already best-effort operations.
-PATH="$UNINSTALL_BIN"
+CLICK_DOG_BINARY="$UNINSTALL_BINARY"
+UNINSTALL_YES="${UNINSTALL_YES_OVERRIDE:-false}"
 do_uninstall
 HARNESS
 chmod +x "$uninstall_sandbox/run-uninstall.sh"
 
 uninstall_status=0
 uninstall_out=$(INSTALL_SCRIPT="$SCRIPT_DIR/install.sh" \
-    UNINSTALL_BIN="$uninstall_sandbox" \
-    UNINSTALL_REMOVAL_LOG="$uninstall_removal_log" \
-    bash "$uninstall_sandbox/run-uninstall.sh" <<<"y" 2>&1) || uninstall_status="$?"
-assert_eq "uninstall exits 0 without systemctl" "0" "$uninstall_status"
-assert_contains "uninstall reaches completion without systemctl" "Uninstall complete." "$uninstall_out"
-removal_calls="$(<"$uninstall_removal_log")"
-assert_contains "uninstall reaches binary removal" "/usr/local/bin/click-dog" "$removal_calls"
-assert_contains "uninstall reaches config removal" "/etc/click-dog" "$removal_calls"
-assert_contains "uninstall reaches log removal" "/var/log/click-dog" "$removal_calls"
+    UNINSTALL_BINARY="$uninstall_sandbox/click-dog" \
+    UNINSTALL_DELEGATE_LOG="$uninstall_delegate_log" \
+    bash "$uninstall_sandbox/run-uninstall.sh" 2>&1) || uninstall_status="$?"
+assert_eq "legacy uninstall propagates delegate success" "0" "$uninstall_status"
+assert_eq "legacy uninstall adds no competing confirmation flow" "" "$uninstall_out"
+assert_eq "legacy uninstall delegates exact command" "deploy uninstall" "$(<"$uninstall_delegate_log")"
+uninstall_body=$(sed -n '/^do_uninstall() {/,/^}/p' "$SCRIPT_DIR/install.sh")
+assert_contains "legacy uninstall can forward non-interactive confirmation" "--yes" "$uninstall_body"
+assert_not_contains "legacy uninstall never deletes a pre-existing user directly" "userdel" "$uninstall_body"
+assert_not_contains "legacy uninstall never deletes a pre-existing group directly" "groupdel" "$uninstall_body"
+
+uninstall_yes_status=0
+uninstall_yes_out=$(INSTALL_SCRIPT="$SCRIPT_DIR/install.sh" \
+    UNINSTALL_BINARY="$uninstall_sandbox/click-dog" \
+    UNINSTALL_DELEGATE_LOG="$uninstall_delegate_log" \
+    UNINSTALL_YES_OVERRIDE=true \
+    bash "$uninstall_sandbox/run-uninstall.sh" 2>&1) || uninstall_yes_status="$?"
+assert_eq "legacy uninstall --yes propagates delegate success" "0" "$uninstall_yes_status"
+assert_eq "legacy uninstall --yes adds no competing confirmation flow" "" "$uninstall_yes_out"
+assert_eq "legacy uninstall --yes forwards confirmation" "deploy uninstall --yes" "$(<"$uninstall_delegate_log")"
+
+install_source=$(<"$SCRIPT_DIR/install.sh")
+assert_contains "legacy uninstall parser accepts --yes" '--yes)' "$install_source"
+assert_contains "legacy uninstall parser scopes --yes" '--yes is only valid with uninstall' "$install_source"
+
+unsupported_status=0
+unsupported_out=$(INSTALL_SCRIPT="$SCRIPT_DIR/install.sh" \
+    UNINSTALL_BINARY="$uninstall_sandbox/click-dog" \
+    UNINSTALL_DELEGATE_LOG="$uninstall_delegate_log" \
+    UNINSTALL_UNSUPPORTED=1 \
+    bash "$uninstall_sandbox/run-uninstall.sh" 2>&1) || unsupported_status="$?"
+assert_eq "legacy uninstall rejects an unsupported installed binary" "1" "$unsupported_status"
+assert_contains "legacy uninstall gives an actionable upgrade command" \
+    "sudo bash install.sh update" "$unsupported_out"
 
 echo ""
 echo "=== install -f flag (bring your own YAML) ==="
@@ -466,6 +498,51 @@ assert_not_contains "no insecure-no-tls flag" "insecure-no-tls" "$unit"
 assert_not_contains "no Restart=always" "Restart=always" "$unit"
 
 echo ""
+echo "=== installer-owned runtime identity markers ==="
+
+identity_sandbox=$(make_temp_dir)
+TEST_TEMP_DIRS+=("$identity_sandbox")
+saved_state_dir="$INSTALL_STATE_DIR"
+saved_user_marker="$INSTALLER_CREATED_USER_MARKER"
+saved_group_marker="$INSTALLER_CREATED_GROUP_MARKER"
+INSTALL_STATE_DIR="$identity_sandbox/state"
+INSTALLER_CREATED_USER_MARKER="$INSTALL_STATE_DIR/installer-created-user"
+INSTALLER_CREATED_GROUP_MARKER="$INSTALL_STATE_DIR/installer-created-group"
+
+(
+    id() { echo "1201"; }
+    getent() { echo "click-dog:x:1202:"; }
+    chown() { :; }
+    record_installer_created_runtime_identity "false"
+)
+assert_eq "created user marker records numeric uid" "1201" "$(<"$INSTALLER_CREATED_USER_MARKER")"
+assert_eq "created private-group marker records numeric gid" "1202" "$(<"$INSTALLER_CREATED_GROUP_MARKER")"
+
+rm -rf "$INSTALL_STATE_DIR"
+(
+    id() { echo "1301"; }
+    getent() { echo "click-dog:x:1302:"; }
+    chown() { :; }
+    record_installer_created_runtime_identity "true"
+)
+assert_eq "created user is still recorded with a preexisting group" "1301" "$(<"$INSTALLER_CREATED_USER_MARKER")"
+if [[ ! -e "$INSTALLER_CREATED_GROUP_MARKER" ]]; then
+    assert_eq "preexisting group is not marked installer-owned" "absent" "absent"
+else
+    assert_eq "preexisting group is not marked installer-owned" "absent" "present"
+fi
+
+INSTALL_STATE_DIR="$saved_state_dir"
+INSTALLER_CREATED_USER_MARKER="$saved_user_marker"
+INSTALLER_CREATED_GROUP_MARKER="$saved_group_marker"
+
+installer_text=$(<"$SCRIPT_DIR/install.sh")
+assert_contains "guided handoff uses installed uninstaller" \
+    "To remove Click-Dog later: sudo click-dog deploy uninstall" "$installer_text"
+assert_not_contains "guided handoff drops checkout-only uninstall path" \
+    "To undo everything: ./deploy/install.sh uninstall" "$installer_text"
+
+echo ""
 echo "=== update is binary-swap only (no config merge) ==="
 
 # Functions deleted in the merge-removal refactor must stay deleted —
@@ -562,13 +639,18 @@ docker() { k8s_docker_args="$*"; }
 k8s_tmp=$(make_temp_dir)
 TEST_TEMP_DIRS+=("$k8s_tmp")
 
+# do_kubernetes reads these; it comes from the eval in source_functions, so the
+# linter sees the writes and none of the reads.
+# shellcheck disable=SC2034
 OUTPUT_DIR="$k8s_tmp"
 COLLECTOR_ADDRESS="otel-collector:4317"
 CLICKHOUSE_PASSWORD="testpass123"
 CLICKHOUSE_USER="click_dog_monitor"
 CLICKHOUSE_HOST="clickhouse.clickhouse.svc.cluster.local"
+# shellcheck disable=SC2034
 CLICKHOUSE_CLUSTER="main"
 VERSION="26.04.1"
+# shellcheck disable=SC2034
 SUBCOMMAND=""
 
 do_kubernetes > /dev/null
@@ -588,6 +670,7 @@ assert_not_contains "password not baked into argv" "testpass123"                
 # --ch-host is required: a standalone click-dog pod can't reach ClickHouse via
 # localhost. Subshell so the function's `exit 1` doesn't kill the suite.
 k8s_noch_rc=0
+# shellcheck disable=SC2034  # read by do_kubernetes, which arrives via eval
 ( CLICKHOUSE_HOST=""; do_kubernetes >/dev/null 2>&1 ) || k8s_noch_rc=$?
 assert_eq "kubernetes without --ch-host fails" "1" "$k8s_noch_rc"
 
@@ -687,7 +770,7 @@ assert_contains "--no-merge prints a no-op notice"        "no-op"               
 assert_contains "--no-merge notice explains merge removal" "config merge was removed" "$nm_out"
 
 echo ""
-echo "=== verify_archive_signed_checksums ==="
+echo "=== verify_release_archive ==="
 
 # Stage a verify_dir + archive that would normally pass verification.
 # Returns absolute paths via globals: VR_DIR, VR_ARCHIVE, VR_NAME.
@@ -710,7 +793,7 @@ CHECKSUMS_EOF
 }
 
 # Build a sandbox PATH dir that contains only the externals
-# verify_archive_signed_checksums needs (awk plus a SHA256 tool, and
+# verify_release_archive needs (awk plus a SHA256 tool, and
 # `timeout` if available so the bounded path is exercised). Returns the
 # directory via stdout; caller registers it for cleanup. Using an
 # explicit sandbox — not /usr/bin — means a host with cosign installed
@@ -757,6 +840,20 @@ make_tool_sandbox_no_sha256() {
     echo "$dir"
 }
 
+# Tool sandbox for the mocked resolve_binary tests. Shell-function stubs cover
+# curl, tar, release resolution, and asset downloads; these are the external
+# filesystem/checksum tools the real orchestration still needs.
+make_resolve_tool_sandbox() {
+    local dir
+    dir=$(make_temp_dir)
+    local tool src
+    for tool in awk sha256sum shasum timeout mktemp chmod rm; do
+        src=$(command -v "$tool" 2>/dev/null) || continue
+        ln -sf "$src" "$dir/$tool"
+    done
+    echo "$dir"
+}
+
 # Drop a fake cosign into <dir>/cosign that exits with <exit_code>. Uses
 # `#!/bin/sh` (not `/usr/bin/env`) so it runs even when PATH is the
 # minimal sandbox we set up for these tests.
@@ -781,17 +878,29 @@ COSIGN_EOF
     chmod +x "$dir/cosign"
 }
 
-# Run verify_archive_signed_checksums with PATH set to *only* <tool_dir>.
+# Run verify_release_archive with PATH set to *only* <tool_dir>.
 # Captures combined stdout+stderr in CAPTURED and exit status in RC.
 run_verify() {
     local tool_dir="$1"
+    local forced_reason="${2:-}"
     local saved_path="$PATH"
+    local output_file cosign_path="" checksum_reason="missing"
+    output_file=$(make_temp_dir)/verify-output
+    TEST_TEMP_DIRS+=("$(dirname "$output_file")")
+    if [[ "$forced_reason" == "ignored" ]]; then
+        checksum_reason="ignored"
+    elif [[ -x "$tool_dir/cosign" ]]; then
+        cosign_path="$tool_dir/cosign"
+        checksum_reason=""
+    fi
     PATH="$tool_dir"
     set +e
-    CAPTURED=$(verify_archive_signed_checksums "$VR_DIR" "$VR_ARCHIVE" "$VR_NAME" 2>&1)
+    verify_release_archive "$VR_DIR" "$VR_ARCHIVE" "$VR_NAME" \
+        "$cosign_path" "$checksum_reason" >"$output_file" 2>&1
     RC=$?
     set -e
     PATH="$saved_path"
+    CAPTURED=$(<"$output_file")
 }
 
 # --- success: cosign exit 0 + matching hash ---
@@ -800,6 +909,7 @@ SANDBOX=$(make_tool_sandbox); TEST_TEMP_DIRS+=("$SANDBOX")
 add_fake_cosign "$SANDBOX" 0
 run_verify "$SANDBOX"
 assert_eq "valid signature + hash returns 0" "0" "$RC"
+assert_eq "valid signature reports signed mode" "signed" "$RELEASE_VERIFICATION_MODE"
 
 # --- cosign verification failure (exit 1) → fail closed, no extraction ---
 stage_valid_release
@@ -809,16 +919,30 @@ run_verify "$SANDBOX"
 assert_eq "cosign failure returns nonzero" "1" "$RC"
 assert_contains "cosign failure mentions verify-blob" "cosign verify-blob failed" "$CAPTURED"
 assert_contains "cosign failure refuses install" "Refusing to install" "$CAPTURED"
+assert_contains "cosign failure explains explicit checksum-only retry" "--dangerously-ignore-cosign" "$CAPTURED"
+assert_eq "cosign failure reports no successful mode" "" "$RELEASE_VERIFICATION_MODE"
 
-# --- cosign not on PATH → fail closed before any download is trusted ---
+# --- cosign not on PATH → checksum-only verification succeeds with warning ---
 # Sandbox built with no cosign symlink/script; PATH is set to that sandbox
 # only, so a real cosign installed elsewhere on the host cannot satisfy
 # `command -v cosign` and accidentally bypass the missing-cosign path.
 stage_valid_release
+rm -f "$VR_DIR/checksums.txt.sig" "$VR_DIR/checksums.txt.pem"
 SANDBOX=$(make_tool_sandbox); TEST_TEMP_DIRS+=("$SANDBOX")
 run_verify "$SANDBOX"
-assert_eq "missing cosign returns nonzero" "1" "$RC"
-assert_contains "missing cosign error mentions cosign" "cosign not found" "$CAPTURED"
+assert_eq "missing cosign permits checksum-verified install" "0" "$RC"
+assert_contains "missing cosign emits explicit warning" "cosign not found" "$CAPTURED"
+assert_contains "missing cosign explains weaker trust" "does not authenticate the publisher" "$CAPTURED"
+assert_eq "missing cosign reports checksum mode" "checksum-no-cosign" "$RELEASE_VERIFICATION_MODE"
+
+# --- explicit dangerous override skips an installed but failing cosign ---
+stage_valid_release
+SANDBOX=$(make_tool_sandbox); TEST_TEMP_DIRS+=("$SANDBOX")
+add_fake_cosign "$SANDBOX" 1
+run_verify "$SANDBOX" ignored
+assert_eq "dangerous override permits checksum-verified install" "0" "$RC"
+assert_contains "dangerous override emits prominent warning" "DANGER: --dangerously-ignore-cosign" "$CAPTURED"
+assert_eq "dangerous override reports ignored mode" "checksum-cosign-ignored" "$RELEASE_VERIFICATION_MODE"
 
 # --- neither sha256sum nor shasum on PATH → fail closed ---
 # Defends the second tool-availability check against silent breakage if
@@ -850,7 +974,7 @@ SANDBOX=$(make_tool_sandbox); TEST_TEMP_DIRS+=("$SANDBOX")
 add_fake_cosign "$SANDBOX" 0
 run_verify "$SANDBOX"
 assert_eq "missing archive entry returns nonzero" "1" "$RC"
-assert_contains "missing archive entry error explicit" "not found in signed checksums.txt" "$CAPTURED"
+assert_contains "missing archive entry error explicit" "not found in release checksums.txt" "$CAPTURED"
 
 # --- missing checksums.txt asset ---
 stage_valid_release
@@ -941,6 +1065,139 @@ add_fake_cosign "$SANDBOX" 1
 run_verify "$SANDBOX"
 assert_eq "no-timeout fallback: cosign failure returns nonzero" "1" "$RC"
 assert_contains "no-timeout fallback: cosign failure mentions verify-blob" "cosign verify-blob failed" "$CAPTURED"
+
+echo ""
+echo "=== resolve_binary verification branches ==="
+
+# Exercise resolve_binary orchestration without network or a real tarball.
+# The real verify_release_archive runs; only release lookup/download/extraction
+# are stubbed. Results are returned through CAPTURED/RC and an asset log.
+run_resolve_branch() {
+    local tool_dir="$1" asset_log="$2" ignore_cosign="${3:-false}"
+    local saved_path="$PATH" output_file
+    output_file=$(mktemp "${TMPDIR:-/tmp}/click-dog-resolve-output.XXXXXX")
+    PATH="$tool_dir"
+    set +e
+    # resolve_binary reads these script globals through functions extracted
+    # dynamically from install.sh.
+    # shellcheck disable=SC2034
+    (
+        VERSION=""
+        BINARY=""
+        BINARY_AUTO_DOWNLOADED="false"
+        BINARY_AUTO_DOWNLOAD_DIR=""
+        DANGEROUSLY_IGNORE_COSIGN="$ignore_cosign"
+        _RESOLVE_BINARY_ARCHIVE_TMP=""
+        _RESOLVE_BINARY_VERIFY_DIR=""
+        _RESOLVE_BINARY_DOWNLOAD_DIR=""
+        RB_ARCHIVE=""
+
+        resolve_version() {
+            VERSION="99.99.0"
+            # Bash 3.2 treats an empty array expansion as unset under nounset.
+            CURL_ARGS=(-fsSL)
+        }
+        resolve_target_arch() { printf 'amd64\n'; }
+        curl() { printf '{"assets":[]}\n'; }
+        download_release_asset() {
+            local _json="$1" name="$2" dest="$3"
+            printf '%s\n' "$name" >> "$asset_log"
+            case "$name" in
+                click-dog_*.tar.gz)
+                    printf 'mock archive bytes\n' > "$dest"
+                    RB_ARCHIVE="$dest"
+                    ;;
+                checksums.txt)
+                    local hash
+                    hash=$(sha256_file "$RB_ARCHIVE")
+                    printf '%s  click-dog_99.99.0_linux_amd64.tar.gz\n' "$hash" > "$dest"
+                    ;;
+                checksums.txt.sig|checksums.txt.pem)
+                    printf 'mock signature asset\n' > "$dest"
+                    ;;
+            esac
+        }
+        tar() {
+            local dest=""
+            while (($#)); do
+                if [[ "$1" == "-C" ]]; then
+                    shift
+                    dest="$1"
+                fi
+                shift
+            done
+            printf '#!/bin/sh\nexit 0\n' > "$dest/click-dog"
+        }
+
+        resolve_binary
+        printf 'MODE=%s\n' "$RELEASE_VERIFICATION_MODE"
+    ) >"$output_file" 2>&1
+    RC=$?
+    CAPTURED=$(<"$output_file")
+    rm -f "$output_file"
+    set -e
+    PATH="$saved_path"
+}
+
+# No Cosign: fetch only the archive + manifest and report checksum mode.
+SANDBOX=$(make_resolve_tool_sandbox); TEST_TEMP_DIRS+=("$SANDBOX")
+ASSET_LOG="$SANDBOX/assets.log"
+run_resolve_branch "$SANDBOX" "$ASSET_LOG"
+assert_eq "resolve without cosign succeeds" "0" "$RC"
+assert_contains "resolve without cosign reports checksum mode" "MODE=checksum-no-cosign" "$CAPTURED"
+assert_contains "resolve without cosign prints final checksum summary" "Publisher signature: not verified" "$CAPTURED"
+assert_not_contains "resolve without cosign skips signature asset" "checksums.txt.sig" "$(<"$ASSET_LOG")"
+assert_not_contains "resolve without cosign skips certificate asset" "checksums.txt.pem" "$(<"$ASSET_LOG")"
+
+# Cosign present: fetch both signature assets and report signed mode.
+SANDBOX=$(make_resolve_tool_sandbox); TEST_TEMP_DIRS+=("$SANDBOX")
+add_fake_cosign "$SANDBOX" 0
+ASSET_LOG="$SANDBOX/assets.log"
+run_resolve_branch "$SANDBOX" "$ASSET_LOG"
+assert_eq "resolve with cosign succeeds" "0" "$RC"
+assert_contains "resolve with cosign reports signed mode" "MODE=signed" "$CAPTURED"
+assert_contains "resolve with cosign prints signed summary" "Publisher signature: verified with cosign" "$CAPTURED"
+assert_contains "resolve with cosign fetches signature asset" "checksums.txt.sig" "$(<"$ASSET_LOG")"
+assert_contains "resolve with cosign fetches certificate asset" "checksums.txt.pem" "$(<"$ASSET_LOG")"
+
+# Failed Cosign is fatal unless the operator explicitly chooses the dangerous
+# checksum-only override on the next run.
+SANDBOX=$(make_resolve_tool_sandbox); TEST_TEMP_DIRS+=("$SANDBOX")
+add_fake_cosign "$SANDBOX" 1
+ASSET_LOG="$SANDBOX/assets.log"
+run_resolve_branch "$SANDBOX" "$ASSET_LOG"
+assert_eq "resolve with failing cosign fails closed" "1" "$RC"
+assert_contains "resolve with failing cosign shows explicit retry" "--dangerously-ignore-cosign" "$CAPTURED"
+
+ASSET_LOG="$SANDBOX/ignored-assets.log"
+run_resolve_branch "$SANDBOX" "$ASSET_LOG" true
+assert_eq "dangerous resolve override succeeds" "0" "$RC"
+assert_contains "dangerous resolve override reports ignored mode" "MODE=checksum-cosign-ignored" "$CAPTURED"
+assert_contains "dangerous resolve override remains visible" "DANGER: publisher signature deliberately skipped" "$CAPTURED"
+assert_not_contains "dangerous resolve override skips signature download" "checksums.txt.sig" "$(<"$ASSET_LOG")"
+
+# Release summaries preserve stdout for successful/source information and use
+# stderr for reduced-trust warnings, including when indented inside a banner.
+SUMMARY_DIR=$(mktemp -d); TEST_TEMP_DIRS+=("$SUMMARY_DIR")
+RELEASE_VERIFICATION_MODE="signed"
+print_release_verification_summary "  " >"$SUMMARY_DIR/stdout" 2>"$SUMMARY_DIR/stderr"
+assert_contains "signed summary accepts banner prefix" "  Publisher signature: verified with cosign" "$(<"$SUMMARY_DIR/stdout")"
+assert_eq "signed summary leaves stderr empty" "" "$(<"$SUMMARY_DIR/stderr")"
+
+RELEASE_VERIFICATION_MODE="checksum-no-cosign"
+print_release_verification_summary >"$SUMMARY_DIR/stdout" 2>"$SUMMARY_DIR/stderr"
+assert_eq "missing cosign summary leaves stdout empty" "" "$(<"$SUMMARY_DIR/stdout")"
+assert_contains "missing cosign summary uses stderr" "Publisher signature: not verified" "$(<"$SUMMARY_DIR/stderr")"
+
+RELEASE_VERIFICATION_MODE="checksum-cosign-ignored"
+print_release_verification_summary >"$SUMMARY_DIR/stdout" 2>"$SUMMARY_DIR/stderr"
+assert_eq "dangerous summary leaves stdout empty" "" "$(<"$SUMMARY_DIR/stdout")"
+assert_contains "dangerous summary uses stderr" "DANGER: publisher signature deliberately skipped" "$(<"$SUMMARY_DIR/stderr")"
+
+RELEASE_VERIFICATION_MODE="provided"
+print_release_verification_summary >"$SUMMARY_DIR/stdout" 2>"$SUMMARY_DIR/stderr"
+assert_contains "operator-provided summary uses stdout" "Binary source: operator-provided" "$(<"$SUMMARY_DIR/stdout")"
+assert_eq "operator-provided summary leaves stderr empty" "" "$(<"$SUMMARY_DIR/stderr")"
 
 # --- pinned identity matches the regex used by self-updater + docs ---
 expected_identity='^https://github\.com/coltconsulting/click-dog/\.github/workflows/release\.yml@refs/tags/v.+$'
@@ -1123,6 +1380,127 @@ curl() { printf '%s' "${@: -1}" > "$rv_url_file"; printf '%s\n200' "$rv_mixed"; 
 resolve_version >/dev/null 2>&1
 assert_eq "prerelease skips the newer GA, picks newest beta" "26.06.9-beta" "$VERSION"
 assert_contains "prerelease uses the list endpoint" "/releases?per_page=20" "$(cat "$rv_url_file")"
+
+# No GA published at all (public beta: every release is a prerelease). The
+# default channel must fall back to the newest beta, not dead-end on the 404
+# that /releases/latest returns when no non-prerelease release exists.
+VERSION=""; PRERELEASE="false"
+rv_all_pre='[{"tag_name":"v26.09.1-beta.2","prerelease":true},{"tag_name":"v26.08.3-beta.1","prerelease":true}]'
+curl() {
+    local url="${!#}"
+    printf '%s' "$url" > "$rv_url_file"
+    case "$url" in
+        */releases/latest) printf '%s\n404' '{"message":"Not Found"}' ;;
+        *)                 printf '%s\n200' "$rv_all_pre" ;;
+    esac
+}
+resolve_version >/dev/null 2>&1
+assert_eq "no GA falls back to the newest prerelease" "26.09.1-beta.2" "$VERSION"
+assert_contains "fallback re-probes the list endpoint" "/releases?per_page=20" "$(cat "$rv_url_file")"
+
+# A real GA still wins when one exists — the fallback must not fire.
+VERSION=""; PRERELEASE="false"
+curl() {
+    local url="${!#}"
+    printf '%s' "$url" > "$rv_url_file"
+    case "$url" in
+        */releases/latest) printf '%s\n200' '{"tag_name": "v26.10.0"}' ;;
+        *)                 printf '%s\n200' "$rv_all_pre" ;;
+    esac
+}
+resolve_version >/dev/null 2>&1
+assert_eq "an existing GA is preferred over any beta" "26.10.0" "$VERSION"
+assert_contains "no fallback probe when a GA exists" "/releases/latest" "$(cat "$rv_url_file")"
+
+# A failed GA lookup is NOT "no GA exists". A 5xx (or a malformed 200) leaves
+# VERSION empty just like a 404 does, but switching channels there would hand a
+# beta to someone who asked for GA while a GA may well be published. Both must
+# fail loudly instead.
+for rv_bad_code in 500 502; do
+    VERSION=""; PRERELEASE="false"
+    curl() {
+        local url="${!#}"
+        printf '%s' "$url" > "$rv_url_file"
+        case "$url" in
+            */releases/latest) printf '%s\n'"$rv_bad_code" '{"message":"Server Error"}' ;;
+            *)                 printf '%s\n200' "$rv_all_pre" ;;
+        esac
+    }
+    # resolve_version must run in a SUBSHELL here because it exits on failure —
+    # which also means its VERSION assignment cannot reach this shell. Asserting
+    # on the parent's VERSION would therefore be vacuous (it is "" either way),
+    # so the "did not pick a beta" check reads the subshell's own stdout instead.
+    rv_out="$( { resolve_version; echo "RESOLVED=$VERSION"; } 2>&1 )" && rv_status=0 || rv_status=$?
+    assert_eq "HTTP $rv_bad_code on the GA endpoint fails instead of resolving" "1" "$rv_status"
+    assert_not_contains "HTTP $rv_bad_code does not silently select a beta" "26.09.1-beta.2" "$rv_out"
+    assert_not_contains "HTTP $rv_bad_code never reports a resolved version" "RESOLVED=" "$rv_out"
+    assert_not_contains "HTTP $rv_bad_code does not claim no GA is published" "No GA release published yet" "$rv_out"
+done
+
+# A manifest outlives the run that wrote it, so the generators opt out of the
+# channel switch: with no GA they must fail rather than bake a beta image tag in.
+VERSION=""; PRERELEASE="false"
+curl() {
+    local url="${!#}"
+    printf '%s' "$url" > "$rv_url_file"
+    case "$url" in
+        */releases/latest) printf '%s\n404' '{"message":"Not Found"}' ;;
+        *)                 printf '%s\n200' "$rv_all_pre" ;;
+    esac
+}
+rv_out="$( { resolve_version no-fallback; echo "RESOLVED=$VERSION"; } 2>&1 )" && rv_status=0 || rv_status=$?
+assert_eq "no-fallback fails instead of switching channel" "1" "$rv_status"
+assert_not_contains "no-fallback never resolves a beta" "26.09.1-beta.2" "$rv_out"
+assert_not_contains "no-fallback does not announce a fallback" "falling back to the newest pre-release" "$rv_out"
+assert_contains "no-fallback offers the beta channel" "--prerelease   use the newest public beta" "$rv_out"
+assert_contains "no-fallback offers an exact version" "-v VERSION     pin an exact version" "$rv_out"
+assert_not_contains "no-fallback does not suggest -b, which a generator cannot use" "-b /path/to/click-dog" "$rv_out"
+# The hint must not reconstruct a command line: $* inside resolve_version is the
+# function's own argument, so "$0 $*" printed `install.sh no-fallback ...`.
+assert_not_contains "no-fallback never prints its own argument as a command" "no-fallback --prerelease" "$rv_out"
+assert_not_contains "no-fallback prints no invented example version" "26.09.1" "$rv_out"
+
+# An auth/rate-limit failure on the no-fallback path must not suggest -b either.
+VERSION=""; PRERELEASE="false"
+curl() {
+    local url="${!#}"
+    printf '%s' "$url" > "$rv_url_file"
+    printf '%s\n403' '{"message":"API rate limit exceeded"}'
+}
+rv_out="$( { resolve_version no-fallback; } 2>&1 )" && rv_status=0 || rv_status=$?
+assert_eq "no-fallback 403 fails" "1" "$rv_status"
+assert_contains "no-fallback 403 offers an exact version" "re-run with -v VERSION" "$rv_out"
+assert_not_contains "no-fallback 403 does not suggest -b" "-b /path/to/click-dog" "$rv_out"
+# The ordinary install path still gets the -b advice, which is useful there.
+VERSION=""; PRERELEASE="false"
+rv_out="$( { resolve_version; } 2>&1 )" && rv_status=0 || rv_status=$?
+assert_contains "the install path keeps the -b hint on 403" "-b /path/to/click-dog" "$rv_out"
+
+# The fallback's second probe is a separate unauthenticated call and can be
+# rate-limited on its own; that must read as an auth failure, not "no release".
+VERSION=""; PRERELEASE="false"
+curl() {
+    local url="${!#}"
+    printf '%s' "$url" > "$rv_url_file"
+    case "$url" in
+        */releases/latest) printf '%s\n404' '{"message":"Not Found"}' ;;
+        *)                 printf '%s\n403' '{"message":"API rate limit exceeded"}' ;;
+    esac
+}
+rv_out="$( { resolve_version; } 2>&1 )" && rv_status=0 || rv_status=$?
+assert_eq "a rate-limited fallback probe fails" "1" "$rv_status"
+assert_contains "a rate-limited fallback probe reports the auth cause" "GitHub rejected the pre-release request (HTTP 403)" "$rv_out"
+
+# The empty-window hint belongs to the channels that actually list releases.
+VERSION=""; PRERELEASE="true"
+curl() {
+    local url="${!#}"
+    printf '%s' "$url" > "$rv_url_file"
+    printf '%s\n200' '[{"tag_name":"v26.10.0","prerelease":false}]'
+}
+rv_out="$( { resolve_version; } 2>&1 )" && rv_status=0 || rv_status=$?
+assert_eq "--prerelease with no beta in the window fails" "1" "$rv_status"
+assert_contains "--prerelease keeps its own remediation hint" "drop --prerelease for the latest GA" "$rv_out"
 
 unset -f curl
 PRERELEASE="$_sv_pre"; VERSION="$_sv_ver"; HTTPS_PROXY_FLAG="$_sv_proxy2"
@@ -1311,10 +1689,28 @@ assert_contains "operator auth used verbatim" "-u admin --password secret -q SEL
 assert_not_contains "monitoring user not appended over operator auth" "monitoring" "$auth_out"
 
 # Runner: a password already exists (CLICKHOUSE_PASSWORD env) → authenticate as
-# that user, since it exists.
-CLICKHOUSE_CLIENT="record_args"; CLICKHOUSE_USER="monitoring"; CLICKHOUSE_PASSWORD="monpass"
+# that user, since it exists. Record the child environment separately so the
+# assertion also proves that the password did not move back into argv.
+record_env_and_args() { echo "password=${CLICKHOUSE_PASSWORD:-} args=$*"; }
+CLICKHOUSE_CLIENT="record_env_and_args"; CLICKHOUSE_USER="monitoring"; CLICKHOUSE_PASSWORD="monpass"
 withpw_out="$(_span_log_default_runner 'SELECT 1')"
-assert_contains "existing password authenticates as that user" "-u monitoring --password monpass -q SELECT 1" "$withpw_out"
+assert_contains "existing password is passed in child environment" "password=monpass" "$withpw_out"
+assert_contains "existing password authenticates as that user" "args=-u monitoring -q SELECT 1" "$withpw_out"
+assert_not_contains "existing password is absent from argv" "--password" "$withpw_out"
+
+# Docker wrappers cross a process/container boundary. They must forward the
+# command-scoped password by name; otherwise the installer warns instead of
+# silently degrading to the no-client/manual path.
+docker_warn="$(_warn_clickhouse_client_password_forwarding 'docker exec clickhouse clickhouse-client' 2>&1)"
+assert_contains "docker exec without env forwarding warns" "without forwarding CLICKHOUSE_PASSWORD" "$docker_warn"
+docker_safe="$(_warn_clickhouse_client_password_forwarding 'docker exec -e CLICKHOUSE_PASSWORD clickhouse clickhouse-client' 2>&1)"
+assert_eq "docker exec by-name env forwarding is accepted" "" "$docker_safe"
+docker_long_safe="$(_warn_clickhouse_client_password_forwarding 'docker exec --env=CLICKHOUSE_PASSWORD clickhouse clickhouse-client' 2>&1)"
+assert_eq "docker exec long env forwarding is accepted" "" "$docker_long_safe"
+docker_invalid_short="$(_warn_clickhouse_client_password_forwarding 'docker exec -e=CLICKHOUSE_PASSWORD clickhouse clickhouse-client' 2>&1)"
+assert_contains "invalid docker short env spelling still warns" "without forwarding CLICKHOUSE_PASSWORD" "$docker_invalid_short"
+plain_safe="$(_warn_clickhouse_client_password_forwarding 'clickhouse-client' 2>&1)"
+assert_eq "plain clickhouse-client needs no boundary warning" "" "$plain_safe"
 
 # Runner: default quickstart — no -C auth, no password yet. The monitoring user
 # isn't created until Step 2, so the runner must NOT probe as it; it uses the
@@ -1424,6 +1820,12 @@ echo "=== user-setup flow copy + blast radius (issue #181) ==="
 
 # Extract the quickstart body so we can assert on its operator-facing copy.
 quickstart_body=$(awk '/^do_quickstart\(\)/,/^# ── Dispatch/' deploy/install.sh)
+# Generated monitoring credentials must use clickhouse-client's environment
+# support, not process arguments visible to other local users.
+assert_not_contains "generated password is absent from client argv" '--password "$mon_pass"' "$quickstart_body"
+assert_contains "generated password uses child environment" 'CLICKHOUSE_PASSWORD="$mon_pass" $CLICKHOUSE_CLIENT' "$quickstart_body"
+assert_contains "manual fallback models argv-safe password handling" 'Run with: CLICKHOUSE_PASSWORD=... clickhouse-client' "$quickstart_body"
+assert_contains "embedded -C auth suppresses forwarding warning" 'if ! _span_log_client_has_auth "$CLICKHOUSE_CLIENT"; then' "$quickstart_body"
 # The inaccurate "Nothing else is changed" reassurance must be gone.
 assert_not_contains "no false 'Nothing else is changed' copy" "Nothing else is changed" "$quickstart_body"
 # Copy must accurately describe the non-clobbering CREATE USER IF NOT EXISTS posture.

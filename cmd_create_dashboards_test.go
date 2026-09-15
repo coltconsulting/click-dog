@@ -29,6 +29,82 @@ func dashboardByName(t *testing.T, name string) dashboardDef {
 	return dashboardDef{}
 }
 
+func TestValidateDatadogSite(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{name: "US1", input: "datadoghq.com", want: "datadoghq.com"},
+		{name: "EU", input: "DATADOGHQ.EU", want: "datadoghq.eu"},
+		{name: "regional", input: "ap2.datadoghq.com", want: "ap2.datadoghq.com"},
+		{name: "custom", input: "demo.datadoghq.com", want: "demo.datadoghq.com"},
+		{name: "government", input: "us2.ddog-gov.com", want: "us2.ddog-gov.com"},
+		{name: "future root", input: "observability.example", want: "observability.example"},
+		{name: "operator selected host", input: "attacker.example", want: "attacker.example"},
+		{name: "userinfo injection", input: "datadoghq.com@attacker.example", wantErr: true},
+		{name: "port", input: "datadoghq.com:443", wantErr: true},
+		{name: "path", input: "datadoghq.com/api", wantErr: true},
+		{name: "encoded authority", input: "datadoghq.com%40attacker.example", wantErr: true},
+		{name: "newline", input: "datadoghq.com\nattacker.example", wantErr: true},
+		{name: "trailing dot", input: "datadoghq.com.", wantErr: true},
+		{name: "IP address", input: "127.0.0.1", wantErr: true},
+		{name: "single label", input: "localhost", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := validateDatadogSite(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("validateDatadogSite(%q) = %q, want error", tt.input, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateDatadogSite(%q): %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Fatalf("validateDatadogSite(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDatadogAPIURLUsesHostField(t *testing.T) {
+	got := datadogAPIURL("future-observability.example", "api", "v1", "dashboard", "id with spaces")
+	want := "https://api.future-observability.example/api/v1/dashboard/id%20with%20spaces"
+	if got != want {
+		t.Fatalf("datadogAPIURL() = %q, want %q", got, want)
+	}
+}
+
+func TestHTTPDDClientRefusesRedirects(t *testing.T) {
+	targetHit := false
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHit = true
+		if r.Header.Get("DD-API-KEY") != "" || r.Header.Get("DD-APPLICATION-KEY") != "" {
+			t.Error("redirect target received Datadog credentials")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer source.Close()
+
+	client := &httpDDClient{apiKey: "api-secret", appKey: "app-secret", http: newDatadogHTTPClient()}
+	_, err := client.do(http.MethodGet, source.URL, nil)
+	if err == nil || !strings.Contains(err.Error(), "HTTP 307") {
+		t.Fatalf("redirect response error = %v, want HTTP 307", err)
+	}
+	if targetHit {
+		t.Fatal("Datadog client followed a redirect")
+	}
+}
+
 // TestCreateDashboards_HealthChecklistPrerequisites is the contract test for
 // issue #178: importing the Health dashboard must surface, at import time, the
 // OTLP self-metrics switch and collector inheritance that make a fresh import
@@ -45,7 +121,7 @@ func TestCreateDashboards_HealthChecklistPrerequisites(t *testing.T) {
 		"exporters.otel[0]",
 		"OTLP collector",
 		"metrics.otlp.host",
-		"docs/integrations/datadog.md",
+		"docs/integrations/datadog/self-monitoring.md",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("health post-import checklist missing %q; got:\n%s", want, out)
@@ -1307,7 +1383,7 @@ var healthDashboardMapping = []healthDashboardMetric{
 	{prom: "click_dog_last_cycle_filtered_spans", rename: "last_cycle.filtered_spans"},
 	{prom: "click_dog_last_cycle_duplicate_spans", rename: "last_cycle.duplicate_spans"},
 	// ClickHouse data-plane health (#183). The note widget YAML, the
-	// dashboards/README.md mapping table, the docs/integrations/datadog.md
+	// dashboards/README.md mapping table, the Datadog self-monitoring docs
 	// table, and this slice must stay in lockstep — TestHealthDashboard_*
 	// tests pin all four against each other.
 	{prom: "click_dog_span_log_last_poll_timestamp_seconds", rename: "span_log.last_poll_timestamp.seconds"},
@@ -1416,7 +1492,7 @@ func TestHealthDashboard_MappingCoversEmittedMetrics(t *testing.T) {
 		sort.Strings(missing)
 		t.Errorf("metrics emitted at /metrics but not in healthDashboardMapping: %v\n"+
 			"add them to dashboards/datadog-clickdog-health.json (note widget), "+
-			"dashboards/README.md, docs/integrations/datadog.md, and healthDashboardMapping", missing)
+			"dashboards/README.md, docs/integrations/datadog/self-monitoring.md, and healthDashboardMapping", missing)
 	}
 }
 

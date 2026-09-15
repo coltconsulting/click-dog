@@ -17,6 +17,7 @@ func runSelfUpdate(args []string, out, errOut io.Writer) int {
 	fs.SetOutput(errOut)
 	checkOnly := fs.Bool("check", false, "Check for updates without downloading")
 	prerelease := fs.Bool("prerelease", false, "Include prereleases (alpha/beta) when checking for updates")
+	dangerouslyIgnoreCosign := fs.Bool("dangerously-ignore-cosign", false, "Deliberately skip cosign publisher authentication (SHA-256 still required)")
 
 	fs.Usage = func() {
 		_, _ = fmt.Fprintf(errOut, `click-dog self-update — update to the latest release
@@ -26,7 +27,7 @@ Usage:
 
 Flags:
 `)
-		fs.PrintDefaults()
+		printFlagDefaults(errOut, fs)
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -136,21 +137,24 @@ Flags:
 	}
 	archivePath := archiveFile.Name()
 
-	// Fetch checksums and verify the cosign keyless signature on
-	// checksums.txt before trusting any hash inside it. The signature ties
-	// checksums.txt to the click-dog release workflow on a release tag —
-	// a stolen GITHUB_TOKEN alone cannot forge it. Fail-closed: any
-	// verification failure aborts the update with the same severity as a
-	// later checksum mismatch.
-	_, _ = fmt.Fprintln(out, "Fetching and verifying checksums signature...")
-	checksums, err := gh.FetchVerifiedChecksums(release)
+	// Always fetch the release manifest. If cosign is installed, authenticate it
+	// against the pinned release workflow identity before trusting any hash. A
+	// failed cosign attempt is fatal; checksum-only mode is selected only when
+	// cosign is absent or the operator explicitly passes the dangerous override.
+	_, _ = fmt.Fprintln(out, "Fetching release checksums...")
+	releaseChecksums, err := gh.FetchReleaseChecksums(release, *dangerouslyIgnoreCosign)
 	if err != nil {
 		_ = archiveFile.Close()
 		_ = os.Remove(archivePath)
 		_ = os.RemoveAll(stagingDir)
 		_, _ = fmt.Fprintf(errOut, "Error: %v\n", err)
+		if errors.Is(err, updater.ErrCosignVerification) {
+			_, _ = fmt.Fprintln(errOut, "cosign verification was attempted and failed; checksum-only fallback was not used.")
+			_, _ = fmt.Fprintln(errOut, "Retry with --dangerously-ignore-cosign only if you deliberately accept checksum-only verification.")
+		}
 		return 1
 	}
+	writeSelfUpdateVerificationMode(out, errOut, releaseChecksums.Mode, false)
 
 	// Download archive to a temp file for checksum verification
 	_, _ = fmt.Fprintf(out, "Downloading %s...\n", asset.Name)
@@ -175,7 +179,7 @@ Flags:
 	_ = body.Close()
 
 	// Verify checksum
-	expectedHash, ok := checksums[asset.Name]
+	expectedHash, ok := releaseChecksums.Entries[asset.Name]
 	if !ok {
 		_ = os.Remove(archivePath)
 		_ = os.RemoveAll(stagingDir)
@@ -228,6 +232,7 @@ Flags:
 	_ = os.RemoveAll(stagingDir)
 
 	_, _ = fmt.Fprintf(out, "Updated click-dog from %s to %s\n", version, release.TagName)
+	writeSelfUpdateVerificationMode(out, errOut, releaseChecksums.Mode, true)
 
 	// Restart the service if it's running
 	if err := exec.Command("systemctl", "is-active", "click-dog").Run(); err == nil {
@@ -243,4 +248,22 @@ Flags:
 	}
 
 	return 0
+}
+
+func writeSelfUpdateVerificationMode(out, errOut io.Writer, mode updater.ReleaseVerificationMode, archiveVerified bool) {
+	archiveSuffix := ""
+	if archiveVerified {
+		archiveSuffix = " Archive SHA-256 matched."
+	}
+	switch mode {
+	case updater.ReleaseVerificationSigned:
+		_, _ = fmt.Fprintf(out, "Publisher signature: verified with cosign.%s\n", archiveSuffix)
+	case updater.ReleaseVerificationNoCosign:
+		_, _ = fmt.Fprintf(errOut, "WARNING: cosign is not installed; publisher signature was not verified.%s\n", archiveSuffix)
+		if !archiveVerified {
+			_, _ = fmt.Fprintln(errOut, "Official Cosign installation docs: https://docs.sigstore.dev/cosign/system_config/installation/")
+		}
+	case updater.ReleaseVerificationCosignIgnored:
+		_, _ = fmt.Fprintf(errOut, "DANGER: publisher signature deliberately skipped by --dangerously-ignore-cosign.%s\n", archiveSuffix)
+	}
 }

@@ -12,7 +12,7 @@ const TraceDrilldownSchemaVersion = "analysis.trace_drilldown.v1"
 // It is an operational artifact: like the analysis report, it must never emit
 // raw system.query_log.query or unbounded db.statement text. Optional
 // sub-objects are pointers so an absent section is omitted from JSON rather
-// than rendered as an empty struct. Findings carries the `-fanout findings`
+// than rendered as an empty struct. Findings carries the `--fanout findings`
 // view: the analysis registry's findings filtered to the selected family, and
 // is omitted when the fan-out is off or nothing matched.
 type TraceDrilldownReport struct {

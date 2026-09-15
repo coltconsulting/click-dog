@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 type Level int
@@ -67,6 +68,57 @@ func sanitize(msg string) string {
 		})
 	}
 	return msg
+}
+
+func writeVisibleUnicodeEscape(b *strings.Builder, r rune) {
+	if r <= '\uffff' {
+		_, _ = fmt.Fprintf(b, `\u%04x`, r)
+		return
+	}
+	_, _ = fmt.Fprintf(b, `\U%08x`, r)
+}
+
+// escapeTextControls keeps an untrusted message on a single physical log line
+// and prevents terminal control sequences from changing how operators see it.
+func escapeTextControls(msg string) string {
+	var b strings.Builder
+	b.Grow(len(msg))
+	for _, r := range msg {
+		switch r {
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\x1b':
+			b.WriteString(`\x1b`)
+		default:
+			if unicode.IsControl(r) || unicode.In(r, unicode.Cf) {
+				writeVisibleUnicodeEscape(&b, r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	return b.String()
+}
+
+// escapeJSONFormatControls makes DEL, C1, and Unicode format controls visible
+// without changing JSON's normal semantic handling of newlines and C0 controls.
+// encoding/json quotes C0 controls, but intentionally preserves DEL, C1, and
+// general Cf runes such as bidi overrides and zero-width characters.
+func escapeJSONFormatControls(msg string) string {
+	var b strings.Builder
+	b.Grow(len(msg))
+	for _, r := range msg {
+		if r == '\u007f' || (r >= '\u0080' && r <= '\u009f') || unicode.In(r, unicode.Cf) {
+			writeVisibleUnicodeEscape(&b, r)
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // rotatingWriter is an io.Writer that performs size-based log rotation.
@@ -230,7 +282,7 @@ func CloseLogger() {
 	defer logMu.Unlock()
 	if logWriter != nil {
 		if err := logWriter.Close(); err != nil {
-			log.Printf("[WARN] failed to close log file: %v", err)
+			log.Printf("[WARN] failed to close log file: %s", escapeTextControls(err.Error()))
 		}
 		logWriter = nil
 	}
@@ -248,7 +300,7 @@ func logJSONMsg(level string, msg string) {
 	entry := map[string]string{
 		"ts":    time.Now().UTC().Format(time.RFC3339),
 		"level": level,
-		"msg":   msg,
+		"msg":   escapeJSONFormatControls(msg),
 	}
 	data, _ := json.Marshal(entry) // map[string]string never fails to marshal
 	log.Println(string(data))
@@ -261,7 +313,7 @@ func Debug(format string, v ...interface{}) {
 		if fmt_ == "json" {
 			logJSONMsg("debug", msg)
 		} else {
-			log.Printf("[DEBUG] %s", msg)
+			log.Printf("[DEBUG] %s", escapeTextControls(msg))
 		}
 	}
 }
@@ -273,7 +325,7 @@ func Info(format string, v ...interface{}) {
 		if fmt_ == "json" {
 			logJSONMsg("info", msg)
 		} else {
-			log.Printf("[INFO] %s", msg)
+			log.Printf("[INFO] %s", escapeTextControls(msg))
 		}
 	}
 }
@@ -285,7 +337,7 @@ func Warn(format string, v ...interface{}) {
 		if fmt_ == "json" {
 			logJSONMsg("warn", msg)
 		} else {
-			log.Printf("[WARN] %s", msg)
+			log.Printf("[WARN] %s", escapeTextControls(msg))
 		}
 	}
 }
@@ -297,7 +349,7 @@ func Error(format string, v ...interface{}) {
 		if fmt_ == "json" {
 			logJSONMsg("error", msg)
 		} else {
-			log.Printf("[ERROR] %s", msg)
+			log.Printf("[ERROR] %s", escapeTextControls(msg))
 		}
 	}
 }
@@ -310,11 +362,11 @@ func Fatal(format string, v ...interface{}) {
 		entry := map[string]string{
 			"ts":    time.Now().UTC().Format(time.RFC3339),
 			"level": "fatal",
-			"msg":   msg,
+			"msg":   escapeJSONFormatControls(msg),
 		}
 		data, _ := json.Marshal(entry) // map[string]string never fails to marshal
 		log.Fatalf("%s", string(data))
 	} else {
-		log.Fatalf("[FATAL] %s", msg)
+		log.Fatalf("[FATAL] %s", escapeTextControls(msg))
 	}
 }

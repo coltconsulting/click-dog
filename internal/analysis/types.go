@@ -15,6 +15,10 @@ const (
 	// ReportSchemaVersion versions the AnalysisReport JSON contract.
 	ReportSchemaVersion = "analysis.report.v1"
 
+	// ComparisonReportSchemaVersion is emitted only when a baseline comparison
+	// is requested, preserving the strict v1 shape for ordinary analysis.
+	ComparisonReportSchemaVersion = "analysis.report.v2"
+
 	// FindingSchemaVersion versions the Finding JSON contract. It is also the
 	// leading component of the finding ID hash input, so it only changes when
 	// the ID input contract changes.
@@ -52,14 +56,15 @@ func severityRank(s Severity) int {
 // warnings discovered while building analysis input belong in
 // CoverageSummary.Warnings instead.
 type AnalysisReport struct {
-	SchemaVersion string          `json:"schema_version"`
-	GeneratedAt   time.Time       `json:"generated_at"`
-	Window        AnalysisWindow  `json:"window"`
-	Config        ReportConfig    `json:"config"`
-	Coverage      CoverageSummary `json:"coverage"`
-	Findings      []Finding       `json:"findings"`
-	AnalyzerRuns  []AnalyzerRun   `json:"analyzer_runs"`
-	Warnings      []string        `json:"warnings,omitempty"`
+	SchemaVersion string             `json:"schema_version"`
+	GeneratedAt   time.Time          `json:"generated_at"`
+	Window        AnalysisWindow     `json:"window"`
+	Config        ReportConfig       `json:"config"`
+	Coverage      CoverageSummary    `json:"coverage"`
+	Findings      []Finding          `json:"findings"`
+	AnalyzerRuns  []AnalyzerRun      `json:"analyzer_runs"`
+	Comparison    *ComparisonSummary `json:"comparison,omitempty"`
+	Warnings      []string           `json:"warnings,omitempty"`
 }
 
 // ReportConfig is operational metadata only. It must never include ClickHouse
@@ -114,6 +119,7 @@ type AnalysisInput struct {
 	Families            []model.QueryFamilyRollup
 	AttributionByFamily map[string]FamilyAttributionCoverage
 	DimensionsByFamily  map[string]FamilyDimensionBreakdown
+	Comparison          *BaselineComparison
 }
 
 // FamilyAttributionCoverage counts log_comment attribution over the bounded
@@ -160,6 +166,7 @@ type Finding struct {
 	SchemaVersion         string         `json:"schema_version"`
 	ID                    string         `json:"id"`
 	Analyzer              string         `json:"analyzer"`
+	ConditionScope        string         `json:"-"` // Stable internal scope used by window-independent notification identity
 	Severity              Severity       `json:"severity"`
 	Confidence            float64        `json:"confidence"`
 	Title                 string         `json:"title"`

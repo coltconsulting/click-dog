@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -70,10 +71,15 @@ func TestDispatch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var out, errOut bytes.Buffer
-			code, fellThrough := dispatch(tt.args, &out, &errOut)
+			code, fellThrough, argv := dispatch(tt.args, &out, &errOut)
 
 			if fellThrough != tt.wantThrough {
 				t.Errorf("fellThrough = %v, want %v", fellThrough, tt.wantThrough)
+			}
+			// A plain fall-through hands the original args back unchanged for
+			// flag parsing (only the backfill verb rewrites them).
+			if tt.wantThrough && !slices.Equal(argv, tt.args) {
+				t.Errorf("fall-through argv = %v, want %v", argv, tt.args)
 			}
 			if !tt.wantThrough && code != tt.wantCode {
 				t.Errorf("exitCode = %d, want %d", code, tt.wantCode)
@@ -102,6 +108,32 @@ func TestDispatch(t *testing.T) {
 	}
 }
 
+func TestQueryTextCapabilityWarning(t *testing.T) {
+	tests := []struct {
+		name                string
+		mode                config.QueryTextMode
+		normalizedSupported bool
+		wantWarning         bool
+	}{
+		{name: "normalized only unsupported", mode: config.QueryTextModeNormalizedOnly, wantWarning: true},
+		{name: "normalized only supported", mode: config.QueryTextModeNormalizedOnly, normalizedSupported: true},
+		{name: "none unsupported", mode: config.QueryTextModeNone},
+		{name: "redacted unsupported", mode: config.QueryTextModeRedacted},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{Filters: config.FiltersConfig{QueryTextMode: tt.mode}}
+			got := queryTextCapabilityWarning(cfg, tt.normalizedSupported)
+			if (got != "") != tt.wantWarning {
+				t.Fatalf("queryTextCapabilityWarning() = %q, wantWarning=%v", got, tt.wantWarning)
+			}
+			if got != "" && !strings.Contains(got, "omit query text") {
+				t.Fatalf("warning = %q, want fail-closed consequence", got)
+			}
+		})
+	}
+}
+
 // TestDispatch_RoutesKnownVerb asserts that a registered verb is routed to its
 // handler with the post-verb args (argv[2:]) and does not fall through. It
 // swaps the subcommands registry for a stub so no real handler runs.
@@ -120,7 +152,7 @@ func TestDispatch_RoutesKnownVerb(t *testing.T) {
 	t.Cleanup(func() { subcommands = orig })
 
 	var out, errOut bytes.Buffer
-	code, fellThrough := dispatch([]string{"click-dog", "demo", "a", "b"}, &out, &errOut)
+	code, fellThrough, _ := dispatch([]string{"click-dog", "demo", "a", "b"}, &out, &errOut)
 
 	if fellThrough {
 		t.Error("known verb must not fall through to flag parsing")
@@ -147,7 +179,7 @@ func TestDispatch_PropagatesHandlerExitCode(t *testing.T) {
 	}
 	t.Cleanup(func() { subcommands = orig })
 
-	code, fellThrough := dispatch([]string{"click-dog", "demo"}, io.Discard, io.Discard)
+	code, fellThrough, _ := dispatch([]string{"click-dog", "demo"}, io.Discard, io.Discard)
 	if fellThrough {
 		t.Error("known verb must not fall through")
 	}
@@ -401,31 +433,6 @@ func TestUpdatePollerState(t *testing.T) {
 
 		if poller.CurrentInterval() != baseInterval {
 			t.Errorf("Expected reset to %v, got %v", baseInterval, poller.CurrentInterval())
-		}
-	})
-
-	t.Run("ticker reset on interval change", func(t *testing.T) {
-		baseInterval := 10 * time.Second
-		poller := resilience.NewAdaptivePoller(baseInterval, config.BackoffConfig{
-			MaxIntervalS:  300,
-			BackoffFactor: 2.0,
-		})
-
-		ticker := time.NewTicker(baseInterval)
-		defer ticker.Stop()
-
-		// Failure should change interval and reset ticker
-		processor.UpdatePollerState(poller, fmt.Errorf("error"), ticker, baseInterval, nil)
-
-		newInterval := poller.CurrentInterval()
-		if newInterval == baseInterval {
-			t.Error("Interval should have changed")
-		}
-
-		// Verify ticker was reset (can't directly check ticker interval,
-		// but we verify no panic and interval is correct)
-		if newInterval != 20*time.Second {
-			t.Errorf("Expected 20s, got %v", newInterval)
 		}
 	})
 }

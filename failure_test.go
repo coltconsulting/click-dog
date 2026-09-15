@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -410,21 +412,29 @@ func TestFailure_LRUCacheEviction(t *testing.T) {
 	}
 }
 
-// TestFailure_GracefulShutdown tests graceful shutdown signal handling
+// TestFailure_GracefulShutdown verifies that SIGTERM reaches the context used
+// by an active scheduled-mode pipeline cycle, rather than waiting for the
+// polling select to become idle.
 func TestFailure_GracefulShutdown(t *testing.T) {
-	t.Run("context cancellation stops processing", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
+	ctx, stop := scheduledModeSignalContext(context.Background())
+	defer stop()
 
-		// Simulate shutdown
-		cancel()
+	process, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatalf("find current process: %v", err)
+	}
+	if err := process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("send SIGTERM: %v", err)
+	}
 
-		select {
-		case <-ctx.Done():
-			// Expected
-		case <-time.After(1 * time.Second):
-			t.Error("Context should be done immediately after cancel")
+	select {
+	case <-ctx.Done():
+		if ctx.Err() != context.Canceled {
+			t.Fatalf("signal context error = %v, want %v", ctx.Err(), context.Canceled)
 		}
-	})
+	case <-time.After(time.Second):
+		t.Fatal("SIGTERM did not cancel the scheduled-mode context")
+	}
 }
 
 // TestFailure_ExportSpansToClosedServer tests export to a server that closes mid-operation
