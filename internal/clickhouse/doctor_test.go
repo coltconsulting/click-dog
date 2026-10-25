@@ -318,9 +318,9 @@ func TestEvaluateReadiness_ClusterMode(t *testing.T) {
 	if s := statusOf(t, checks, "normalized_query_hash support"); s != ReadinessPass {
 		t.Errorf("normalized_query_hash = %s, want PASS when all cluster replicas support it", s)
 	}
-	ck, ok := findCheck(checks, "cluster query mode")
+	ck, ok := findCheck(checks, "cluster mode")
 	if !ok {
-		t.Fatal("cluster query mode check should be present when cluster queries are enabled")
+		t.Fatal("cluster mode check should be present when cluster queries are enabled")
 	}
 	if ck.Status != ReadinessPass || !strings.Contains(ck.Detail, "prod") {
 		t.Errorf("cluster mode check = %+v, want PASS mentioning cluster name", ck)

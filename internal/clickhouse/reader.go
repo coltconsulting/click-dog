@@ -67,6 +67,12 @@ const processesNormalizedColumn = "{PROCESSES_NORMALIZED_COLUMN}"
 // safe, cheap, and recognizable in ClickHouse diagnostics.
 const tracingTestQuery = "SELECT 1 /* click-dog test tracing */"
 
+// serverVersionQuery reads the connected server's build version. Like the
+// smoke test it is constant and comment-tagged so it is recognizable in
+// ClickHouse diagnostics, and it is permitted under the enforced readonly=2
+// connection mode.
+const serverVersionQuery = "SELECT version() /* click-dog server version */"
+
 // enrichSelectAnchor is a dedicated marker setUserFilter replaces with the
 // whitelist clause (or strips entirely). Kept distinct from any functional
 // SQL token (e.g. ORDER BY event_time) so a future template edit can't
@@ -127,7 +133,7 @@ const queryKindClusterProbeSQL = `
 const queryLogSelectSQL = `
 			SELECT
 				query_id,
-				type as query_kind,
+				type, -- lifecycle event; leave query_kind for the statement operation
 				` + queryLogOperationColumn + `
 				event_time,
 				query_duration_ms,
@@ -227,7 +233,7 @@ const traceQueryIDsSelectSQL = `
 const queryLogEnrichSelectSQL = `
 			SELECT
 				query_id,
-				type as query_kind,
+				type, -- lifecycle event; leave query_kind for the statement operation
 				` + queryLogOperationColumn + `
 				event_time,
 				query_duration_ms,
@@ -320,6 +326,12 @@ const currentQueryCandidatesSelectSQL = `
 // ---------------------------------------------------------------------------
 // Reader
 // ---------------------------------------------------------------------------
+
+// Compile-time check that *ClickHouseReader satisfies the optional
+// model.ServerVersionReader companion. The processor reaches it through a
+// runtime type assertion, so without this a signature drift would silently
+// stop stamping clickhouse.version instead of failing the build.
+var _ model.ServerVersionReader = (*ClickHouseReader)(nil)
 
 type ClickHouseReader struct {
 	conn         driver.Conn
@@ -494,7 +506,7 @@ func buildCurrentQuerySQL(template, tableRef string, includeNormalized bool) str
 func detectQueryLogNormalizedSupport(ctx context.Context, conn driver.Conn, cluster string, useClusterQueries bool) bool {
 	if useClusterQueries {
 		if cluster == "" {
-			clicklog.Warn("Normalized query_log fields disabled in cluster query mode: no cluster name configured")
+			clicklog.Warn("Normalized query_log fields disabled in cluster mode: no cluster name configured")
 			return false
 		}
 		var replicas, supported uint64
@@ -507,10 +519,10 @@ func detectQueryLogNormalizedSupport(ctx context.Context, conn driver.Conn, clus
 			return false
 		}
 		if supported != replicas {
-			clicklog.Warn("Normalized query_log fields disabled in cluster query mode: normalized_query_hash found on %d/%d replicas", supported, replicas)
+			clicklog.Warn("Normalized query_log fields disabled in cluster mode: normalized_query_hash found on %d/%d replicas", supported, replicas)
 			return false
 		}
-		clicklog.Info("Normalized query_log fields enabled in cluster query mode: normalized_query_hash found on all %d replicas", replicas)
+		clicklog.Info("Normalized query_log fields enabled in cluster mode: normalized_query_hash found on all %d replicas", replicas)
 		return true
 	}
 
@@ -525,7 +537,7 @@ func detectQueryLogNormalizedSupport(ctx context.Context, conn driver.Conn, clus
 func detectQueryLogOperationSupport(ctx context.Context, conn driver.Conn, cluster string, useClusterQueries bool) bool {
 	if useClusterQueries {
 		if cluster == "" {
-			clicklog.Warn("Query operation enrichment disabled in cluster query mode: no cluster name configured")
+			clicklog.Warn("Query operation enrichment disabled in cluster mode: no cluster name configured")
 			return false
 		}
 		var replicas, supported uint64
@@ -538,10 +550,10 @@ func detectQueryLogOperationSupport(ctx context.Context, conn driver.Conn, clust
 			return false
 		}
 		if supported != replicas {
-			clicklog.Warn("Query operation enrichment disabled in cluster query mode: query_kind found on %d/%d replicas", supported, replicas)
+			clicklog.Warn("Query operation enrichment disabled in cluster mode: query_kind found on %d/%d replicas", supported, replicas)
 			return false
 		}
-		clicklog.Info("Query operation enrichment enabled in cluster query mode: query_kind found on all %d replicas", replicas)
+		clicklog.Info("Query operation enrichment enabled in cluster mode: query_kind found on all %d replicas", replicas)
 		return true
 	}
 
@@ -718,8 +730,8 @@ func (c *ClickHouseReader) Close() error {
 }
 
 // QueryLogNormalizedSupported reports whether the connected ClickHouse
-// exposes system.query_log.normalized_query_hash safely. In cluster-query
-// mode this requires every replica returned by clusterAllReplicas() to expose
+// exposes system.query_log.normalized_query_hash safely. In cluster mode
+// this requires every replica returned by clusterAllReplicas() to expose
 // the column, avoiding mixed-version SELECT failures. The probe runs once in
 // NewClickHouseReader; this accessor lets startup wiring mirror the result into
 // a metric without re-probing.
@@ -728,7 +740,7 @@ func (c *ClickHouseReader) QueryLogNormalizedSupported() bool {
 }
 
 // QueryLogOperationSupported reports whether the connected ClickHouse exposes
-// system.query_log.query_kind safely. In cluster-query mode every replica must
+// system.query_log.query_kind safely. In cluster mode every replica must
 // expose the column. Startup wiring uses this result for the
 // query_operation_supported self-metric without issuing another probe.
 func (c *ClickHouseReader) QueryLogOperationSupported() bool {
@@ -1953,6 +1965,27 @@ func (c *ClickHouseReader) FetchSpansForTraceIDs(ctx context.Context, traceIDs [
 		return nil, fmt.Errorf("span row iteration error: %w", err)
 	}
 	return spans, nil
+}
+
+// ServerVersion returns the connected ClickHouse server's version string.
+//
+// The value describes the server this reader is connected to, not the node
+// that produced any particular row: under cluster queries a read fans out to
+// replicas that can be on different versions during a rolling upgrade. Callers
+// must not present it as a per-row or per-node claim.
+//
+// Callers refresh this periodically rather than caching it at startup. A
+// ClickHouse upgrade does not restart click-dog, so a value resolved once
+// would misreport the version for the life of the process.
+func (c *ClickHouseReader) ServerVersion(ctx context.Context) (string, error) {
+	queryCtx, cancel := context.WithTimeout(ctx, c.queryTimeout)
+	defer cancel()
+
+	var version string
+	if err := c.conn.QueryRow(queryCtx, serverVersionQuery).Scan(&version); err != nil {
+		return "", fmt.Errorf("reading ClickHouse server version: %w", err)
+	}
+	return version, nil
 }
 
 // RunCanaryQuery runs a cheap COUNT query to check if long-running spans

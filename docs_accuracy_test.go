@@ -764,6 +764,11 @@ func TestHomeQuickStart_ShowsThreeConfigViews(t *testing.T) {
 		})
 	}
 	plainAdvanced := extractConfig(t, "advanced")
+	// The collector CA sits where the installer, Ansible, and the Kubernetes
+	// manifests put it, so the sample matches every documented install.
+	if !strings.Contains(plainAdvanced, "ca_cert: /etc/click-dog/tls/ca.pem") {
+		t.Error("homepage advanced config must use the documented collector CA path /etc/click-dog/tls/ca.pem")
+	}
 
 	clickHouseCA := filepath.Join(tempDir, "clickhouse-ca.pem")
 	otelCA := filepath.Join(tempDir, "otel-ca.pem")
@@ -773,13 +778,19 @@ func TestHomeQuickStart_ShowsThreeConfigViews(t *testing.T) {
 		}
 	}
 	plainAdvanced = strings.ReplaceAll(plainAdvanced, "/etc/click-dog/clickhouse-ca.pem", clickHouseCA)
-	plainAdvanced = strings.ReplaceAll(plainAdvanced, "/etc/click-dog/otel-ca.pem", otelCA)
+	plainAdvanced = strings.ReplaceAll(plainAdvanced, "/etc/click-dog/tls/ca.pem", otelCA)
 	advancedConfigPath := filepath.Join(tempDir, "click-dog-advanced.yaml")
 	if err := os.WriteFile(advancedConfigPath, []byte(plainAdvanced), 0o600); err != nil {
 		t.Fatalf("write extracted advanced homepage config: %v", err)
 	}
-	if _, err := config.LoadConfig(advancedConfigPath); err != nil {
+	advancedCfg, err := config.LoadConfig(advancedConfigPath)
+	if err != nil {
 		t.Fatalf("homepage advanced config must load and validate: %v\n%s", err, plainAdvanced)
+	}
+	// 9000 is ClickHouse's plaintext native port; a TLS client there fails
+	// its handshake. `click-dog init --ch-secure` renders 9440.
+	if advancedCfg.ClickHouse.Secure && advancedCfg.ClickHouse.Port != 9440 {
+		t.Errorf("homepage advanced config sets clickhouse.secure: true on port %d; the native TLS port is 9440", advancedCfg.ClickHouse.Port)
 	}
 	productionProfile, err := os.ReadFile("examples/click-dog-production.yaml")
 	if err != nil {
@@ -815,6 +826,16 @@ func TestHomeQuickStart_ShowsThreeConfigViews(t *testing.T) {
 	sort.Strings(unexpected)
 	if len(missing) > 0 || len(unexpected) > 0 {
 		t.Errorf("homepage advanced config drifted from the production profile: missing=%v unexpected=%v", missing, unexpected)
+	}
+
+	// mTLS client certificates exist only for OTLP exporters; the ClickHouse
+	// and Keeper connections take a CA at most. Any sentence on the page that
+	// names mTLS must not also name the source side.
+	sourceSide := regexp.MustCompile(`(?i)\b(source|clickhouse|keeper)\b`)
+	for _, sentence := range regexp.MustCompile(`[^.<>]*\bmTLS\b[^.<>]*`).FindAllString(text, -1) {
+		if sourceSide.MatchString(sentence) {
+			t.Errorf("homepage must not claim mTLS for the ClickHouse source connection: %q", strings.TrimSpace(sentence))
+		}
 	}
 
 	for _, configPath := range []string{
@@ -987,7 +1008,7 @@ func TestSupportPage_CarriesProductionSupportBrand(t *testing.T) {
 		"What production support covers",
 		"cd-support-intro__marker",
 		"maintainer",
-		"Colt Consulting, Click-Dog's creator and maintainer",
+		"Colin Taylor, Click-Dog's creator and maintainer",
 		"contracted and provided by",
 		"Colt Consulting Ltd",
 		"Discuss%20a%20Click-Dog%20deployment",
@@ -1175,5 +1196,46 @@ func TestAnsibleInstallRecordsCreatedRuntimeIdentity(t *testing.T) {
 		if !strings.Contains(content, required) {
 			t.Errorf("Ansible playbook must record only identities it creates: missing %q", required)
 		}
+	}
+}
+
+// Brand attribution: the README carries the full sentence with the founder
+// named; the landing footer carries the short form and names the founder
+// once, in the production-support section, as creator and maintainer. The
+// three surfaces ship separately (README to the public repo, home.html to
+// the site), so a brand URL or wording change in one must land in the others.
+func TestReadmeAttribution_MatchesLanding(t *testing.T) {
+	// README.md ships in the public archive, so it is checked before the
+	// internal-only guard: the public repo's CI enforces its line too.
+	readme, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wantReadme = "An open-source project from [Futureproof.dev](https://futureproof.dev/), created and maintained by [Colin Taylor](https://futureproof.dev/profile)."
+	if !strings.Contains(string(readme), wantReadme) {
+		t.Errorf("README.md is missing the attribution line %q", wantReadme)
+	}
+	if strings.Contains(string(readme), "a brand of Colt Consulting Ltd") {
+		t.Error("README.md still carries the retired long attribution wording")
+	}
+
+	requireInternalSite(t)
+
+	home, err := os.ReadFile("www/home.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(home)
+	for _, want := range []string{
+		`<p class="attribution">A <a href="https://futureproof.dev/">Futureproof.dev</a> project.</p>`,
+		`<h2>Take Click-Dog into production with its creator and maintainer.</h2>`,
+		`Work directly with <a href="https://futureproof.dev/profile">Colin Taylor</a> on topology`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("www/home.html is missing %q", want)
+		}
+	}
+	if strings.Contains(text, "a brand of Colt Consulting Ltd") {
+		t.Error("www/home.html still carries the retired long attribution wording")
 	}
 }

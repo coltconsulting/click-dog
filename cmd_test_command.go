@@ -9,6 +9,7 @@ const testUsage = `click-dog test <subcommand>
 
 Subcommands:
   export     Send a synthetic span through each configured exporter
+  tls        Check an OTLP receiver's TLS the way the exporter would, before configuring it
   tracing    Run a traced ClickHouse query, recover its native spans, and export them
 
 Usage:
@@ -28,6 +29,8 @@ func runTest(args []string, out, errOut io.Writer) int {
 	switch args[0] {
 	case "export":
 		return runTestExport(args[1:], out, errOut)
+	case "tls":
+		return runTestTLS(args[1:], out, errOut)
 	case "tracing":
 		return runTestTracing(args[1:], out, errOut)
 	case "help", "-h", "--help":

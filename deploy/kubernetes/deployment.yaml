@@ -1,11 +1,11 @@
-# Centralized click-dog Deployment — a single instance reads the cluster
+# Cluster-mode click-dog Deployment — a single instance reads the cluster
 # through the ClickHouse Service (configmap.yaml sets clickhouse.host to the
-# Service DNS and use_cluster_queries: true). Keep replicas at 1: multiple
-# instances double-export unless you also configure HA leader election
-# (ha.keeper.hosts in configmap.yaml). A
-# node-local topology should be a sidecar inside the ClickHouse pod (where
-# localhost reaches ClickHouse), not this standalone Deployment — see
-# docs/kubernetes.md.
+# Service DNS and use_cluster_queries: true). cluster() reads one replica per
+# shard, so a replicated cluster gets partial coverage. Keep replicas at 1:
+# multiple instances double-export unless you also configure HA leader election
+# (ha.keeper.hosts in configmap.yaml). For full coverage, run a sidecar inside
+# every ClickHouse pod (where localhost reaches ClickHouse) instead of this
+# standalone Deployment — see docs/kubernetes.md.
 #
 # Rollout note (upgrading from pre-health-endpoints releases): the probes moved
 # from the metrics port (:9090 /health) to a dedicated health port (:8686
@@ -47,6 +47,12 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
+        # Kept explicit for older images, which have no passwd entry for
+        # 65532: without this they start click-dog in group 0 (root).
+        runAsGroup: 65532
+        # Group owner of the otel-tls volume: client.key is mode 0440, so only
+        # this group, which click-dog runs in, can read it.
+        fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -122,7 +128,33 @@ spec:
         - name: config
           configMap:
             name: click-dog-config
+        # OTLP TLS material, all optional: the pod starts without either
+        # source, and configmap.yaml's commented ca_cert / client_cert /
+        # client_key name these files. See docs/kubernetes.md#otlp-tls.
         - name: otel-tls
-          secret:
-            secretName: click-dog-otel-tls
-            optional: true
+          projected:
+            sources:
+              # CA that signed the collector's server certificate, for a
+              # collector on a private CA. Without it, the secure: true that
+              # configmap.yaml ships verifies the collector against the
+              # image's system trust roots.
+              # click-dog reads it at startup; restart after changing it.
+              - configMap:
+                  name: click-dog-otel-ca
+                  optional: true
+                  items:
+                    - key: ca.pem
+                      path: ca.pem
+              # mTLS client certificate issued by certificate.yaml (or any
+              # kubernetes.io/tls Secret whose certificate has client auth).
+              # click-dog re-reads it on each new collector connection, so
+              # cert-manager renewals need no restart.
+              - secret:
+                  name: click-dog-otel-client
+                  optional: true
+                  items:
+                    - key: tls.crt
+                      path: client.crt
+                    - key: tls.key
+                      path: client.key
+                      mode: 0440

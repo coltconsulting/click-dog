@@ -11,6 +11,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/google/uuid"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
@@ -25,6 +26,7 @@ const (
 	tracingTestLookbackDays   = 1
 	tracingPollInitialDelay   = 100 * time.Millisecond
 	tracingPollMaxDelay       = time.Second
+	chErrUnknownTable         = 60
 )
 
 type tracingTestReader interface {
@@ -171,7 +173,7 @@ func executeTracingTest(ctx context.Context, cfg *config.Config, identity tracin
 	_, _ = fmt.Fprintf(out, "  %-25s PASS (query_id=%s)\n", "ClickHouse query:", identity.QueryID)
 
 	materializationStart := deps.now()
-	spans, err := pollTracingSpans(ctx, reader, identity.TraceID, deps.wait)
+	spans, err := pollTracingSpans(ctx, reader, identity.TraceID, deps.wait, out)
 	materializationElapsed := deps.now().Sub(materializationStart)
 	if materializationElapsed < 0 {
 		materializationElapsed = 0
@@ -256,21 +258,42 @@ func executeTracingTest(ctx context.Context, cfg *config.Config, identity tracin
 	return 0
 }
 
-func pollTracingSpans(ctx context.Context, reader tracingTestReader, traceID uuid.UUID, wait func(context.Context, time.Duration) error) ([]model.OpenTelemetrySpan, error) {
+func pollTracingSpans(ctx context.Context, reader tracingTestReader, traceID uuid.UUID, wait func(context.Context, time.Duration) error, out io.Writer) ([]model.OpenTelemetrySpan, error) {
 	delay := tracingPollInitialDelay
+	missingTableReported := false
+	var lastMissingTable error
+	pollStopped := func(err error) error {
+		if lastMissingTable != nil {
+			return fmt.Errorf("deadline or cancellation waiting for system.opentelemetry_span_log to materialize (last read: %v): %w", lastMissingTable, err)
+		}
+		return fmt.Errorf("deadline or cancellation before native spans appeared: %w", err)
+	}
 	for {
 		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("deadline or cancellation before native spans appeared: %w", err)
+			return nil, pollStopped(err)
 		}
 		spans, err := reader.FetchSpansForTraceIDs(ctx, []string{traceID.String()}, tracingTestLookbackDays, tracingTestSpanLimit, nil)
 		if err != nil {
-			return nil, err
+			// ClickHouse creates this system log lazily on its first flush. Only
+			// UNKNOWN_TABLE from this exact span-log read is a startup condition;
+			// permission, schema, and transport errors must still fail promptly.
+			var exception *clickhouse.Exception
+			if !errors.As(err, &exception) || exception.Code != chErrUnknownTable {
+				return nil, err
+			}
+			if !missingTableReported {
+				_, _ = fmt.Fprintf(out, "  %-25s waiting for system.opentelemetry_span_log to be created (first flush)\n", "Span materialization:")
+				missingTableReported = true
+			}
+			lastMissingTable = err
+		} else {
+			lastMissingTable = nil
 		}
 		if len(spans) > 0 {
 			return spans, nil
 		}
 		if err := wait(ctx, delay); err != nil {
-			return nil, fmt.Errorf("deadline or cancellation before native spans appeared: %w", err)
+			return nil, pollStopped(err)
 		}
 		if delay < tracingPollMaxDelay {
 			delay *= 2

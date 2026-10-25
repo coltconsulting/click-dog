@@ -30,6 +30,15 @@ KUBECONFORM := $(if $(wildcard $(LOCAL_TOOLS_BIN)/kubeconform),$(LOCAL_TOOLS_BIN
 SHELLCHECK := $(if $(wildcard $(LOCAL_TOOLS_BIN)/shellcheck),$(LOCAL_TOOLS_BIN)/shellcheck,shellcheck)
 OPENSPEC := $(if $(wildcard $(AGENT_CACHE_DIR)/npm/node_modules/.bin/openspec),$(AGENT_CACHE_DIR)/npm/node_modules/.bin/openspec,openspec)
 MKDOCS := $(if $(wildcard $(AGENT_CACHE_DIR)/venv/bin/mkdocs),$(AGENT_CACHE_DIR)/venv/bin/mkdocs,mkdocs)
+# The PATH fallbacks above would otherwise let a gate run on whatever version
+# the host has. Every gate that runs one of the tools scripts/lib/tool-pins.sh
+# knows calls this first, and it fails unless the resolved tool is the version
+# scripts/tool-versions.env pins. (MKDOCS is not among them: its pin is the
+# Material theme's version, which the binary does not report.)
+# ALLOW_UNPINNED_TOOLS=1 (environment or command line) accepts a substitute
+# with a warning.
+#   $(call require_pinned,golangci-lint,$(GOLANGCI_LINT))
+require_pinned = ALLOW_UNPINNED_TOOLS="$(ALLOW_UNPINNED_TOOLS)" scripts/lib/tool-pins.sh $(1) "$(2)"
 SHA         := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 YY          := $(shell date +%y)
 MM          := $(shell date +%m)

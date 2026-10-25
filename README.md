@@ -12,6 +12,8 @@
 
 Operational query observability without making the source system harder to run.
 
+An open-source project from [Futureproof.dev](https://futureproof.dev/), created and maintained by [Colin Taylor](https://futureproof.dev/profile).
+
 Click-Dog turns database telemetry into traces, dashboards, and query-analysis
 signals for OTEL-compatible backends such as Datadog, Honeycomb, Grafana Tempo,
 and more. Today it reads ClickHouse `system.opentelemetry_span_log` for live
@@ -104,6 +106,11 @@ monitor:
   min_trace_duration_ms: 1000
 ```
 
+With `secure` omitted, the exporter uses plaintext only for a collector on this
+host (`localhost`, `127.0.0.0/8`, `::1`, or a `unix:` socket) and TLS for any
+other. Set `secure: false` for a remote collector that serves plaintext, such
+as an OpenTelemetry Collector or Datadog Agent on 4317 without TLS configured.
+
 Run it:
 
 ```bash
@@ -135,7 +142,7 @@ click-dog validate --config click-dog.yaml
 | **Backfill** | One-shot historical export over an RFC 3339 range: `backfill --start YYYY-MM-DDT00:00:00Z --end YYYY-MM-DDT00:00:00Z` |
 | **Validate** | Check config and exit: `validate` |
 | **Dry-run** | Read real data, discard exports, print a one-shot summary and exit: `--dry-run` |
-| **Test** | Exercise exporter acceptance or native ClickHouse tracing without starting the scheduled service: `test export` / `test tracing` |
+| **Test** | Exercise exporter acceptance, OTLP receiver TLS, or native ClickHouse tracing without starting the scheduled service: `test export` / `test tls` / `test tracing` |
 | **Analyze** | Local read-only query reports: `analyze queries` and `analyze trace` |
 
 `click-dog deploy <kubernetes\|docker\|status\|uninstall>` is a separate

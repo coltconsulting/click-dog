@@ -1041,9 +1041,9 @@ func TestValidate_ExportersOTEL_InsecureSkipVerifyRequiresSecure(t *testing.T) {
 	}}
 	err := cfg.Validate()
 	if err == nil {
-		t.Fatal("expected error: exporters.otel[0].insecure_skip_verify without secure")
+		t.Fatal("expected error: exporters.otel[0].insecure_skip_verify with plaintext")
 	}
-	if !strings.Contains(err.Error(), "exporters.otel[0].insecure_skip_verify requires secure: true") {
+	if !strings.Contains(err.Error(), "exporters.otel[0].secure is false but insecure_skip_verify is set") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
@@ -1081,11 +1081,12 @@ func TestValidate_ExportersOTEL_ClientCertificatePair(t *testing.T) {
 			want: "exporters.otel[1].client_cert and exporters.otel[1].client_key must be provided together",
 		},
 		{
-			name: "complete pair is coherent even while plaintext",
+			name: "complete pair is coherent over TLS",
 			exporters: []OTELConfig{{
 				CollectorAddress: "localhost:4317",
 				ServiceName:      "test",
 				MaxQueryLength:   100000,
+				Secure:           true,
 				ClientCert:       "/tls/client.pem",
 				ClientKey:        "/tls/client-key.pem",
 			}},
@@ -1132,7 +1133,9 @@ func TestValidationWarnings_TLSMaterialWithoutSecure(t *testing.T) {
 			},
 		},
 		{
-			name: "second exporter CA and complete mTLS pair are ignored",
+			// OTLP material implies TLS; beside a plaintext exporter it is a
+			// contradiction, not an ignored setting.
+			name: "second exporter material with plaintext is an error, not a warning",
 			mutate: func(c *Config) {
 				c.Exporters.OTEL = append(c.Exporters.OTEL, OTELConfig{
 					CollectorAddress: "backup:4317",
@@ -1143,11 +1146,7 @@ func TestValidationWarnings_TLSMaterialWithoutSecure(t *testing.T) {
 					ClientKey:        "/tls/client-key.pem",
 				})
 			},
-			want: []string{
-				"exporters.otel[1].ca_cert",
-				"exporters.otel[1].secure is false",
-				"exporters.otel[1].client_cert and client_key",
-			},
+			wantValidationErr: true,
 		},
 		{
 			name: "active exporter TLS material is silent",
@@ -1189,7 +1188,7 @@ func TestValidationWarnings_TLSMaterialWithoutSecure(t *testing.T) {
 }
 
 func TestLoadConfig_TLSSemantics(t *testing.T) {
-	t.Run("populates indexed inactive-material warnings", func(t *testing.T) {
+	t.Run("ClickHouse CA without TLS is a warning", func(t *testing.T) {
 		const yaml = `
 clickhouse:
   host: localhost
@@ -1198,11 +1197,7 @@ clickhouse:
   ca_cert: /not/read/while/plaintext/clickhouse-ca.pem
 exporters:
   otel:
-    - collector_address: primary:4317
-    - collector_address: backup:4317
-      ca_cert: /not/read/while/plaintext/otel-ca.pem
-      client_cert: /not/read/while/plaintext/client.pem
-      client_key: /not/read/while/plaintext/client-key.pem
+    - collector_address: localhost:4317
 monitor:
   enabled: true
   min_trace_duration_ms: 1000
@@ -1212,15 +1207,52 @@ monitor:
 		if err != nil {
 			t.Fatalf("LoadConfig: %v", err)
 		}
-		got := strings.Join(cfg.ValidationWarnings, "\n")
-		for _, want := range []string{
-			"clickhouse.ca_cert",
-			"exporters.otel[1].ca_cert",
-			"exporters.otel[1].client_cert and client_key",
-		} {
-			if !strings.Contains(got, want) {
-				t.Errorf("ValidationWarnings = %v, want substring %q", cfg.ValidationWarnings, want)
-			}
+		if got := strings.Join(cfg.ValidationWarnings, "\n"); !strings.Contains(got, "clickhouse.ca_cert") {
+			t.Errorf("ValidationWarnings = %v, want clickhouse.ca_cert", cfg.ValidationWarnings)
+		}
+	})
+
+	t.Run("OTLP material without secure selects TLS and is read at load", func(t *testing.T) {
+		const yaml = `
+clickhouse:
+  host: localhost
+  port: 9000
+  database: default
+exporters:
+  otel:
+    - collector_address: localhost:4317
+      ca_cert: /missing/otel-ca.pem
+monitor:
+  enabled: true
+  min_trace_duration_ms: 1000
+  check_interval_s: 30
+`
+		_, err := LoadConfig(writeConfigFile(t, yaml))
+		if err == nil || !strings.Contains(err.Error(), `exporters.otel[0].ca_cert "/missing/otel-ca.pem" cannot be read`) {
+			t.Fatalf("LoadConfig() error = %v, want unreadable ca_cert", err)
+		}
+	})
+
+	t.Run("secure false with material is an error naming both", func(t *testing.T) {
+		const yaml = `
+clickhouse:
+  host: localhost
+  port: 9000
+  database: default
+exporters:
+  otel:
+    - collector_address: localhost:4317
+    - collector_address: backup:4317
+      secure: false
+      ca_cert: /tls/otel-ca.pem
+monitor:
+  enabled: true
+  min_trace_duration_ms: 1000
+  check_interval_s: 30
+`
+		_, err := LoadConfig(writeConfigFile(t, yaml))
+		if err == nil || !strings.Contains(err.Error(), "exporters.otel[1].secure is false but ca_cert is set") {
+			t.Fatalf("LoadConfig() error = %v, want secure/ca_cert conflict", err)
 		}
 	})
 

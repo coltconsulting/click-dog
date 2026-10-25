@@ -15,7 +15,7 @@
 # explicitly so the operating envelope is visible at a glance.
 
 clickhouse:
-  host: ch.example.com
+  host: localhost
   port: 9000
   database: system
   password: ${CLICKHOUSE_PASSWORD}
@@ -27,6 +27,7 @@ exporters:
   otel:
     - collector_address: otel.example.com:4317
       service_name: click-dog-monitor
+      secure: true
 
 monitor:
   enabled: true

@@ -76,7 +76,7 @@ jobs:
           run_integration=false
           while IFS= read -r path; do
             case "$path" in
-              internal/clickhouse/*|internal/processor/*|internal/leader/*|internal/health/*|internal/export/*|internal/analysis/*|internal/queryfamily/*|internal/filter/*|internal/config/*|internal/resilience/*|testing/*|integration_test.go|integration_*_test.go|cmd_*.go|main.go|health_adapter.go|export_gate.go|.github/workflows/ci.yml|go.mod|go.sum)
+              internal/clickhouse/*|internal/processor/*|internal/leader/*|internal/health/*|internal/export/*|internal/analysis/*|internal/queryfamily/*|internal/filter/*|internal/config/*|internal/resilience/*|testing/*|integration_test.go|integration_*_test.go|cmd_*.go|main.go|health_adapter.go|export_gate.go|third_party/*|.github/workflows/ci.yml|go.mod|go.sum)
                 run_integration=true
                 break
                 ;;
@@ -85,10 +85,23 @@ jobs:
 
           echo "run_integration=$run_integration" >> "$GITHUB_OUTPUT"
 
+      # Pinned tools (Go, golangci-lint, govulncheck, actionlint, shellcheck)
+      # take their version from scripts/tool-versions.env, the file the local
+      # Make gates refuse any other version against (scripts/lib/tool-pins.sh).
+      # Never copy one of those versions into a workflow: a later bump would
+      # move `make check` and leave CI on the old tool. `make check` fails on
+      # one (scripts/lib/workflow-pins.sh), and on a steps.pins.outputs name
+      # that the job's pins step does not write.
+      - name: Read tool pins
+        id: pins
+        run: |
+          source scripts/tool-versions.env
+          echo "go_version=$GO_VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.6'
+          go-version: ${{ steps.pins.outputs.go_version }}
 
       - name: Download dependencies
         run: go mod download
@@ -133,7 +146,7 @@ jobs:
 
       - name: Upload coverage
         # codecov-action v7.0.0, pinned by commit to avoid major-tag drift.
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f
+        uses: codecov/codecov-action@0b35c9ecc4f0529d0eb674914510c22f85b196b4
         with:
           files: coverage.out
         continue-on-error: true
@@ -144,10 +157,17 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - name: Read tool pins
+        id: pins
+        run: |
+          source scripts/tool-versions.env
+          echo "go_version=$GO_VERSION" >> "$GITHUB_OUTPUT"
+          echo "golangci_lint_version=$GOLANGCI_LINT_VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.6'
+          go-version: ${{ steps.pins.outputs.go_version }}
 
       - name: gofmt
         run: make check-fmt
@@ -155,7 +175,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
-          version: v2.12.2
+          version: ${{ steps.pins.outputs.golangci_lint_version }}
           args: --timeout=5m
 
       - name: Install actionlint
@@ -186,10 +206,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - name: Read tool pins
+        id: pins
+        run: |
+          source scripts/tool-versions.env
+          echo "go_version=$GO_VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.6'
+          go-version: ${{ steps.pins.outputs.go_version }}
 
       - name: Build (linux/amd64)
         run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o click-dog-linux-amd64
@@ -203,10 +229,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - name: Read tool pins
+        id: pins
+        run: |
+          source scripts/tool-versions.env
+          echo "go_version=$GO_VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.6'
+          go-version: ${{ steps.pins.outputs.go_version }}
 
       - name: Build (linux/arm64)
         run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o click-dog-linux-arm64
@@ -221,19 +253,30 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - name: Read tool pins
+        id: pins
+        run: |
+          source scripts/tool-versions.env
+          echo "go_version=$GO_VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.6'
+          go-version: ${{ steps.pins.outputs.go_version }}
 
       # Pinned: avoid silent CI behavior changes from a govulncheck
-      # release we haven't reviewed. v1.3.0 requires Go >= 1.25, which
-      # matches the go-version above. Bump deliberately.
+      # release we haven't reviewed. GOVULNCHECK_VERSION is the pin
+      # `make check-vuln` enforces too; when bumping it, confirm its minimum
+      # Go is at or below GO_VERSION. Bump deliberately.
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.3.0
+        run: |
+          source scripts/tool-versions.env
+          go install golang.org/x/vuln/cmd/govulncheck@"$GOVULNCHECK_VERSION"
 
+      # Also scans the upstream release of any module go.mod replaces with a
+      # third_party/ copy, which govulncheck otherwise cannot match.
       - name: Run govulncheck
-        run: govulncheck ./...
+        run: scripts/lib/vulncheck.sh govulncheck
 
   # Integration tests spin up a 3-node ClickHouse cluster + OTEL collector.
   # They run for non-PR events and for non-draft PRs that touch integration-
@@ -245,10 +288,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - name: Read tool pins
+        id: pins
+        run: |
+          source scripts/tool-versions.env
+          echo "go_version=$GO_VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.6'
+          go-version: ${{ steps.pins.outputs.go_version }}
 
       - name: Download dependencies
         run: go mod download

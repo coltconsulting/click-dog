@@ -298,13 +298,13 @@ func evaluateReadiness(obs readinessObs) []ReadinessCheck {
 	}
 	lookbackDesc := formatLookback(obs.lookback)
 
-	// In cluster query mode the reads go through the cluster() table function,
+	// In cluster mode the reads go through the cluster() table function,
 	// which ClickHouse gates behind REMOTE on top of the table SELECT grants.
 	// Without naming it here an operator holding exactly the documented
 	// per-table grants is told to grant what they already have.
 	clusterGrant := ""
 	if obs.useClusterQueries {
-		clusterGrant = "; cluster query mode also needs GRANT REMOTE ON *.* (cluster() reads use the remote table function)"
+		clusterGrant = "; cluster mode also needs GRANT REMOTE ON *.* (cluster() reads use the remote table function)"
 	}
 
 	// --- span_log selectable + recent data + duration distribution ---
@@ -436,9 +436,9 @@ func evaluateReadiness(obs readinessObs) []ReadinessCheck {
 		}
 	}
 
-	// --- cluster query mode ---
+	// --- cluster mode ---
 	if obs.useClusterQueries {
-		add("cluster query mode", ReadinessPass,
+		add("cluster mode", ReadinessPass,
 			fmt.Sprintf("enabled (cluster=%q); span_log and query_log checks above used cluster() references", obs.clusterName), "")
 	}
 

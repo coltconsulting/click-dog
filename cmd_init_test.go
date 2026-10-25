@@ -406,6 +406,135 @@ func TestRunInit_CHUserFlagOverridesDefault(t *testing.T) {
 	}
 }
 
+// TestRunInit_OTELCACertRelativePathMadeAbsolute: click-dog opens ca_cert
+// against its own working directory, which is / under systemd, so a relative
+// --otel-ca-cert that validates from the operator's shell would not be found
+// by the service. init renders it absolute against the directory it ran in.
+func TestRunInit_OTELCACertRelativePathMadeAbsolute(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.WriteFile("ca.pem", []byte("placeholder"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := runInit([]string{
+		"--collector", "otel.example.com:4317",
+		"--otel-ca-cert", "./ca.pem",
+		"--output", "c.yaml",
+	}, io.Discard, io.Discard); code != 0 {
+		t.Fatalf("runInit exit %d", code)
+	}
+	cfg, err := config.LoadConfig("c.yaml")
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if want := filepath.Join(wd, "ca.pem"); cfg.Exporters.OTEL[0].CACert != want {
+		t.Errorf("ca_cert = %q, want %q", cfg.Exporters.OTEL[0].CACert, want)
+	}
+
+	for in, want := range map[string]string{
+		"":                          "",
+		"/etc/click-dog/tls/ca.pem": "/etc/click-dog/tls/ca.pem",
+		"certs/ca.pem":              filepath.Join(wd, "certs", "ca.pem"),
+	} {
+		if got := absCACertPath(in); got != want {
+			t.Errorf("absCACertPath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestRunInit_OTELCACertImpliesSecure pins --otel-ca-cert: it renders
+// exporters.otel[0].ca_cert and turns on TLS without --otel-secure, because a
+// CA only applies over TLS (secure: false beside one fails validation).
+// install.sh relies on this for a pinned or operator-supplied collector CA.
+func TestRunInit_OTELCACertImpliesSecure(t *testing.T) {
+	dir := t.TempDir()
+	caPath := filepath.Join(dir, "ca.pem")
+	// validate requires a readable ca_cert once secure is on; the contents
+	// are not parsed until the exporter dials.
+	if err := os.WriteFile(caPath, []byte("placeholder"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(dir, "c.yaml")
+	if code := runInit([]string{
+		"--collector", "otel.example.com:4317",
+		"--otel-ca-cert", caPath,
+		"--output", output,
+	}, io.Discard, io.Discard); code != 0 {
+		t.Fatalf("runInit exit %d", code)
+	}
+
+	cfg, err := config.LoadConfig(output)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if len(cfg.Exporters.OTEL) != 1 {
+		t.Fatalf("want one OTEL exporter, got %d", len(cfg.Exporters.OTEL))
+	}
+	otel := cfg.Exporters.OTEL[0]
+	if !otel.Secure {
+		t.Error("--otel-ca-cert should imply secure: true")
+	}
+	if otel.CACert != caPath {
+		t.Errorf("ca_cert = %q, want %q", otel.CACert, caPath)
+	}
+	for _, w := range cfg.ValidationWarnings {
+		if strings.Contains(w, "ca_cert") {
+			t.Errorf("unexpected ca_cert warning: %s", w)
+		}
+	}
+
+	// Without the flag nothing changes: no ca_cert key at all.
+	plain := filepath.Join(dir, "plain.yaml")
+	runInit([]string{"--collector", "otel.example.com:4317", "--otel-secure", "--output", plain}, io.Discard, io.Discard)
+	body, err := os.ReadFile(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "ca_cert") {
+		t.Errorf("--otel-secure alone must not render ca_cert:\n%s", body)
+	}
+}
+
+// TestRunInit_CHUserDefaultsByProfile locks in the per-profile default when
+// --ch-user is omitted: production and paranoid authenticate as the read-only
+// monitoring user every installer provisions, minimal leaves username unset
+// (the driver's default user), and an explicit value always wins.
+func TestRunInit_CHUserDefaultsByProfile(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile string
+		chUser  string
+		want    string
+	}{
+		{"production default", "production", "", defaultMonitorUser},
+		{"paranoid default", "paranoid", "", defaultMonitorUser},
+		{"minimal default", "minimal", "", ""},
+		{"production explicit default user", "production", "default", "default"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output := filepath.Join(t.TempDir(), "c.yaml")
+			args := []string{"--profile", tt.profile, "--ch-host", "localhost", "--output", output}
+			if tt.chUser != "" {
+				args = append(args, "--ch-user", tt.chUser)
+			}
+			if code := runInit(args, io.Discard, io.Discard); code != 0 {
+				t.Fatalf("runInit(%v) exit = %d", args, code)
+			}
+			cfg, err := config.LoadConfig(output)
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+			if cfg.ClickHouse.Username != tt.want {
+				t.Errorf("clickhouse.username = %q, want %q", cfg.ClickHouse.Username, tt.want)
+			}
+		})
+	}
+}
+
 // TestRunInit_MinimalProfileHonorsCHUser closes the gap raised in
 // review: the renderer used to suppress `username:` for the minimal
 // profile unconditionally to keep the example bytes-minimal, which
@@ -659,5 +788,189 @@ func TestRunInit_InvalidProfileExits(t *testing.T) {
 	}
 	if !strings.Contains(body, "valid: production, minimal, paranoid") {
 		t.Errorf("expected error to list valid profiles in registry order, got: %s", body)
+	}
+}
+
+// TestRunInit_OTELSecureRendering pins the transport each flag combination
+// renders: secure written for a remote collector or a chosen value, and the
+// rule comment for a loopback collector left to the automatic choice.
+func TestRunInit_OTELSecureRendering(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       []string
+		wantLine   string // exact exporter line, or "" for the rule comment
+		wantTLS    bool
+		wantSource config.TransportSource
+		wantHint   bool
+	}{
+		{"remote automatic", []string{"--collector", "otel.example.com:4317"}, "      secure: true\n", true, config.TransportExplicit, true},
+		{"loopback automatic", []string{"--collector", "localhost:4317"}, "", false, config.TransportAutomatic, false},
+		{"default collector", nil, "", false, config.TransportAutomatic, false},
+		{"remote explicit false", []string{"--collector", "otel-collector.monitoring:4317", "--otel-secure=false"}, "      secure: false\n", false, config.TransportExplicit, false},
+		{"loopback explicit true", []string{"--collector", "localhost:4317", "--otel-secure"}, "      secure: true\n", true, config.TransportExplicit, true},
+		{"loopback explicit =true", []string{"--collector", "localhost:4317", "--otel-secure=true"}, "      secure: true\n", true, config.TransportExplicit, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output := filepath.Join(t.TempDir(), "c.yaml")
+			var out, errOut bytes.Buffer
+			args := append(append([]string{}, tt.args...), "--output", output)
+			if code := runInit(args, &out, &errOut); code != 0 {
+				t.Fatalf("exit %d: %s", code, errOut.String())
+			}
+			body, err := os.ReadFile(output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.wantLine == "" {
+				if strings.Contains(string(body), "      secure:") || !strings.Contains(string(body), otelSecureRuleComment("      ")) {
+					t.Errorf("want the rule comment and no secure key:\n%s", body)
+				}
+			} else if !strings.Contains(string(body), tt.wantLine) {
+				t.Errorf("want %q:\n%s", tt.wantLine, body)
+			}
+			cfg, err := config.LoadConfig(output)
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+			if got := cfg.Exporters.OTEL[0]; got.Secure != tt.wantTLS || got.SecureSource != tt.wantSource {
+				t.Errorf("loaded (%v, %s), want (%v, %s)", got.Secure, got.SecureSource, tt.wantTLS, tt.wantSource)
+			}
+			if !strings.Contains(out.String(), "OTEL exporter ") {
+				t.Errorf("init should print the transport:\n%s", out.String())
+			}
+			if hint := strings.Contains(out.String(), "click-dog test tls --collector "); hint != tt.wantHint {
+				t.Errorf("test tls hint shown = %v, want %v:\n%s", hint, tt.wantHint, out.String())
+			}
+		})
+	}
+}
+
+// TestRunInit_RejectsLeftoverArgs pins the strict parse: Go's flag package
+// reads "--otel-secure false" as --otel-secure plus a stray word and ignores
+// every later flag, which would render TLS and drop --collector.
+func TestRunInit_RejectsLeftoverArgs(t *testing.T) {
+	for _, args := range [][]string{
+		{"--otel-secure", "false", "--collector", "otel.example.com:4317"},
+		{"--otel-secure", "true"},
+		{"stray"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			dir := t.TempDir()
+			output := filepath.Join(dir, "c.yaml")
+			var errOut bytes.Buffer
+			if code := runInit(append(args, "--output", output), io.Discard, &errOut); code == 0 {
+				t.Fatal("want non-zero exit")
+			}
+			if _, err := os.Stat(output); err == nil {
+				t.Error("init wrote a file despite the stray argument")
+			}
+			if args[0] == "--otel-secure" && !strings.Contains(errOut.String(), "--otel-secure="+args[1]) {
+				t.Errorf("error should point to --otel-secure=%s: %s", args[1], errOut.String())
+			}
+		})
+	}
+}
+
+func TestRunInit_RefusesCACertWithPlaintext(t *testing.T) {
+	for _, args := range [][]string{
+		{"--otel-secure=false", "--otel-ca-cert", "ca.pem"},
+		{"--otel-ca-cert", "ca.pem", "--otel-secure=false"},
+	} {
+		var errOut bytes.Buffer
+		if code := runInit(append(args, "--collector", "localhost:4317", "--output", filepath.Join(t.TempDir(), "c.yaml")), io.Discard, &errOut); code == 0 {
+			t.Fatalf("%v: want refusal", args)
+		}
+		if !strings.Contains(errOut.String(), "--otel-ca-cert implies TLS") {
+			t.Errorf("%v: %s", args, errOut.String())
+		}
+	}
+}
+
+func TestRunInit_PrintOTELSecure(t *testing.T) {
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--collector", "otel.example.com:4317"}, "true"},
+		{[]string{"--collector", "localhost:4317"}, "false"},
+		{[]string{"--collector", "127.example.com:4317"}, "true"},
+		{[]string{"--collector", "localhost:4317", "--otel-ca-cert", "ca.pem"}, "true"},
+		{[]string{"--collector", "localhost:4317", "--otel-secure"}, "true"},
+		{[]string{"--collector", "otel.example.com:4317", "--otel-secure=false"}, "false"},
+	}
+	dir := t.TempDir()
+	existing := filepath.Join(dir, "exists.yaml")
+	if err := os.WriteFile(existing, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range tests {
+		var out, errOut bytes.Buffer
+		// An existing --output without --force must not matter: nothing is written.
+		args := append([]string{"--print-otel-secure", "--output", existing}, tt.args...)
+		if code := runInit(args, &out, &errOut); code != 0 {
+			t.Fatalf("%v: exit %d: %s", tt.args, code, errOut.String())
+		}
+		if got := strings.TrimSpace(out.String()); got != tt.want {
+			t.Errorf("%v: printed %q, want %q", tt.args, got, tt.want)
+		}
+	}
+	var errOut bytes.Buffer
+	if code := runInit([]string{"--print-otel-secure"}, io.Discard, &errOut); code == 0 || !strings.Contains(errOut.String(), "requires --collector") {
+		t.Errorf("--print-otel-secure without --collector: code %d, %s", code, errOut.String())
+	}
+}
+
+// A listen address fails config load, so init refuses it before answering or
+// writing, rather than suggesting a TLS check against the local host.
+func TestRunInit_RefusesListenAddressCollector(t *testing.T) {
+	for _, addr := range []string{"0.0.0.0:4317", "[::]:4317"} {
+		var errOut bytes.Buffer
+		if code := runInit([]string{"--print-otel-secure", "--collector", addr}, io.Discard, &errOut); code == 0 || !strings.Contains(errOut.String(), "is a listen address") {
+			t.Errorf("--print-otel-secure --collector %s: code %d, %s", addr, code, errOut.String())
+		}
+		path := filepath.Join(t.TempDir(), "c.yaml")
+		errOut.Reset()
+		if code := runInit([]string{"--collector", addr, "--output", path}, io.Discard, &errOut); code == 0 || !strings.Contains(errOut.String(), "is a listen address") {
+			t.Errorf("init --collector %s: code %d, %s", addr, code, errOut.String())
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("init --collector %s wrote %s", addr, path)
+		}
+	}
+}
+
+// The transport line init prints names the source validate will report for
+// the file it writes: a remote collector's rendered secure key is explicit.
+func TestRunInit_TransportNoteMatchesRenderedSource(t *testing.T) {
+	tests := []struct {
+		collector string
+		want      string
+	}{
+		{"otel.example.com:4317", "explicit"},
+		{"localhost:4317", "automatic"},
+	}
+	for _, tt := range tests {
+		var out bytes.Buffer
+		path := filepath.Join(t.TempDir(), "c.yaml")
+		if code := runInit([]string{"--collector", tt.collector, "--output", path}, &out, io.Discard); code != 0 {
+			t.Fatalf("%s: exit %d", tt.collector, code)
+		}
+		line := ""
+		for _, l := range strings.Split(out.String(), "\n") {
+			if strings.HasPrefix(l, "OTEL exporter ") {
+				line = l
+			}
+		}
+		if !strings.Contains(line, tt.want) {
+			t.Errorf("%s: transport line %q, want source %q", tt.collector, line, tt.want)
+		}
+		cfg, err := config.LoadConfig(path)
+		if err != nil {
+			t.Fatalf("%s: %v", tt.collector, err)
+		}
+		if got := string(cfg.Exporters.OTEL[0].SecureSource); !strings.Contains(line, got) {
+			t.Errorf("%s: printed %q but the written file loads with source %q", tt.collector, line, got)
+		}
 	}
 }

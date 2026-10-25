@@ -89,8 +89,8 @@ var metricDescriptors = []MetricDescriptor{
 	{Key: MetricQueryLogEnrichmentFailures, Kind: MetricKindCounter, ValueType: MetricValueTypeInt64, Help: "Total enrichment attempts that returned an error."},
 	{Key: MetricQueryLogEnrichmentMatchRatio, Kind: MetricKindGauge, ValueType: MetricValueTypeFloat64, Help: "Last cycle's match ratio (matched query_ids / requested query_ids); 0 before first successful enrichment."},
 	{Key: MetricSpansWithQueryIDRatio, Kind: MetricKindGauge, ValueType: MetricValueTypeFloat64, Help: "Last cycle's ratio of fetched spans carrying clickhouse.query_id (0 before first observation)."},
-	{Key: MetricNormalizedQuerySupported, Kind: MetricKindGauge, ValueType: MetricValueTypeInt64, Help: "Whether system.query_log.normalized_query_hash is available and in use (1=yes, 0=no). In cluster query mode this requires all cluster replicas to support it. Set once at startup."},
-	{Key: MetricQueryOperationSupported, Kind: MetricKindGauge, ValueType: MetricValueTypeInt64, Help: "Whether system.query_log.query_kind is available and query operation enrichment is in use (1=yes, 0=no). In cluster query mode this requires all cluster replicas to support it. Set once at startup."},
+	{Key: MetricNormalizedQuerySupported, Kind: MetricKindGauge, ValueType: MetricValueTypeInt64, Help: "Whether system.query_log.normalized_query_hash is available and in use (1=yes, 0=no). In cluster mode this requires all cluster replicas to support it. Set once at startup."},
+	{Key: MetricQueryOperationSupported, Kind: MetricKindGauge, ValueType: MetricValueTypeInt64, Help: "Whether system.query_log.query_kind is available and query operation enrichment is in use (1=yes, 0=no). In cluster mode this requires all cluster replicas to support it. Set once at startup."},
 }
 
 var descriptorByKey = func() map[string]MetricDescriptor {

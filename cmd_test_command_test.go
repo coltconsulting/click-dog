@@ -53,7 +53,9 @@ func (e *testCommandExporter) Close(context.Context) error {
 type fakeTracingTestReader struct {
 	queryErr       error
 	fetchErr       error
+	fetchErrors    []error
 	fetchResponses [][]model.OpenTelemetrySpan
+	queryCalls     int
 	fetchCalls     int
 	traceIDs       [][]string
 	lookbackDays   []int
@@ -65,6 +67,7 @@ type fakeTracingTestReader struct {
 }
 
 func (r *fakeTracingTestReader) ExecuteTracingTestQuery(_ context.Context, spanContext oteltrace.SpanContext, queryID string) error {
+	r.queryCalls++
 	r.gotSpanContext = spanContext
 	r.gotQueryID = queryID
 	return r.queryErr
@@ -76,6 +79,9 @@ func (r *fakeTracingTestReader) FetchSpansForTraceIDs(_ context.Context, traceID
 	r.lookbackDays = append(r.lookbackDays, lookbackDays)
 	r.limits = append(r.limits, limit)
 	r.blacklists = append(r.blacklists, append([]string(nil), blacklist...))
+	if r.fetchCalls <= len(r.fetchErrors) && r.fetchErrors[r.fetchCalls-1] != nil {
+		return nil, r.fetchErrors[r.fetchCalls-1]
+	}
 	if r.fetchErr != nil {
 		return nil, r.fetchErr
 	}

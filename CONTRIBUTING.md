@@ -38,8 +38,10 @@ Maintainers check sign-off during review. There is no automated DCO bot yet. If 
 - Tests for new behavior. Update existing tests when behavior changes.
 - `make check` must pass locally before opening the PR. It runs formatting, unit
   tests, the installer/release shell suites, linting, and a build. It needs the
-  pinned tools, so run `make dev-setup` once first; `make check-fast`
-  (formatting + unit tests) is the quick loop while you work.
+  pinned tools, so run `make dev-setup` once first: the gates refuse a linter
+  or other tool from your `PATH` that is not the pinned version, and
+  `make doctor` shows which ones differ. `make check-fast` (formatting + unit
+  tests) is the quick loop while you work.
 - For substantial changes, open an issue first to align on direction.
 
 ## How Your PR Lands

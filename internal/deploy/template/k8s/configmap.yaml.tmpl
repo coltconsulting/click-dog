@@ -17,9 +17,9 @@ data:
       max_idle_conns: 1
       query_timeout_s: 30
 {{- if .ClickHouseCluster }}
-      # Read across all shards from this one instance via cluster() queries.
-      # Both fields are required — use_cluster_queries with an empty cluster is a
-      # no-op that reads only the single pod the Service routes to.
+      # Cluster mode: this one instance reads one replica per shard via
+      # cluster() queries. Both fields are required — validation rejects
+      # use_cluster_queries without a cluster name.
       use_cluster_queries: true
       cluster: {{ yamlScalar .ClickHouseCluster }}
 {{- end }}
@@ -28,6 +28,20 @@ data:
       otel:
         - collector_address: {{ yamlScalar .CollectorAddress }}
           service_name: click-dog-monitor
+{{- if .OTELSecureSet }}
+          secure: {{ .OTELSecure }}
+{{- if .OTELSecure }}
+          # Private CA or mTLS: the Deployment mounts the optional
+          # click-dog-otel-ca ConfigMap and click-dog-otel-client Secret at
+          # /etc/click-dog/tls/. Uncomment a path only once its source exists.
+          # ca_cert: /etc/click-dog/tls/ca.pem
+          # client_cert: /etc/click-dog/tls/client.crt
+          # client_key: /etc/click-dog/tls/client.key
+{{- end }}
+{{- else }}
+          # secure omitted: plaintext while collector_address is loopback (localhost,
+          # 127.0.0.0/8, ::1, unix:), TLS for any other collector. Set it to override.
+{{- end }}
 
     monitor:
       enabled: true

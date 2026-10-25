@@ -22,17 +22,21 @@ make test-integration      # Full integration suite (requires Docker)
 make check-release    # Pre-tag gate: clean master + full local verification
 ```
 
-- Go 1.25+ required for compiling (`go` directive); CI and releases pin Go 1.26.6 so the govulncheck gate runs on the reviewed toolchain. Go 1.26.5 cleared GO-2026-5856 in `crypto/tls`, and Go 1.26.6 additionally clears GO-2026-6218/6091/6090/6089/5972/5026 across `net/url`, `html/template`, `crypto/tls`, `net/http`, and `encoding/asn1`
+- Go 1.26+ required for compiling (`go` directive; `golang.org/x/net` v0.60.0 and the other `golang.org/x` modules require it); CI and releases pin Go 1.26.10 so the govulncheck gate runs on the reviewed toolchain. Go 1.26.5 cleared GO-2026-5856 in `crypto/tls`, Go 1.26.6 cleared GO-2026-6218/6091/6090/6089/5972/5026 across `net/url`, `html/template`, `crypto/tls`, `net/http`, and `encoding/asn1`, Go 1.26.9 cleared GO-2026-6617/6613/6612/6611/6610/6608/6607/6605/6603/6600/6599 across `net/http`, `net/textproto`, `mime/multipart`, `crypto/tls`, and `html/template` (the HTTP/2 ones also need `golang.org/x/net` v0.60.0), and Go 1.26.10 additionally clears GO-2026-6809 in `crypto/x509`
 - Integration tests use Docker Compose with a 3-node ClickHouse cluster
 - `make dev-setup` installs pinned repo-managed tools under `.agent-cache/`;
-  versions are sourced from `scripts/tool-versions.env`
+  versions are sourced from `scripts/tool-versions.env`. The gates refuse a
+  golangci-lint, govulncheck, actionlint, kubeconform, shellcheck, or OpenSpec
+  that is not the pinned version (`scripts/lib/tool-pins.sh`), so run
+  `make dev-setup` in a fresh worktree. `ALLOW_UNPINNED_TOOLS=1` runs the
+  substitute anyway; report such a run as unpinned, not as a passing gate
 - Some unit tests bind loopback HTTP/gRPC listeners and some need a writable Go
   cache. In a restricted environment run `make check`, then state plainly which
   parts could not run and why — do not report a partial run as a passing gate.
   `make doctor` reports both constraints
 - Integration tests are tagged: `// +build integration`
-- CI runs test, lint, and linux/amd64 build on eligible non-draft PRs and non-PR events; PR tests omit `-race`, while master/tag/manual/scheduled runs use it. Integration tests also run on non-draft PRs that touch ClickHouse, processor, leader, health, exporter, analysis, query-family, filtering, config, resilience, integration-fixture, command, dependency, integration-test, or CI-workflow paths; `govulncheck` still skips PRs, and the linux/arm64 cross-build runs on `v*` tags only. PRs whose changes all match `docs/**`, `mkdocs.yml`, or `**/*.md` skip full CI; `docs.yml` separately validates its `docs/**`/`mkdocs.yml` paths
-- `govulncheck ./...` is enforced both in CI and `make check-release`; install with `go install golang.org/x/vuln/cmd/govulncheck@v1.3.0` (CI pin)
+- CI runs test, lint, and linux/amd64 build on eligible non-draft PRs and non-PR events; PR tests omit `-race`, while master/tag/manual/scheduled runs use it. Integration tests also run on non-draft PRs that touch ClickHouse, processor, leader, health, exporter, analysis, query-family, filtering, config, resilience, integration-fixture, command, dependency (including `third_party/`), integration-test, or CI-workflow paths; `govulncheck` still skips PRs, and the linux/arm64 cross-build runs on `v*` tags only. PRs whose changes all match `docs/**`, `mkdocs.yml`, or `**/*.md` skip full CI; `docs.yml` separately validates its `docs/**`/`mkdocs.yml` paths
+- `govulncheck ./...` is enforced both in CI and `make check-release`; install with `go install golang.org/x/vuln/cmd/govulncheck@v1.3.0` (CI pin). Both run it through `scripts/lib/vulncheck.sh`, which also scans the upstream release of every module `go.mod` replaces with a `third_party/` copy, because govulncheck cannot match advisories against a local replacement
 
 ## Agent Workflow
 
@@ -121,6 +125,7 @@ cmd_validate.go              `click-dog validate` — offline config validation 
 cmd_backfill.go              `click-dog backfill` — arg surface only; rewrites onto main.go's mode flags
 cmd_test_command.go          `click-dog test` — smoke-test command family
 cmd_test_export.go           `click-dog test export` — synthetic span sender
+cmd_test_tls.go              `click-dog test tls` — OTLP receiver TLS verdict (the installer's TLS check)
 cmd_test_tracing.go          `click-dog test tracing` — native trace propagation smoke test
 cmd_test_span.go             Deprecated `click-dog test-span` compatibility alias
 cmd_flush.go                 `click-dog flush` — signal a running instance to export
@@ -169,6 +174,7 @@ Other top-level dirs:
 
 ```
 testing/                  Docker Compose + configs for integration tests
+third_party/              Patched copies of dependencies, built via `replace` in go.mod
 deploy/                   Ansible playbooks + Kubernetes manifests + install.sh
 dashboards/               Datadog dashboard JSON templates
 examples/                 Public release starter configs (parity-tested)

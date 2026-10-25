@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"slices"
 	"sort"
@@ -690,13 +691,13 @@ func TestHealthDashboard_BackoffConditionalFormatsFirstMatch(t *testing.T) {
 func TestQueryDashboard_ExactFamilyWidgetsUseNormalizedFacets(t *testing.T) {
 	dash := loadQueryDashboard(t)
 
-	note := queryDashboardNoteContent(t, dash, "## Exact Query Families")
+	note := queryDashboardNoteContent(t, dash, "## Exact Query Families", "@query_log.normalized_query_hash")
 	for _, want := range []string{"@query_log.normalized_query_hash", "@query_log.normalized_query"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("exact family note missing %q", want)
 		}
 	}
-	resourceNote := queryDashboardNoteContent(t, dash, "## Resource Usage")
+	resourceNote := queryDashboardNoteContent(t, dash, "## Resource Usage", "older spans")
 	for _, want := range []string{"@query_log.normalized_query_hash", "older spans"} {
 		if !strings.Contains(resourceNote, want) {
 			t.Errorf("resource usage note missing %q", want)
@@ -728,9 +729,11 @@ func TestQueryDashboard_ExactFamilyWidgetsUseNormalizedFacets(t *testing.T) {
 }
 
 // TestQueryDashboard_AutomaticSectionsBeforeLogComment is the contract test
-// for issue #85: every section that depends on `log_comment` tagging must
-// sit below every section that does not, so a fresh-import dashboard shows
-// useful automatic-dimension data first.
+// for issue #85: the main automatic sections precede optional attribution.
+// The requested layout puts exact-family p95 detail last: failure and resource
+// family rankings already provide automatic value above the optional attribution
+// sections. Keep that detailed appendix below both overview types, even when the
+// optional sections are empty, rather than moving it back on the next reorder.
 func TestQueryDashboard_AutomaticSectionsBeforeLogComment(t *testing.T) {
 	dash := loadQueryDashboard(t)
 
@@ -782,12 +785,22 @@ func TestQueryDashboard_AutomaticSectionsBeforeLogComment(t *testing.T) {
 		t.Fatal("no section-header notes found in query dashboard")
 	}
 
-	var auto, logCmt []section
+	var auto, logCmt, detail []section
 	for _, s := range sections {
-		if s.needsLogCmt {
+		if s.title == "Exact Query Families" {
+			detail = append(detail, s)
+		} else if s.needsLogCmt {
 			logCmt = append(logCmt, s)
 		} else {
 			auto = append(auto, s)
+		}
+	}
+	if len(detail) != 1 {
+		t.Fatalf("want one exact-family detail section, got %d", len(detail))
+	}
+	for _, s := range slices.Concat(auto, logCmt) {
+		if s.y >= detail[0].y {
+			t.Errorf("overview section %q at y=%v must precede exact-family detail at y=%v", s.title, s.y, detail[0].y)
 		}
 	}
 	if len(auto) == 0 {
@@ -823,15 +836,14 @@ func TestQueryDashboard_CockpitOnFirstScreen(t *testing.T) {
 	dash := loadQueryDashboard(t)
 
 	wantTitles := []string{
-		"Exported queries (1h)",
+		"Exported queries",
 		"p95 latency",
 		"p99 latency",
 		"Slow queries (>1s)",
 		"Top user",
 		"Top client",
 	}
-	// Header note + cockpit section header + cockpit tile row land y=0..4;
-	// volume/latency timeseries start at y=5; y>=6 is below the fold.
+	// Four summary values start at y=3; wider contributor tiles start at y=5.
 	const firstScreenYLimit = 6.0
 	for _, title := range wantTitles {
 		widget := findWidgetByTitle(t, dash, title)
@@ -872,7 +884,7 @@ func TestQueryDashboard_VolumeLabelsDisambiguated(t *testing.T) {
 
 	// Every count/volume widget must carry disambiguated wording.
 	for _, title := range []string{
-		"Exported queries (1h)",
+		"Exported queries",
 		"Exported queries per minute",
 		"Exported queries by host",
 		"Exported queries by tables accessed",
@@ -1102,31 +1114,58 @@ func findWidgetDefinitionByTitle(t *testing.T, dash map[string]interface{}, titl
 	return findWidgetByTitle(t, dash, title)["definition"].(map[string]interface{})
 }
 
-func queryDashboardNoteContent(t *testing.T, dash map[string]interface{}, marker string) string {
+// Section headings also appear as short top-level stubs. Supply additional
+// markers to select the detailed reference note; ambiguous matches fail instead
+// of silently checking whichever note happens to occur first.
+func queryDashboardNoteContent(t *testing.T, dash map[string]interface{}, markers ...string) string {
+	t.Helper()
+	if len(markers) == 0 {
+		t.Fatal("note lookup requires at least one marker")
+	}
+	var matches []string
+	for _, content := range dashboardNotes(t, dash) {
+		if !slices.ContainsFunc(markers, func(marker string) bool { return !strings.Contains(content, marker) }) {
+			matches = append(matches, content)
+		}
+	}
+	if len(matches) != 1 {
+		t.Fatalf("want one note containing all markers %q, found %d", markers, len(matches))
+	}
+	return matches[0]
+}
+
+// Reference notes can live inside collapsible groups without dropping their
+// source-contract and legacy scrape-mapping checks.
+func dashboardNotes(t *testing.T, dash map[string]interface{}) []string {
 	t.Helper()
 	widgets, ok := dash["widgets"].([]interface{})
 	if !ok {
 		t.Fatal("dashboard widgets missing or wrong type")
 	}
+	var notes []string
 	for _, widget := range widgets {
 		widgetObj, ok := widget.(map[string]interface{})
 		if !ok {
 			continue
 		}
 		def, ok := widgetObj["definition"].(map[string]interface{})
-		if !ok || def["type"] != "note" {
+		if !ok {
+			continue
+		}
+		if def["type"] == "group" {
+			notes = append(notes, dashboardNotes(t, def)...)
+			continue
+		}
+		if def["type"] != "note" {
 			continue
 		}
 		content, ok := def["content"].(string)
 		if !ok {
 			continue
 		}
-		if strings.Contains(content, marker) {
-			return content
-		}
+		notes = append(notes, content)
 	}
-	t.Fatalf("note containing %q not found", marker)
-	return ""
+	return notes
 }
 
 func widgetGroupByFacets(t *testing.T, def map[string]interface{}) []string {
@@ -1164,6 +1203,15 @@ func widgetSearchQueries(t *testing.T, def map[string]interface{}) []string {
 
 func queryDashboardSpanSearchQueries(t *testing.T, dash map[string]interface{}) []string {
 	t.Helper()
+	out := collectDashboardSpanSearchQueries(t, dash)
+	if len(out) == 0 {
+		t.Fatal("no span search queries found in query dashboard")
+	}
+	return out
+}
+
+func collectDashboardSpanSearchQueries(t *testing.T, dash map[string]interface{}) []string {
+	t.Helper()
 	widgets, ok := dash["widgets"].([]interface{})
 	if !ok {
 		t.Fatal("dashboard widgets missing or wrong type")
@@ -1185,7 +1233,7 @@ func queryDashboardSpanSearchQueries(t *testing.T, dash map[string]interface{}) 
 			title = "<untitled>"
 		}
 		if def["type"] == "group" {
-			t.Errorf("query dashboard does not use group widgets; update queryDashboardSpanSearchQueries before adding grouped widget %q", title)
+			out = append(out, collectDashboardSpanSearchQueries(t, def)...)
 			continue
 		}
 		rawRequests, ok := def["requests"]
@@ -1234,9 +1282,6 @@ func queryDashboardSpanSearchQueries(t *testing.T, dash map[string]interface{}) 
 				out = append(out, s)
 			}
 		}
-	}
-	if len(out) == 0 {
-		t.Fatal("no span search queries found in query dashboard")
 	}
 	return out
 }
@@ -1656,33 +1701,7 @@ func walkQueries(node interface{}, visit func(string)) {
 // a layout separator) is added later.
 func scrapeConfigNoteContent(t *testing.T, dash map[string]interface{}) string {
 	t.Helper()
-	widgets, ok := dash["widgets"].([]interface{})
-	if !ok {
-		t.Fatal("dashboard widgets missing or wrong type")
-	}
-	marker := "namespace: " + healthDashboardOpenMetricsNamespace
-	for _, w := range widgets {
-		obj, ok := w.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		def, ok := obj["definition"].(map[string]interface{})
-		if !ok {
-			continue
-		}
-		if def["type"] != "note" {
-			continue
-		}
-		content, ok := def["content"].(string)
-		if !ok {
-			t.Fatalf("note widget content has type %T, want string", def["content"])
-		}
-		if strings.Contains(content, marker) {
-			return content
-		}
-	}
-	t.Fatalf("no note widget containing %q found in health dashboard", marker)
-	return ""
+	return queryDashboardNoteContent(t, dash, "namespace: "+healthDashboardOpenMetricsNamespace)
 }
 
 // renamePairRE captures `      - click_dog_foo_total: foo.bar` lines from the
@@ -2159,33 +2178,211 @@ func TestReconcileDashboard(t *testing.T) {
 
 var errFakeList = errors.New("boom")
 
-// TestQueryDashboard_WidgetTypesAreImportable pins widget types to the ones
+// TestEmbeddedDashboards_WidgetTypesAreImportable pins widget types to the ones
 // we've actually imported — an API-invalid distribution widget passed our
 // structure tests but broke the whole dashboard POST in v26.06.4.
-func TestQueryDashboard_WidgetTypesAreImportable(t *testing.T) {
+func TestEmbeddedDashboards_WidgetTypesAreImportable(t *testing.T) {
 	importable := map[string]bool{
-		"note":        true,
-		"query_value": true,
-		"toplist":     true,
-		"timeseries":  true,
+		"note": true, "query_value": true, "toplist": true, "timeseries": true,
+		// Imported and rendered in the Datadog review copy on 2026-09-20.
+		"query_table": true, "group": true,
 	}
-	dash := loadQueryDashboard(t)
-	widgets, ok := dash["widgets"].([]interface{})
+	for _, d := range shippedDashboards {
+		t.Run(d.name, func(t *testing.T) {
+			walkDashboardWidgets(t, loadEmbeddedDashboard(t, d), func(w, def map[string]interface{}) {
+				typ, _ := def["type"].(string)
+				if !importable[typ] {
+					t.Errorf("widget %v (%v) uses type %q not in the import-verified allowlist; verify it imports against the Datadog API before adding, then widen this test", w["id"], def["title"], typ)
+				}
+			})
+		})
+	}
+}
+
+func loadEmbeddedDashboard(t *testing.T, d dashboardDef) map[string]interface{} {
+	t.Helper()
+	data, err := embeddedDashboards.ReadFile("dashboards/" + d.filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dash map[string]interface{}
+	if err := json.Unmarshal(data, &dash); err != nil {
+		t.Fatal(err)
+	}
+	return dash
+}
+
+func dashboardWidgetObjects(t *testing.T, dash map[string]interface{}) []map[string]interface{} {
+	t.Helper()
+	raw, ok := dash["widgets"].([]interface{})
 	if !ok {
-		t.Fatal("dashboard widgets missing or wrong type")
+		t.Fatalf("dashboard/group %v widgets has type %T, want array", dash["title"], dash["widgets"])
 	}
+	var widgets []map[string]interface{}
+	for i, value := range raw {
+		w, ok := value.(map[string]interface{})
+		if !ok {
+			t.Fatalf("dashboard/group %v widget at index %d has type %T, want object", dash["title"], i, value)
+		}
+		widgets = append(widgets, w)
+	}
+	return widgets
+}
+
+func dashboardWidgetDefinition(t *testing.T, w map[string]interface{}) map[string]interface{} {
+	t.Helper()
+	def, ok := w["definition"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("widget %v definition has type %T, want object", w["id"], w["definition"])
+	}
+	return def
+}
+
+func walkDashboardWidgets(t *testing.T, dash map[string]interface{}, visit func(map[string]interface{}, map[string]interface{})) {
+	t.Helper()
+	for _, w := range dashboardWidgetObjects(t, dash) {
+		def := dashboardWidgetDefinition(t, w)
+		visit(w, def)
+		if def["type"] == "group" {
+			walkDashboardWidgets(t, def, visit)
+		}
+	}
+}
+
+func TestEmbeddedDashboards_TraceLinkContract(t *testing.T) {
+	for _, d := range shippedDashboards {
+		t.Run(d.name, func(t *testing.T) {
+			dash := loadEmbeddedDashboard(t, d)
+			var requiredVariables []string
+			for _, value := range dash["template_variables"].([]interface{}) {
+				v := value.(map[string]interface{})
+				// Pin the whole-variable syntax verified live in review.md. Local
+				// tests cannot detect changes in Datadog's expansion behavior.
+				// Do not change to key:{{$name.value}}: that forces an existence
+				// filter when the selected value is the all-values wildcard.
+				requiredVariables = append(requiredVariables, "{{$"+v["name"].(string)+"}}")
+			}
+			familyLinks, overviewLinks := 0, 0
+			walkDashboardWidgets(t, dash, func(w, def map[string]interface{}) {
+				isFamily := d.name == "query" && def["type"] == "query_table" && slices.Contains(widgetGroupByFacets(t, def), "@query_log.normalized_query_hash")
+				isOverview := d.name == "query" && def["title"] == "Exported queries per minute"
+				rawLinks, hasLinks := def["custom_links"]
+				links, ok := rawLinks.([]interface{})
+				if !isFamily && !isOverview {
+					// Existing empty arrays carry no links. Any actual link on an
+					// unrecognized widget must be reviewed and added to this contract,
+					// including links in nested groups or another shipped dashboard.
+					if hasLinks && (!ok || len(links) != 0) {
+						t.Errorf("widget %v (%v) carries unreviewed custom_links; extend the trace-link contract before adding links here", w["id"], def["title"])
+					}
+					return
+				}
+				if !ok || len(links) != 1 {
+					t.Fatalf("widget %v must have exactly one trace link", w["id"])
+				}
+				link := links[0].(map[string]interface{})
+				raw, _ := link["link"].(string)
+				u, err := url.Parse(raw)
+				if err != nil {
+					t.Fatalf("widget %v trace link: %v", w["id"], err)
+				}
+				q := u.Query()
+				if u.Path != "/apm/traces" || q.Get("from_ts") != "{{timestamp_start}}" || q.Get("to_ts") != "{{timestamp_end}}" {
+					t.Errorf("widget %v trace link must preserve the widget time range: %s", w["id"], raw)
+				}
+				wantQuery := "resource_name:query @click_dog.source:span_log " + strings.Join(requiredVariables, " ")
+				wantLabel := "View matching traces"
+				if isFamily {
+					familyLinks++
+					wantLabel = "View query family traces"
+					wantQuery += " @query_log.normalized_query_hash:{{@query_log.normalized_query_hash.value}}"
+					if def["title"] == "Top failing query families" {
+						wantQuery += " @query_log.exception_code:>0"
+					}
+				} else {
+					overviewLinks++
+				}
+				if q.Get("query") != wantQuery {
+					t.Errorf("widget %v trace query = %q, want %q (no SQL preview or forced existence filters)", w["id"], q.Get("query"), wantQuery)
+				}
+				if link["label"] != wantLabel {
+					t.Errorf("widget %v trace link label = %v, want %q", w["id"], link["label"], wantLabel)
+				}
+				if _, ok := link["override_label"]; ok {
+					t.Errorf("widget %v custom link must not combine label and override_label; Datadog rejects that schema", w["id"])
+				}
+			})
+			if d.name == "query" && (familyLinks != 5 || overviewLinks != 1) {
+				t.Errorf("checked %d family and %d overview links, want 5 and 1", familyLinks, overviewLinks)
+			}
+		})
+	}
+}
+
+// Fixed reflow preserves the coordinates; matching array order also makes the
+// import deterministic. Health previously placed lifetime counters first.
+func TestEmbeddedDashboards_ImportOrderAndLayout(t *testing.T) {
+	for _, d := range shippedDashboards {
+		t.Run(d.name, func(t *testing.T) {
+			dash := loadEmbeddedDashboard(t, d)
+			if dash["reflow_type"] != "fixed" {
+				t.Errorf("reflow_type = %v, want fixed to preserve widget coordinates on import", dash["reflow_type"])
+			}
+			assertDashboardLayout(t, dash)
+		})
+	}
+}
+
+type dashboardWidgetLayout struct {
+	x, y, width, height float64
+}
+
+func checkedDashboardLayout(t *testing.T, w map[string]interface{}) dashboardWidgetLayout {
+	t.Helper()
+	l, ok := w["layout"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("widget %v layout has type %T, want object", w["id"], w["layout"])
+	}
+	var layout dashboardWidgetLayout
+	for _, field := range []struct {
+		name string
+		dest *float64
+	}{
+		{"x", &layout.x},
+		{"y", &layout.y},
+		{"width", &layout.width},
+		{"height", &layout.height},
+	} {
+		value, ok := l[field.name].(float64)
+		if !ok {
+			t.Fatalf("widget %v layout.%s has type %T, want number", w["id"], field.name, l[field.name])
+		}
+		*field.dest = value
+	}
+	return layout
+}
+
+func assertDashboardLayout(t *testing.T, dash map[string]interface{}) {
+	t.Helper()
+	widgets := dashboardWidgetObjects(t, dash)
+	var layouts []dashboardWidgetLayout
 	for i, w := range widgets {
-		obj, ok := w.(map[string]interface{})
-		if !ok {
-			t.Fatalf("widget %d has type %T, want object", i, w)
+		l := checkedDashboardLayout(t, w)
+		if l.x < 0 || l.y < 0 || l.width <= 0 || l.height <= 0 || l.x+l.width > 12 {
+			t.Errorf("widget %v has invalid layout %+v", w["id"], l)
 		}
-		def, ok := obj["definition"].(map[string]interface{})
-		if !ok {
-			t.Fatalf("widget %d definition has type %T, want object", i, obj["definition"])
+		for j, p := range layouts {
+			if j == i-1 && (p.y > l.y || (p.y == l.y && p.x > l.x)) {
+				t.Errorf("widget %v precedes %v in layout but follows it in the import array", w["id"], widgets[j]["id"])
+			}
+			if l.x < p.x+p.width && p.x < l.x+l.width && l.y < p.y+p.height && p.y < l.y+l.height {
+				t.Errorf("widgets %v and %v overlap", w["id"], widgets[j]["id"])
+			}
 		}
-		typ, _ := def["type"].(string)
-		if !importable[typ] {
-			t.Errorf("widget %d (%v) uses type %q not in the import-verified allowlist; verify it imports against the Datadog API before adding, then widen this test", i, def["title"], typ)
+		layouts = append(layouts, l)
+		def := dashboardWidgetDefinition(t, w)
+		if def["type"] == "group" {
+			assertDashboardLayout(t, def)
 		}
 	}
 }

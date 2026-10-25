@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"golang.org/x/term"
+
+	"github.com/coltconsulting/click-dog/internal/config"
 )
 
 // profileEntry pairs a profile's name with the one-line description shown in
@@ -105,12 +107,13 @@ func flagDescriptionForProfile() string {
 // defaults for the three values the user is most likely to want to set.
 //
 // The new seed flags added for install.sh's benefit (--ch-port, --ch-secure,
-// --ch-user, --otel-secure, --splunk-hec-endpoint, --ha-keeper) are
-// intentionally NOT in this set. They pre-fill defaults but do not suppress
-// the short prompt — a TTY invocation of `click-dog init --ch-secure` still
-// asks for host / collector / service / profile so the four most-edited
-// values don't silently take their localhost defaults. install.sh always
-// pipes a non-TTY stdin so prompt suppression is moot for the scripted path.
+// --ch-user, --otel-secure, --otel-ca-cert, --splunk-hec-endpoint,
+// --ha-keeper) are intentionally NOT in this set. They pre-fill defaults but
+// do not suppress the short prompt — a TTY invocation of `click-dog init
+// --ch-secure` still asks for host / collector / service / profile so the
+// four most-edited values don't silently take their localhost defaults.
+// install.sh always pipes a non-TTY stdin so prompt suppression is moot for
+// the scripted path.
 func valueFlagsExplicitlySet(fs *flag.FlagSet) bool {
 	set := false
 	fs.Visit(func(f *flag.Flag) {
@@ -142,11 +145,13 @@ func runInit(args []string, out, errOut io.Writer) int {
 	chHost := fs.String("ch-host", "localhost", "ClickHouse host")
 	chPort := fs.Int("ch-port", 9000, "ClickHouse port (default 9000, or 9440 if --ch-secure and --ch-port is not given)")
 	chSecure := fs.Bool("ch-secure", false, "Use TLS for the ClickHouse connection")
-	chUser := fs.String("ch-user", "default", "ClickHouse username (install.sh quickstart overrides to its dedicated monitoring user)")
+	chUser := fs.String("ch-user", "", "ClickHouse username (default: "+defaultMonitorUser+"; the minimal profile connects as the driver's default user)")
 	chPasswordFile := fs.String("ch-password-file", "", "Emit clickhouse.password_file: <path> instead of password: ${CLICKHOUSE_PASSWORD} (file-based secret)")
 	collector := fs.String("collector", "localhost:4317", "OTEL collector address")
 	service := fs.String("service", "click-dog-monitor", "Service name for OTEL spans")
-	otelSecure := fs.Bool("otel-secure", false, "Use TLS for the OTEL collector connection")
+	otelSecureValue := fs.Bool("otel-secure", false, "OTEL collector transport: --otel-secure=true for TLS, --otel-secure=false for plaintext (unset: plaintext only for a loopback collector, TLS otherwise)")
+	otelCACert := fs.String("otel-ca-cert", "", "CA certificate file for the OTEL collector's TLS (renders exporters.otel[0].ca_cert; implies TLS)")
+	printOTELSecure := fs.Bool("print-otel-secure", false, "Print true or false, the OTEL transport --collector, --otel-secure and --otel-ca-cert give, and exit without writing")
 	splunkHEC := fs.String("splunk-hec-endpoint", "", "Splunk HEC endpoint (empty = Splunk exporter disabled)")
 	haKeeper := fs.String("ha-keeper", "", "Comma-separated Keeper hosts (empty = HA disabled)")
 	output := fs.String("output", "click-dog.yaml", "Output config file path")
@@ -179,13 +184,42 @@ Flags:
 		}
 		return 2
 	}
+	if err := rejectLeftoverArgs("click-dog init", fs); err != nil {
+		_, _ = fmt.Fprintln(errOut, err)
+		return 2
+	}
+	var otelSecure *bool
+	if flagWasSet(fs, "otel-secure") {
+		otelSecure = otelSecureValue
+	}
+	if otelSecure != nil && !*otelSecure && *otelCACert != "" {
+		_, _ = fmt.Fprintln(errOut, "Error: --otel-ca-cert implies TLS and cannot be combined with --otel-secure=false")
+		return 2
+	}
+
+	// --print-otel-secure answers for scripts (install.sh, Ansible) so they
+	// never restate the transport rule. It runs before any prompt or output
+	// file check and writes nothing.
+	if *printOTELSecure {
+		if !flagWasSet(fs, "collector") || strings.TrimSpace(*collector) == "" {
+			_, _ = fmt.Fprintln(errOut, "Error: --print-otel-secure requires --collector")
+			return 2
+		}
+		if msg := config.OTLPCollectorAddressError(*collector); msg != "" {
+			_, _ = fmt.Fprintf(errOut, "Error: --collector: %s\n", msg)
+			return 2
+		}
+		secure, _ := config.ResolveOTLPTransport(*collector, otelSecure, *otelCACert != "")
+		_, _ = fmt.Fprintln(out, secure)
+		return 0
+	}
 
 	// --wizard overrides the short prompt. It assembles its own YAML
 	// (assembled in renderWizardYAML), so the flag-driven build below is
 	// skipped entirely on this branch. Any seed flags the user also passed
 	// pre-fill the wizard's defaults so power-users can answer-by-Enter.
 	if *wizard {
-		return runInitWizard(os.Stdin, out, errOut, fs, *chHost, *chPort, *chSecure, *chUser, *chPasswordFile, *collector, *service, *otelSecure, *splunkHEC, *haKeeper, *profile, *output, *force)
+		return runInitWizard(os.Stdin, out, errOut, fs, *chHost, *chPort, *chSecure, *chUser, *chPasswordFile, *collector, *service, otelSecure, *splunkHEC, *haKeeper, *profile, *output, *force)
 	}
 
 	// Prompt interactively when the user has not explicitly set any of the
@@ -216,8 +250,17 @@ Flags:
 		replacedExisting = true
 	}
 
-	a := buildAnswersFromFlags(fs, *profile, *chHost, *chPort, *chSecure, *chUser, *collector, *service, *otelSecure, *splunkHEC, *haKeeper)
+	a := buildAnswersFromFlags(fs, *profile, *chHost, *chPort, *chSecure, *chUser, *collector, *service, otelSecure, *splunkHEC, *haKeeper)
 	a.CHPasswordFile = *chPasswordFile
+	if *otelCACert != "" {
+		// A CA implies TLS; the renderer writes secure: true beside it.
+		a.OTELCACert = absCACertPath(*otelCACert)
+	}
+	// The written file would fail config load; say so before writing it.
+	if msg := config.OTLPCollectorAddressError(a.OTELCollector); msg != "" {
+		_, _ = fmt.Fprintf(errOut, "Error: %s\n", msg)
+		return 1
+	}
 	content := renderWizardYAML(a)
 
 	// writePrivateFile, not os.WriteFile: --force overwrites an existing config,
@@ -247,7 +290,37 @@ Flags:
 	} else {
 		_, _ = fmt.Fprintln(out, "Set CLICKHOUSE_PASSWORD in your environment before running click-dog.")
 	}
+	writeOTELTransportNote(out, a)
 	return 0
+}
+
+// writeOTELTransportNote says which transport the rendered exporter uses.
+// init never connects to the collector, so for TLS it points to the check
+// that does.
+func writeOTELTransportNote(out io.Writer, a wizardAnswers) {
+	secure, _ := config.ResolveOTLPTransport(a.OTELCollector, a.OTELSecure, a.OTELCACert != "")
+	_, _ = fmt.Fprintf(out, "OTEL exporter %s uses %s.\n", a.OTELCollector, a.otelTransportSummary())
+	if secure {
+		check := "click-dog test tls --collector " + a.OTELCollector
+		if a.OTELCACert != "" {
+			check += " --ca-cert " + a.OTELCACert
+		}
+		_, _ = fmt.Fprintf(out, "Check that the receiver speaks TLS: %s\n", check)
+	}
+}
+
+// rejectLeftoverArgs refuses positional arguments. Go's flag package reads
+// "--otel-secure false" as --otel-secure followed by the word false, then
+// stops parsing, so every later flag would be silently ignored.
+func rejectLeftoverArgs(cmd string, fs *flag.FlagSet) error {
+	if fs.NArg() == 0 {
+		return nil
+	}
+	arg := fs.Arg(0)
+	if arg == "true" || arg == "false" {
+		return fmt.Errorf("%s: unexpected argument %q: boolean flags take their value with =, e.g. --otel-secure=%s", cmd, arg, arg)
+	}
+	return fmt.Errorf("%s: unexpected argument %q", cmd, arg)
 }
 
 // buildAnswersFromFlags converts the parsed flag values into a wizardAnswers
@@ -255,7 +328,7 @@ Flags:
 // --ch-secure is set and --ch-port wasn't explicit) matches the wizard's
 // interactive default-flip — both surfaces present the same "TLS implies
 // 9440" assumption, with --ch-port available as the override.
-func buildAnswersFromFlags(fs *flag.FlagSet, profile, chHost string, chPort int, chSecure bool, chUser, collector, service string, otelSecure bool, splunkHEC, haKeeper string) wizardAnswers {
+func buildAnswersFromFlags(fs *flag.FlagSet, profile, chHost string, chPort int, chSecure bool, chUser, collector, service string, otelSecure *bool, splunkHEC, haKeeper string) wizardAnswers {
 	port := chPort
 	if chSecure && !flagWasSet(fs, "ch-port") {
 		port = 9440

@@ -3,10 +3,10 @@
 # See https://click-dog.com/configuration/ for the full key reference.
 
 clickhouse:
-  host: ch.example.com
+  host: localhost              # one Click-Dog per ClickHouse node, reading its local span log
   port: 9000
   database: system
-  username: default
+  username: click_dog_monitor  # read-only monitoring user (SELECT on the span and query logs)
   password: ${CLICKHOUSE_PASSWORD}
   # Connection caps + 30s query timeout: the modest hardening install.sh
   # used to emit unconditionally. Without these the monitor can exhaust
@@ -23,6 +23,7 @@ exporters:
   otel:
     - collector_address: otel.example.com:4317
       service_name: click-dog-monitor
+      secure: true
 
 monitor:
   enabled: true

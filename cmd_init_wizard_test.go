@@ -62,6 +62,7 @@ func TestWizard_FullBranchingFlow(t *testing.T) {
 		"otel.example.com:4317",       // collector
 		"my-service",                  // service
 		"y",                           // OTEL TLS
+		"",                            // OTEL CA: blank → system trust store
 		"y",                           // Splunk HEC
 		"https://splunk.example:8088", // Splunk endpoint
 		"sidecar",                     // topology: sidecar (HA stays a separate question)
@@ -91,8 +92,16 @@ func TestWizard_FullBranchingFlow(t *testing.T) {
 	if got.OTELCollector != "otel.example.com:4317" {
 		t.Errorf("OTELCollector = %q", got.OTELCollector)
 	}
-	if !got.OTELSecure {
-		t.Error("OTELSecure should be true")
+	// TLS is the automatic default for a remote collector, so the "y" that
+	// accepts it leaves the choice automatic; the renderer still writes it.
+	if got.OTELSecure != nil {
+		t.Errorf("OTELSecure = %v, want nil (accepted the automatic default)", *got.OTELSecure)
+	}
+	if !strings.Contains(renderWizardYAML(got), "      secure: true\n") {
+		t.Error("a remote collector must render secure: true")
+	}
+	if got.OTELCACert != "" {
+		t.Errorf("OTELCACert = %q, want empty (blank answer keeps the system trust store)", got.OTELCACert)
 	}
 	if !got.SplunkHECEnabled || got.SplunkEndpoint != "https://splunk.example:8088" {
 		t.Errorf("Splunk HEC not captured: %+v", got)
@@ -233,7 +242,9 @@ func TestRenderWizardYAML_LoadsForEveryCombination(t *testing.T) {
 		{"production/plain", func(a *wizardAnswers) { a.Profile = "production" }},
 		{"paranoid/plain", func(a *wizardAnswers) { a.Profile = "paranoid" }},
 		{"production/ch-tls", func(a *wizardAnswers) { a.Profile = "production"; a.CHSecure = true; a.CHPort = 9440 }},
-		{"production/otel-tls", func(a *wizardAnswers) { a.Profile = "production"; a.OTELSecure = true }},
+		{"production/otel-tls", func(a *wizardAnswers) { a.Profile = "production"; a.OTELSecure = boolPtr(true) }},
+		{"production/otel-plaintext", func(a *wizardAnswers) { a.Profile = "production"; a.OTELSecure = boolPtr(false) }},
+		{"production/otel-loopback-automatic", func(a *wizardAnswers) { a.Profile = "production"; a.OTELCollector = "localhost:4317" }},
 		{"production/splunk-hec", func(a *wizardAnswers) {
 			a.Profile = "production"
 			a.SplunkHECEnabled = true
@@ -247,7 +258,7 @@ func TestRenderWizardYAML_LoadsForEveryCombination(t *testing.T) {
 			a.Profile = "production"
 			a.CHSecure = true
 			a.CHPort = 9440
-			a.OTELSecure = true
+			a.OTELSecure = boolPtr(true)
 			a.SplunkHECEnabled = true
 			a.SplunkEndpoint = "https://splunk:8088"
 			a.KeeperHosts = []string{"k1:9181"}
@@ -305,10 +316,11 @@ func TestRenderWizardYAML_LoadsForEveryCombination(t *testing.T) {
 // listed field covered ClickHouse.QueryTimeoutS). DeepEqual catches the
 // next divergence of this class automatically.
 //
-// The example values (`ch.example.com`, `otel.example.com:4317`,
-// `click-dog-monitor`) match the wizardAnswers built below — same input,
-// same output. If you edit the examples, mirror the change in the
-// renderer (or vice versa) so this stays green.
+// The example values (`localhost`, `otel.example.com:4317`,
+// `click-dog-monitor`, and each profile's default ClickHouse user) match the
+// wizardAnswers built below — same input, same output. If you edit the
+// examples, mirror the change in the renderer (or vice versa) so this stays
+// green.
 //
 // DeprecationWarnings is the one field excluded — both configs share the
 // same emptiness for it, but we zero it explicitly so a future example
@@ -319,9 +331,8 @@ func TestWizard_ParityWithProfileTemplates(t *testing.T) {
 		t.Run(profile, func(t *testing.T) {
 			a := wizardAnswers{
 				Profile:       profile,
-				CHHost:        "ch.example.com",
+				CHHost:        "localhost",
 				CHPort:        9000,
-				CHUser:        "default",
 				OTELCollector: "otel.example.com:4317",
 				OTELService:   "click-dog-monitor",
 			}
@@ -347,6 +358,35 @@ func TestWizard_ParityWithProfileTemplates(t *testing.T) {
 				t.Errorf("wizard renderer / examples/ diverge for %q:\nwizard:  %+v\nexample: %+v",
 					profile, wizCfg, profCfg)
 			}
+
+			// A loopback collector left to the automatic choice gets the
+			// rule comment, not a secure key, so editing the address to a
+			// remote collector later yields TLS.
+			t.Run("loopback-rule-comment", func(t *testing.T) {
+				local := a
+				local.OTELCollector = "localhost:4317"
+				rendered := renderWizardYAML(local)
+				if strings.Contains(rendered, "      secure:") {
+					t.Fatalf("loopback render carries a secure key:\n%s", rendered)
+				}
+				if !strings.Contains(rendered, otelSecureRuleComment("      ")) {
+					t.Fatalf("loopback render lacks the rule comment:\n%s", rendered)
+				}
+				for addr, wantTLS := range map[string]bool{"localhost:4317": false, "otel.example.com:4317": true} {
+					edited := strings.Replace(rendered, "collector_address: localhost:4317", "collector_address: "+addr, 1)
+					path := filepath.Join(t.TempDir(), "edited.yaml")
+					if err := os.WriteFile(path, []byte(edited), 0600); err != nil {
+						t.Fatal(err)
+					}
+					cfg, err := config.LoadConfig(path)
+					if err != nil {
+						t.Fatalf("%s: %v", addr, err)
+					}
+					if got := cfg.Exporters.OTEL[0].Secure; got != wantTLS {
+						t.Errorf("collector %s: Secure = %v, want %v", addr, got, wantTLS)
+					}
+				}
+			})
 
 			t.Run("docs-copy", func(t *testing.T) {
 				requireInternalDocs(t)
@@ -485,7 +525,7 @@ func TestRunInitWizard_RefusesOverwrite(t *testing.T) {
 		// All-defaults walk: 9 blank lines.
 		in := strings.NewReader(strings.Repeat("\n", 9))
 		fs := flag.NewFlagSet("init", flag.ContinueOnError)
-		os.Exit(runInitWizard(in, os.Stdout, os.Stderr, fs, "localhost", 9000, false, "default", "", "localhost:4317", "click-dog-monitor", false, "", "", "production", output, false))
+		os.Exit(runInitWizard(in, os.Stdout, os.Stderr, fs, "localhost", 9000, false, "default", "", "localhost:4317", "click-dog-monitor", nil, "", "", "production", output, false))
 	}
 
 	dir := t.TempDir()
@@ -518,7 +558,7 @@ func TestRunInitWizard_RefusesWriteOnTruncatedStdin(t *testing.T) {
 		// Only 3 lines of input — far short of the wizard's 9-prompt baseline.
 		in := strings.NewReader("\n\n\n")
 		fs := flag.NewFlagSet("init", flag.ContinueOnError)
-		os.Exit(runInitWizard(in, os.Stdout, os.Stderr, fs, "localhost", 9000, false, "default", "", "localhost:4317", "click-dog-monitor", false, "", "", "production", output, false))
+		os.Exit(runInitWizard(in, os.Stdout, os.Stderr, fs, "localhost", 9000, false, "default", "", "localhost:4317", "click-dog-monitor", nil, "", "", "production", output, false))
 	}
 
 	dir := t.TempDir()
@@ -554,7 +594,7 @@ func TestRunInitWizard_ForceOverwrite(t *testing.T) {
 	var out bytes.Buffer
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 
-	runInitWizard(in, &out, io.Discard, fs, "localhost", 9000, false, "default", "", "localhost:4317", "click-dog-monitor", false, "", "", "production", output, true)
+	runInitWizard(in, &out, io.Discard, fs, "localhost", 9000, false, "default", "", "localhost:4317", "click-dog-monitor", nil, "", "", "production", output, true)
 
 	data, err := os.ReadFile(output)
 	if err != nil {
@@ -728,7 +768,7 @@ func TestRunInitWizard_OverwriteCheckFiresBeforePrompts(t *testing.T) {
 		// "stdin closed" message instead of the "already exists" one.
 		in := strings.NewReader("")
 		fs := flag.NewFlagSet("init", flag.ContinueOnError)
-		os.Exit(runInitWizard(in, os.Stdout, os.Stderr, fs, "localhost", 9000, false, "default", "", "localhost:4317", "click-dog-monitor", false, "", "", "production", output, false))
+		os.Exit(runInitWizard(in, os.Stdout, os.Stderr, fs, "localhost", 9000, false, "default", "", "localhost:4317", "click-dog-monitor", nil, "", "", "production", output, false))
 	}
 
 	dir := t.TempDir()
@@ -764,7 +804,7 @@ func TestRunInitWizard_RejectsInvalidProfileFlag(t *testing.T) {
 		dir := os.Getenv("CLICK_DOG_TEST_DIR")
 		output := filepath.Join(dir, "click-dog.yaml")
 		fs := flag.NewFlagSet("init", flag.ContinueOnError)
-		os.Exit(runInitWizard(strings.NewReader(""), os.Stdout, os.Stderr, fs, "localhost", 9000, false, "default", "", "localhost:4317", "click-dog-monitor", false, "", "", "ludicrous", output, false))
+		os.Exit(runInitWizard(strings.NewReader(""), os.Stdout, os.Stderr, fs, "localhost", 9000, false, "default", "", "localhost:4317", "click-dog-monitor", nil, "", "", "ludicrous", output, false))
 	}
 
 	dir := t.TempDir()
@@ -913,11 +953,11 @@ func TestWriteWizardSummary(t *testing.T) {
 			name: "ClickHouse + OTEL both TLS",
 			answers: wizardAnswers{
 				CHHost: "ch.prod", CHPort: 9440, CHSecure: true,
-				OTELCollector: "otel.prod:4317", OTELService: "click-dog-monitor", OTELSecure: true,
+				OTELCollector: "otel.prod:4317", OTELService: "click-dog-monitor", OTELSecure: boolPtr(true),
 			},
 			want: []string{
 				"ClickHouse  ch.prod:9440 (TLS)",
-				"OTEL        otel.prod:4317 (TLS)",
+				"OTEL        otel.prod:4317 via TLS (explicit) — ",
 			},
 		},
 		{
@@ -1115,3 +1155,109 @@ func TestWriteWizardNextSteps_PasswordFileRemoteDeploy(t *testing.T) {
 		t.Errorf("file-secret remote deploy: stale env-only phrasing should be gone, got:\n%s", body)
 	}
 }
+
+// TestWizard_OTELCACertPrompt covers the CA question that follows a TLS yes:
+// a typed path is rendered as exporters.otel[0].ca_cert, and answering no to
+// TLS neither asks nor keeps a CA (a ca_cert beside secure: false fails
+// validation).
+func TestWizard_OTELCACertPrompt(t *testing.T) {
+	walk := func(otelTLS, ca string, seed wizardAnswers) (wizardAnswers, string) {
+		inputs := []string{
+			"",      // profile
+			"",      // CH host
+			"",      // CH TLS
+			"",      // CH port
+			"",      // collector
+			"",      // service
+			otelTLS, // OTEL TLS
+		}
+		if ca != "-" {
+			inputs = append(inputs, ca)
+		}
+		inputs = append(inputs,
+			"n",       // Splunk HEC
+			"sidecar", // topology
+			"n",       // HA
+		)
+		in := strings.NewReader(strings.Join(inputs, "\n") + "\n")
+		var out, errOut bytes.Buffer
+		got, eof := runWizard(in, &out, &errOut, seed)
+		if eof {
+			t.Fatalf("unexpected EOF; out=%q err=%q", out.String(), errOut.String())
+		}
+		return got, out.String()
+	}
+
+	got, prompts := walk("y", "/etc/click-dog/tls/ca.pem", defaultWizardAnswers())
+	if got.OTELSecure == nil || !*got.OTELSecure || got.OTELCACert != "/etc/click-dog/tls/ca.pem" {
+		t.Errorf("TLS yes + CA path: got secure=%v ca=%q", got.OTELSecure, got.OTELCACert)
+	}
+	if !strings.Contains(prompts, "CA certificate file for the collector (blank = system trust store): ") {
+		t.Errorf("CA prompt should show no empty [] default; got prompts:\n%s", prompts)
+	}
+	rendered := renderWizardYAML(got)
+	if !strings.Contains(rendered, "      secure: true\n      ca_cert: /etc/click-dog/tls/ca.pem\n") {
+		t.Errorf("rendered YAML lacks secure + ca_cert under exporters.otel:\n%s", rendered)
+	}
+
+	// A relative answer is rendered absolute: click-dog opens ca_cert against
+	// its own working directory, / under systemd.
+	got, _ = walk("y", "certs/ca.pem", defaultWizardAnswers())
+	if want, _ := filepath.Abs("certs/ca.pem"); got.OTELCACert != want {
+		t.Errorf("relative CA answer: got %q, want %q", got.OTELCACert, want)
+	}
+
+	seeded := defaultWizardAnswers()
+	seeded.OTELCACert = "/seeded/ca.pem"
+	got, _ = walk("", "", seeded)
+	if got.OTELCACert != "/seeded/ca.pem" {
+		t.Errorf("Enter should keep the seeded CA, got %q", got.OTELCACert)
+	}
+
+	// "-" tells walk the CA question must not be asked: the next answer
+	// ("n") is then Splunk's, not a CA path.
+	got, prompts = walk("n", "-", seeded)
+	if got.OTELSecure == nil || *got.OTELSecure || got.OTELCACert != "" {
+		t.Errorf("TLS no should drop the CA: got secure=%v ca=%q", got.OTELSecure, got.OTELCACert)
+	}
+	if strings.Contains(prompts, "CA certificate file") {
+		t.Errorf("CA question asked although TLS is off:\n%s", prompts)
+	}
+	if strings.Contains(renderWizardYAML(got), "ca_cert") {
+		t.Error("plaintext render must not carry ca_cert")
+	}
+}
+
+// TestRunInitWizard_OTELCACertFlagSeeds pins that --otel-ca-cert pre-fills the
+// wizard: TLS defaults to yes and the CA question defaults to the flag value.
+func TestRunInitWizard_OTELCACertFlagSeeds(t *testing.T) {
+	dir := t.TempDir()
+	caPath := filepath.Join(dir, "ca.pem")
+	output := filepath.Join(dir, "c.yaml")
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	_ = fs.String("otel-ca-cert", "", "")
+	if err := fs.Parse([]string{"--otel-ca-cert", caPath}); err != nil {
+		t.Fatal(err)
+	}
+	// Enter through every question; HA "n" keeps Keeper hosts empty.
+	in := strings.NewReader(strings.Repeat("\n", 12))
+	var out bytes.Buffer
+	if code := runInitWizard(in, &out, io.Discard, fs, "localhost", 9000, false, "default", "", "localhost:4317", "click-dog-monitor", nil, "", "", "production", output, false); code != 0 {
+		t.Fatalf("runInitWizard exit %d; out:\n%s", code, out.String())
+	}
+	body, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "      secure: true\n      ca_cert: "+caPath+"\n") {
+		t.Errorf("seeded CA not rendered:\n%s", body)
+	}
+	if !strings.Contains(out.String(), "via TLS (explicit), CA "+caPath+" — ") {
+		t.Errorf("summary should name the CA; got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "place the collector CA certificate at "+caPath) {
+		t.Errorf("next steps should say where the CA goes; got:\n%s", out.String())
+	}
+}
+
+func boolPtr(v bool) *bool { return &v }

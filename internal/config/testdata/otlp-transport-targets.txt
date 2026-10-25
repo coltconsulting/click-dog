@@ -1,0 +1,47 @@
+# OTLP collector addresses and the transport an omitted `secure` selects.
+# Columns: address, then plaintext | tls | listen (rejected as a listen
+# address). Read by TestOTLPTransport_AddressTable. Loopback means localhost
+# in any case with or without a trailing dot, 127.0.0.0/8, ::1 (including the
+# IPv4-mapped form), an empty host, or a unix socket. Names are never resolved.
+localhost:4317	plaintext
+LOCALHOST:4317	plaintext
+localhost.:4317	plaintext
+LocalHost.:4317	plaintext
+localhost	plaintext
+127.0.0.1:4317	plaintext
+127.0.0.1:443	plaintext
+127.1.2.3:4317	plaintext
+127.0.0.1	plaintext
+[::1]:4317	plaintext
+::1	plaintext
+[::ffff:127.0.0.1]:4317	plaintext
+:4317	plaintext
+unix:/var/run/otel.sock	plaintext
+unix:///var/run/otel.sock	plaintext
+unix:relative.sock	plaintext
+unix-abstract:otel	plaintext
+dns:///localhost:4317	plaintext
+dns://8.8.8.8/localhost:4317	plaintext
+dns:localhost:4317	plaintext
+DNS:///LOCALHOST:4317	plaintext
+passthrough:///localhost:4317	plaintext
+passthrough:///127.0.0.1:4317	plaintext
+127.example.com:4317	tls
+localhost.example.com:4317	tls
+collector.localhost:4317	tls
+otel.example.com:4317	tls
+otel.example.com	tls
+otel-collector.monitoring:4317	tls
+otel-collector:4317	tls
+10.0.0.1:4317	tls
+192.168.1.10:4317	tls
+[::ffff:10.0.0.1]:4317	tls
+[2001:db8::1]:4317	tls
+dns:///otel.example.com:4317	tls
+dns:///	tls
+passthrough:///	tls
+passthrough:///otel.example.com:4317	tls
+0.0.0.0:4317	listen
+[::]:4317	listen
+::	listen
+0.0.0.0	listen

@@ -1,61 +1,115 @@
-# cert-manager Let's Encrypt integration for click-dog.
+# Mutual TLS client certificate for click-dog's OTLP exporter, issued by a
+# private CA that cert-manager runs in the click-dog namespace.
 #
-# Prerequisites:
-#   kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+# click-dog only dials out to the collector and serves no TLS, so the one
+# certificate it ever presents is a client certificate, and only to a collector
+# that requires one. Give it the TLS Web Client Authentication extended key
+# usage: Let's Encrypt stopped issuing it in 2026, and collectors built on Go's
+# TLS stack reject a client certificate whose extended key usage leaves it out,
+# so this file uses your own CA rather than an ACME issuer.
 #
-# Usage:
-#   1. Replace YOUR_EMAIL with a real address (Let's Encrypt expiry notifications).
-#   2. Start with letsencrypt-staging to test, then switch to letsencrypt-prod.
-#   3. Apply: kubectl apply -f deploy/kubernetes/certificate.yaml
+# It creates:
+#   1. A private root CA in Secret click-dog-otel-client-ca, bootstrapped by a
+#      SelfSigned issuer.
+#   2. A CA issuer, click-dog-otel-client-ca, backed by that Secret.
+#   3. click-dog's client certificate in Secret click-dog-otel-client.
+#      deployment.yaml mounts it as /etc/click-dog/tls/client.crt and
+#      client.key.
+#
+# Steps 1 and 2 keep the CA's private key in the click-dog namespace, so anyone
+# who can read Secrets there can mint client certificates the collector
+# trusts. In production keep the CA elsewhere, for example behind a
+# ClusterIssuer whose CA Secret lives in the cert-manager namespace: delete the
+# resources for steps 1 and 2 and name that issuer in click-dog-otel-client's
+# issuerRef. The same goes for a CA you already run.
+#
+# The collector must trust this CA for client certificates. Export the CA
+# certificate and give it to the collector (the OpenTelemetry Collector's OTLP
+# receiver reads it from tls.client_ca_file). With steps 1 and 2:
+#   kubectl -n click-dog get secret click-dog-otel-client-ca \
+#     -o jsonpath='{.data.tls\.crt}' | base64 -d > click-dog-client-ca.pem
+#
+# Verifying the collector's server certificate is separate: click-dog uses the
+# system trust roots, or the click-dog-otel-ca ConfigMap when the collector is
+# on a private CA. See docs/kubernetes.md#otlp-tls.
+#
+# cert-manager renews the client certificate 30 days before expiry. click-dog
+# re-reads it each time it connects to the collector, so renewal needs no
+# restart.
+#
+# Prerequisite: cert-manager (https://cert-manager.io/docs/installation/).
+# Apply: kubectl apply -f deploy/kubernetes/certificate.yaml
 
 ---
-# Staging issuer — use this first to avoid rate limits while testing.
+# Step 1: bootstraps the private root CA. Delete when the CA lives elsewhere.
 apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
+kind: Issuer
 metadata:
-  name: letsencrypt-staging
+  name: click-dog-selfsigned
+  namespace: click-dog
 spec:
-  acme:
-    server: https://acme-staging-v02.api.letsencrypt.org/directory
-    email: YOUR_EMAIL@example.com
-    privateKeySecretRef:
-      name: letsencrypt-staging-key
-    solvers:
-      - http01:
-          ingress:
-            class: nginx
+  selfSigned: {}
 
 ---
-# Production issuer — switch to this after staging works.
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: letsencrypt-prod
-spec:
-  acme:
-    server: https://acme-v02.api.letsencrypt.org/directory
-    email: YOUR_EMAIL@example.com
-    privateKeySecretRef:
-      name: letsencrypt-prod-key
-    solvers:
-      - http01:
-          ingress:
-            class: nginx
-
----
-# Certificate for the OTEL collector endpoint.
-# cert-manager will automatically renew before expiry.
+# Step 1: private root CA. The collector holds a copy of this certificate, so
+# update that copy whenever it is renewed. The long duration keeps renewal
+# rare, and keeping the key on renewal lets the old copy verify new client
+# certificates until it expires. Delete when the CA lives elsewhere.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: click-dog-otel-tls
+  name: click-dog-otel-client-ca
   namespace: click-dog
 spec:
-  secretName: click-dog-otel-tls
+  isCA: true
+  commonName: click-dog-otel-client-ca
+  secretName: click-dog-otel-client-ca
+  duration: 87600h   # 10 years
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Never
+  issuerRef:
+    name: click-dog-selfsigned
+    kind: Issuer
+    group: cert-manager.io
+
+---
+# Step 2: issues certificates signed by the CA in click-dog-otel-client-ca.
+# Delete when the CA lives elsewhere.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: click-dog-otel-client-ca
+  namespace: click-dog
+spec:
+  ca:
+    secretName: click-dog-otel-client-ca
+
+---
+# Step 3: click-dog's mTLS client certificate. List client auth explicitly:
+# without usages the extended key usage is whatever the issuer defaults to
+# (none from a CA issuer, server auth only from Let's Encrypt), and Go-based
+# collectors reject a client certificate whose extended key usage leaves out
+# client auth.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: click-dog-otel-client
+  namespace: click-dog
+spec:
+  secretName: click-dog-otel-client
+  commonName: click-dog
   duration: 2160h    # 90 days
   renewBefore: 720h  # renew 30 days before expiry
+  usages:
+    - digital signature
+    - client auth
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
   issuerRef:
-    name: letsencrypt-staging   # switch to letsencrypt-prod when ready
-    kind: ClusterIssuer
-  dnsNames:
-    - otel-collector.example.com   # replace with your collector FQDN
+    name: click-dog-otel-client-ca
+    kind: Issuer
+    group: cert-manager.io

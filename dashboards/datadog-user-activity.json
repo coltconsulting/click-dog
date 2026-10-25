@@ -2,6 +2,7 @@
   "title": "Click-Dog: Exported User Activity",
   "description": "Live-span-only review of ClickHouse user activity exported by click-dog from system.opentelemetry_span_log. Searchable tables relate users to databases, tables, statement operations, and access types using automatic query_log enrichment. Counts cover only the qualified/exported stream selected by monitor.min_trace_duration_ms and configured filters; this is an operational view, not a complete audit log. Backfill spans from system.query_log use the separate clickhouse.query/db.* contract and are intentionally outside this dashboard.",
   "layout_type": "ordered",
+  "reflow_type": "fixed",
   "template_variables": [
     {
       "name": "service",
@@ -49,7 +50,7 @@
       "id": 1,
       "definition": {
         "type": "note",
-        "content": "# Click-Dog — Exported User Activity\n\n**Live-span dashboard.** Reviews root query spans from `system.opentelemetry_span_log` using `resource_name:query @click_dog.source:span_log`, with user/database/table/operation metadata from automatic `query_log.*` enrichment.\n\n**Scope.** Counts are exported activity, not total ClickHouse traffic, and this is not a complete audit record. `monitor.min_trace_duration_ms` and query/operation/IP/user filters determine which activity appears.\n\nUse the dashboard filters to narrow every widget. Each relationship table also has a search bar for its visible user, database, table, operation, and access-type values. If operation/access-type widgets are empty while other activity is present, check `click_dog.query_operation_supported`; `0` means the startup `query_kind` capability probe disabled those dimensions.",
+        "content": "# Click-Dog — Exported User Activity\nExported activity, not total ClickHouse traffic and not a complete audit record. `monitor.min_trace_duration_ms` and filters select this stream.\n\nAll widgets use the selected time range. Search each table; click a row for traces.",
         "background_color": "blue",
         "font_size": "14",
         "text_align": "left",
@@ -63,7 +64,7 @@
       "id": 10,
       "definition": {
         "type": "note",
-        "content": "## Exported Activity Summary\nUsers and statement classes in the qualified live-span stream.",
+        "content": "## Exported Activity Summary",
         "background_color": "green",
         "font_size": "14",
         "text_align": "left",
@@ -76,13 +77,12 @@
     {
       "id": 11,
       "definition": {
-        "title": "Exported activity (1h)",
+        "title": "Exported activity",
         "title_size": "16",
         "title_align": "left",
         "type": "query_value",
         "autoscale": true,
         "precision": 0,
-        "time": {"live_span": "1h"},
         "requests": [
           {
             "formulas": [{"formula": "query1"}],
@@ -100,18 +100,17 @@
           }
         ]
       },
-      "layout": {"x": 0, "y": 3, "width": 2, "height": 2}
+      "layout": {"x": 0, "y": 3, "width": 4, "height": 2}
     },
     {
       "id": 12,
       "definition": {
-        "title": "Active users (1h)",
+        "title": "Active users",
         "title_size": "16",
         "title_align": "left",
         "type": "query_value",
         "autoscale": true,
         "precision": 0,
-        "time": {"live_span": "1h"},
         "requests": [
           {
             "formulas": [{"formula": "query1"}],
@@ -129,7 +128,7 @@
           }
         ]
       },
-      "layout": {"x": 2, "y": 3, "width": 2, "height": 2}
+      "layout": {"x": 4, "y": 3, "width": 4, "height": 2}
     },
     {
       "id": 13,
@@ -157,7 +156,7 @@
           }
         ]
       },
-      "layout": {"x": 4, "y": 3, "width": 2, "height": 2}
+      "layout": {"x": 8, "y": 3, "width": 4, "height": 2}
     },
     {
       "id": 14,
@@ -185,7 +184,7 @@
           }
         ]
       },
-      "layout": {"x": 6, "y": 3, "width": 2, "height": 2}
+      "layout": {"x": 0, "y": 5, "width": 4, "height": 2}
     },
     {
       "id": 15,
@@ -213,12 +212,12 @@
           }
         ]
       },
-      "layout": {"x": 8, "y": 3, "width": 2, "height": 2}
+      "layout": {"x": 4, "y": 5, "width": 4, "height": 2}
     },
     {
       "id": 16,
       "definition": {
-        "title": "Failed exported activity",
+        "title": "Exported failures",
         "title_size": "16",
         "title_align": "left",
         "type": "query_value",
@@ -241,13 +240,13 @@
           }
         ]
       },
-      "layout": {"x": 10, "y": 3, "width": 2, "height": 2}
+      "layout": {"x": 8, "y": 5, "width": 4, "height": 2}
     },
     {
       "id": 20,
       "definition": {
         "type": "note",
-        "content": "## Activity Over Time\nStatement access classes are derived from `system.query_log.query_kind`, not from read/write row counters.",
+        "content": "## Activity Over Time",
         "background_color": "green",
         "font_size": "14",
         "text_align": "left",
@@ -255,7 +254,7 @@
         "show_tick": false,
         "has_padding": true
       },
-      "layout": {"x": 0, "y": 5, "width": 12, "height": 1}
+      "layout": {"x": 0, "y": 7, "width": 12, "height": 1}
     },
     {
       "id": 21,
@@ -292,13 +291,13 @@
           }
         ]
       },
-      "layout": {"x": 0, "y": 6, "width": 12, "height": 4}
+      "layout": {"x": 0, "y": 8, "width": 12, "height": 4}
     },
     {
       "id": 30,
       "definition": {
         "type": "note",
-        "content": "## Searchable Relationship Lists\nSearch inside each table, or use the dashboard filters to constrain every list together. Multi-value database/table attributes fan out to individual facet values.",
+        "content": "## Searchable Relationship Lists",
         "background_color": "green",
         "font_size": "14",
         "text_align": "left",
@@ -306,7 +305,7 @@
         "show_tick": false,
         "has_padding": true
       },
-      "layout": {"x": 0, "y": 10, "width": 12, "height": 1}
+      "layout": {"x": 0, "y": 12, "width": 12, "height": 1}
     },
     {
       "id": 31,
@@ -338,7 +337,7 @@
           }
         ]
       },
-      "layout": {"x": 0, "y": 11, "width": 12, "height": 5}
+      "layout": {"x": 0, "y": 13, "width": 12, "height": 5}
     },
     {
       "id": 32,
@@ -370,7 +369,7 @@
           }
         ]
       },
-      "layout": {"x": 0, "y": 16, "width": 12, "height": 5}
+      "layout": {"x": 0, "y": 18, "width": 12, "height": 5}
     },
     {
       "id": 33,
@@ -402,7 +401,7 @@
           }
         ]
       },
-      "layout": {"x": 0, "y": 21, "width": 12, "height": 5}
+      "layout": {"x": 0, "y": 23, "width": 12, "height": 5}
     },
     {
       "id": 34,
@@ -434,7 +433,43 @@
           }
         ]
       },
-      "layout": {"x": 0, "y": 26, "width": 12, "height": 5}
+      "layout": {"x": 0, "y": 28, "width": 12, "height": 5}
+    },
+    {
+      "id": 900,
+      "definition": {
+        "type": "group",
+        "title": "Coverage and table help",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "id": 901,
+            "definition": {
+              "type": "note",
+              "content": "## Data coverage\n\n**Live-span dashboard.** Reviews root query spans from `system.opentelemetry_span_log` using `resource_name:query @click_dog.source:span_log`, with user/database/table/operation metadata from automatic `query_log.*` enrichment.\n\n**Scope.** Counts are exported activity, not total ClickHouse traffic, and this is not a complete audit record. `monitor.min_trace_duration_ms` and query/operation/IP/user filters determine which activity appears.\n\nUse the dashboard filters to narrow every widget. Each relationship table also has a search bar for its visible user, database, table, operation, and access-type values. If operation/access-type widgets are empty while other activity is present, check `click_dog.query_operation_supported`; `0` means the startup `query_kind` capability probe disabled those dimensions.\n\n## Exported Activity Summary\nUsers and statement classes in the qualified live-span stream.\n\n## Activity Over Time\nStatement access classes are derived from `system.query_log.query_kind`, not from read/write row counters.\n\n## Searchable Relationship Lists\nSearch inside each table, or use the dashboard filters to constrain every list together. Multi-value database/table attributes fan out to individual facet values.\n\nTable search filters the returned top 100 rows. Use the dashboard filters to narrow the source query, or click a row and select **View traces**. Double-click a widget title for full screen.",
+              "background_color": "white",
+              "font_size": "14",
+              "text_align": "left",
+              "vertical_align": "top",
+              "show_tick": false,
+              "has_padding": true
+            },
+            "layout": {
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 10
+            }
+          }
+        ]
+      },
+      "layout": {
+        "x": 0,
+        "y": 33,
+        "width": 12,
+        "height": 11
+      }
     }
   ]
 }

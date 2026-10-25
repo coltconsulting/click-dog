@@ -31,6 +31,8 @@ exporters:
   otel:
     - collector_address: localhost:4317  # Your OTEL collector (Datadog Agent, etc.)
       service_name: click-dog-monitor
+      # secure omitted: plaintext while collector_address is loopback (localhost,
+      # 127.0.0.0/8, ::1, unix:), TLS for any other collector. Set it to override.
 
 monitor:
   enabled: true
@@ -105,8 +107,11 @@ log_level: info                     # debug, info, warn, error
 #       service_name: click-dog-monitor
 #       max_query_length: 100000        # Truncate SQL > 100k chars (prevents PII leaks)
 #
-#       # TLS for gRPC to your collector
-#       secure: false
+#       # TLS for gRPC to your collector. Omitted, secure is false only for
+#       # a loopback collector_address and true otherwise; any of the TLS
+#       # settings below implies true, and secure: false beside one is an
+#       # error. Write secure: false for a plaintext collector elsewhere.
+#       secure: true
 #       insecure_skip_verify: false
 #       ca_cert: /path/to/otel-ca.pem
 #       client_cert: /path/to/client.pem   # mTLS

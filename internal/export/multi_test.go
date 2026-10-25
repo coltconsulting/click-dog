@@ -698,3 +698,61 @@ func sameSpanKeySet(a, b []model.SpanKey) bool {
 	}
 	return true
 }
+
+// noopExporter implements model.SpanExporter with real no-op methods rather
+// than an embedded nil interface, so a future call from MultiExporter fails
+// with a legible assertion instead of a nil dereference inside a fixture.
+type noopExporter struct{}
+
+func (noopExporter) ExportSpans(context.Context, []model.OpenTelemetrySpan) (model.ExportResult, error) {
+	return model.ExportResult{}, nil
+}
+
+func (noopExporter) ExportQuery(context.Context, model.QueryLog) (model.ExportResult, error) {
+	return model.ExportResult{}, nil
+}
+
+func (noopExporter) Close(context.Context) error { return nil }
+
+// stubStamper records SetServerVersion calls.
+type stubStamper struct {
+	noopExporter
+	versions []string
+}
+
+func (s *stubStamper) SetServerVersion(version string) {
+	s.versions = append(s.versions, version)
+}
+
+// stubPlainExporter has no version envelope, standing in for Splunk HEC.
+type stubPlainExporter struct {
+	noopExporter
+}
+
+// The plain exporter sits between the two stampers on purpose: it proves a
+// child without the optional interface is skipped without breaking the fan-out
+// to the children after it.
+func TestMultiExporter_SetServerVersionForwardsToStampers(t *testing.T) {
+	stamperA := &stubStamper{}
+	stamperB := &stubStamper{}
+	plain := &stubPlainExporter{}
+
+	m := NewMultiExporter(
+		[]model.SpanExporter{stamperA, plain, stamperB},
+		[]string{"a", "plain", "b"},
+	)
+	m.SetServerVersion("25.3.2.1")
+	m.SetServerVersion("")
+
+	want := []string{"25.3.2.1", ""}
+	for name, got := range map[string][]string{"a": stamperA.versions, "b": stamperB.versions} {
+		if len(got) != len(want) {
+			t.Fatalf("%s got %d calls, want %d", name, len(got), len(want))
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("%s call %d = %q, want %q", name, i, got[i], want[i])
+			}
+		}
+	}
+}

@@ -16,7 +16,8 @@
 #                             the health: listener block on :8686.
 #
 # Note: The full fleet deploy uses the main playbook's serial setting.
-# To control batch size, pass -f N (forks) on the CLI:
+# -f N (forks) bounds hosts in flight but does not create completed waves;
+# add a play-level `serial:` to playbook.yaml for that:
 #   ansible-playbook -i inventory.ini playbook-canary.yaml -f 10 ...
 #
 # Requirements:

@@ -57,6 +57,11 @@ type Pipeline struct {
 	// run" — the sidecar / single-node case (no election) and every existing
 	// call site, so the gate is a no-op unless explicitly wired in main.go.
 	LeaderGate func() bool
+
+	// serverVersion keeps the exporter's clickhouse.version attribute in step
+	// with the server being read. Written and read on the single cycle
+	// goroutine.
+	serverVersion serverVersionStamp
 }
 
 func NewPipeline(p Pipeline) (*Pipeline, error) {
@@ -106,7 +111,12 @@ func (p *Pipeline) Process(ctx context.Context) error {
 	}
 
 	// Check circuit breaker before proceeding
+	// A degraded cycle still exports (the canary span goes out while the
+	// breaker is open) but cannot confirm the server version — and a
+	// ClickHouse upgrade is the likeliest cause of the outage. Clear the stamp
+	// rather than let those spans carry the pre-upgrade version.
 	if p.CircuitBreaker != nil && !p.CircuitBreaker.Allow() {
+		p.serverVersion.Clear(p.Exporter)
 		return handleCircuitOpen(ctx, p.Exporter, p.Config, p.Filter, p.CircuitBreaker, p.Heartbeat, p.CanaryQuerier, p.Metrics, p.Webhook, cycleStart)
 	}
 
@@ -116,14 +126,19 @@ func (p *Pipeline) Process(ctx context.Context) error {
 	}
 
 	// Check if backoff is elevated and canary should run instead of full fetch.
-	if ran, canaryErr := handleElevatedBackoff(ctx, p.Exporter, p.Config, p.Filter, p.CircuitBreaker, p.Heartbeat, p.Poller, p.CanaryQuerier, p.Metrics, p.Webhook, cycleStart); ran {
+	if ran, canaryErr := p.handleElevatedBackoff(ctx, p.Exporter, p.Config, p.Filter, p.CircuitBreaker, p.Heartbeat, p.Poller, p.CanaryQuerier, p.Metrics, p.Webhook, cycleStart); ran {
 		return canaryErr
 	}
 
 	// Health check before running queries - helps detect stale connections early
 	if !p.Reader.IsHealthy(ctx) {
+		p.serverVersion.Clear(p.Exporter)
 		return handleHealthCheckFailure(p.CircuitBreaker, p.Metrics, p.Webhook, cycleStart)
 	}
+
+	// Stamp the exporter with the version of the server these spans came from,
+	// after the health check so a known-bad connection is not queried again.
+	p.serverVersion.Refresh(ctx, p.Reader, p.Exporter, time.Now())
 
 	// Run the actual processing and capture any errors
 	exported, filtered, dupes, err := fetchAndProcessSpans(ctx, p.Reader, p.Exporter, p.Filter, p.Config, p.SeenSpans, p.Heartbeat, p.Metrics)

@@ -63,7 +63,8 @@ Flags:
 	_, _ = fmt.Fprintf(out, "  Exporters:   %d OTEL, %d Splunk HEC\n",
 		len(cfg.Exporters.OTEL), len(cfg.Exporters.SplunkHEC))
 	for i, o := range cfg.Exporters.OTEL {
-		_, _ = fmt.Fprintf(out, "    OTEL[%d]:       %s (service=%s)\n", i, o.CollectorAddress, o.ServiceName)
+		_, _ = fmt.Fprintf(out, "    OTEL[%d]:       %s (service=%s, transport=%s)\n", i, o.CollectorAddress, o.ServiceName,
+			config.TransportSummary(o.CollectorAddress, o.Secure, o.SecureSource))
 	}
 	for i, s := range cfg.Exporters.SplunkHEC {
 		_, _ = fmt.Fprintf(out, "    SplunkHEC[%d]:  %s\n", i, s.Endpoint)
@@ -83,7 +84,7 @@ Flags:
 	// nothing here told the operator whether that push was configured.
 	if cfg.Metrics.OTLP.Enabled {
 		endpoint := cfg.Metrics.OTLP.CollectorAddress
-		source := "standalone"
+		source := "standalone, transport=" + config.TransportSummary(endpoint, cfg.Metrics.OTLP.Secure, cfg.Metrics.OTLP.SecureSource)
 		if cfg.Metrics.OTLP.InheritOTELConnection {
 			source = "inherit otel[0]"
 			if len(cfg.Exporters.OTEL) > 0 {
