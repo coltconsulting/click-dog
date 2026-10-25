@@ -46,7 +46,7 @@ func TestDetectQueryLogOperationSupport(t *testing.T) {
 
 	conn = &fakeConn{row: fakeRow{count: 1}}
 	if detectQueryLogOperationSupport(ctx, conn, "", true) {
-		t.Fatal("cluster query mode without a cluster name should disable query operation enrichment")
+		t.Fatal("cluster mode without a cluster name should disable query operation enrichment")
 	}
 	if conn.queryRowCallCount != 0 {
 		t.Errorf("empty-cluster mode should not probe system.columns, got %d calls", conn.queryRowCallCount)
@@ -55,17 +55,17 @@ func TestDetectQueryLogOperationSupport(t *testing.T) {
 
 func TestBuildQueryLogSQL_QueryOperationColumn(t *testing.T) {
 	for _, template := range []string{queryLogSelectSQL, queryLogEnrichSelectSQL} {
-		got := buildQueryLogSQLWithCapabilities(template, "system.query_log", false, true)
-		if !strings.Contains(got, "query_kind AS query_operation") {
-			t.Errorf("operation-aware SQL missing query_kind projection:\n%s", got)
-		}
-		if strings.Contains(got, queryLogOperationColumn) {
-			t.Errorf("operation placeholder leaked into SQL:\n%s", got)
-		}
-
-		got = buildQueryLogSQLWithCapabilities(template, "system.query_log", false, false)
-		if strings.Contains(got, "query_kind AS query_operation") || strings.Contains(got, queryLogOperationColumn) {
-			t.Errorf("fallback SQL unexpectedly contains query operation projection:\n%s", got)
+		for _, supported := range []bool{true, false} {
+			got := buildQueryLogSQLWithCapabilities(template, "system.query_log", false, supported)
+			if strings.Contains(got, "query_kind AS query_operation") != supported {
+				t.Errorf("query operation projection does not match supported=%v:\n%s", supported, got)
+			}
+			if strings.Contains(got, queryLogOperationColumn) {
+				t.Errorf("operation placeholder leaked into SQL:\n%s", got)
+			}
+			if strings.Contains(strings.ToLower(got), "as query_kind") {
+				t.Errorf("lifecycle type must not be aliased to query_kind (shadows the statement column):\n%s", got)
+			}
 		}
 	}
 }

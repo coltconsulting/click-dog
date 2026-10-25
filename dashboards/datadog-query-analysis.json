@@ -1,7 +1,8 @@
 {
   "title": "Click-Dog: Application Query Analysis",
-  "description": "Live-span-only, application-centric view of ClickHouse queries exported by click-dog from system.opentelemetry_span_log. Complements the official Datadog ClickHouse integration (which covers infrastructure). The first screen is an out-of-box key-metrics summary; automatic live-span enrichment sections come next; log_comment-tagged sections at the bottom add richer attribution when client-side tagging is in place. Backfill spans from system.query_log use the separate clickhouse.query/db.* contract and are intentionally outside this dashboard.",
+  "description": "Live-span-only, application-centric view of ClickHouse queries exported by click-dog from system.opentelemetry_span_log. Complements the official Datadog ClickHouse integration (which covers infrastructure). The first screen is an out-of-box key-metrics summary; automatic live-span enrichment and optional log_comment-tagged attribution come next; exact query families and reference material sit at the bottom. Backfill spans from system.query_log use the separate clickhouse.query/db.* contract and are intentionally outside this dashboard.",
   "layout_type": "ordered",
+  "reflow_type": "fixed",
   "template_variables": [
     {
       "name": "service",
@@ -44,7 +45,7 @@
       "id": 10,
       "definition": {
         "type": "note",
-        "content": "# Click-Dog — Application Query Analysis\n\n**Live-span dashboard.** `click_dog.source=span_log` spans from `system.opentelemetry_span_log`, queried as `resource_name:query @click_dog.source:span_log`. Needs click-dog `v26.03.1`+.\n\n**Volume = exported queries, not total ClickHouse traffic** — only the stream selected by `monitor.min_trace_duration_ms` and filters. For total volume use the [Datadog ClickHouse integration](https://app.datadoghq.com/dash/integration/30297).\n\n**Dimensions.** Automatic `query_log.*` enrichment first (no tagging); `log_comment.*` attribution last (needs client tagging).\n\n**Backfill** is separate: `click_dog.source=query_log` / `clickhouse.query` / `db.*` spans — use trace search.",
+        "content": "# Click-Dog — Application Query Analysis\nCounts are exported queries, not total ClickHouse traffic: `monitor.min_trace_duration_ms` and filters select this stream. All widgets use the selected time range.\n\nClick a row for traces; double-click a widget title for full screen.",
         "background_color": "blue",
         "font_size": "14",
         "text_align": "left",
@@ -58,7 +59,7 @@
       "id": 100,
       "definition": {
         "type": "note",
-        "content": "## Key Metrics\nAre traces flowing, current volume, p95/p99 latency, slow-query count, top contributors — out of the box.",
+        "content": "## Key Metrics",
         "background_color": "green",
         "font_size": "14",
         "text_align": "left",
@@ -71,13 +72,12 @@
     {
       "id": 101,
       "definition": {
-        "title": "Exported queries (1h)",
+        "title": "Exported queries",
         "title_size": "16",
         "title_align": "left",
         "type": "query_value",
         "autoscale": true,
         "precision": 0,
-        "time": {"live_span": "1h"},
         "requests": [
           {
             "formulas": [{"formula": "query1"}],
@@ -99,7 +99,7 @@
           }
         ]
       },
-      "layout": {"x": 0, "y": 3, "width": 2, "height": 2}
+      "layout": {"x": 0, "y": 3, "width": 3, "height": 2}
     },
     {
       "id": 102,
@@ -128,7 +128,7 @@
           }
         ]
       },
-      "layout": {"x": 2, "y": 3, "width": 2, "height": 2}
+      "layout": {"x": 3, "y": 3, "width": 3, "height": 2}
     },
     {
       "id": 103,
@@ -157,7 +157,7 @@
           }
         ]
       },
-      "layout": {"x": 4, "y": 3, "width": 2, "height": 2}
+      "layout": {"x": 6, "y": 3, "width": 3, "height": 2}
     },
     {
       "id": 104,
@@ -189,7 +189,7 @@
           }
         ]
       },
-      "layout": {"x": 6, "y": 3, "width": 2, "height": 2}
+      "layout": {"x": 9, "y": 3, "width": 3, "height": 2}
     },
     {
       "id": 105,
@@ -221,7 +221,7 @@
           }
         ]
       },
-      "layout": {"x": 8, "y": 3, "width": 2, "height": 2}
+      "layout": {"x": 0, "y": 5, "width": 6, "height": 2}
     },
     {
       "id": 106,
@@ -253,7 +253,7 @@
           }
         ]
       },
-      "layout": {"x": 10, "y": 3, "width": 2, "height": 2}
+      "layout": {"x": 6, "y": 5, "width": 6, "height": 2}
     },
     {
       "id": 1,
@@ -263,12 +263,7 @@
         "title_align": "left",
         "type": "timeseries",
         "show_legend": false,
-        "custom_links": [
-          {
-            "label": "View matching traces in APM",
-            "link": "/apm/traces?query=service:{{$service.value}} resource_name:query @click_dog.source:span_log @hostname:{{$host.value}}"
-          }
-        ],
+        "custom_links": [{"label": "View matching traces", "link": "/apm/traces?query=resource_name:query @click_dog.source:span_log {{$service}} {{$env}} {{$app}} {{$user}} {{$client}} {{$host}} {{$client_host}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"}],
         "requests": [
           {
             "formulas": [{"formula": "query1"}],
@@ -290,7 +285,7 @@
           }
         ]
       },
-      "layout": {"x": 0, "y": 5, "width": 6, "height": 3}
+      "layout": {"x": 0, "y": 7, "width": 6, "height": 3}
     },
     {
       "id": 2,
@@ -341,13 +336,13 @@
           }
         ]
       },
-      "layout": {"x": 6, "y": 5, "width": 6, "height": 3}
+      "layout": {"x": 6, "y": 7, "width": 6, "height": 3}
     },
     {
       "id": 210,
       "definition": {
         "type": "note",
-        "content": "## Failures\nFailed queries via `@query_log.exception_code` (`query_log` enrichment only — `span_log` has no error status). Blank = no failures seen, not broken.",
+        "content": "## Failures",
         "background_color": "green",
         "font_size": "14",
         "text_align": "left",
@@ -355,7 +350,7 @@
         "show_tick": false,
         "has_padding": true
       },
-      "layout": {"x": 0, "y": 8, "width": 12, "height": 1}
+      "layout": {"x": 0, "y": 10, "width": 12, "height": 1}
     },
     {
       "id": 211,
@@ -388,18 +383,20 @@
           }
         ]
       },
-      "layout": {"x": 0, "y": 9, "width": 3, "height": 4}
+      "layout": {"x": 0, "y": 11, "width": 3, "height": 4}
     },
     {
       "id": 212,
       "definition": {
+        "custom_links": [{"label": "View query family traces", "link": "/apm/traces?query=resource_name:query @click_dog.source:span_log {{$service}} {{$env}} {{$app}} {{$user}} {{$client}} {{$host}} {{$client_host}} @query_log.normalized_query_hash:{{@query_log.normalized_query_hash.value}} @query_log.exception_code:>0&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"}],
+        "has_search_bar": "always",
         "title": "Top failing query families",
         "title_size": "16",
         "title_align": "left",
-        "type": "toplist",
+        "type": "query_table",
         "requests": [
           {
-            "formulas": [{"formula": "query1", "limit": {"count": 10, "order": "desc"}}],
+            "formulas": [{"formula": "query1", "alias": "failed queries", "limit": {"count": 10, "order": "desc"}}],
             "queries": [
               {
                 "data_source": "spans",
@@ -425,13 +422,13 @@
           }
         ]
       },
-      "layout": {"x": 3, "y": 9, "width": 9, "height": 4}
+      "layout": {"x": 3, "y": 11, "width": 9, "height": 4}
     },
     {
       "id": 60,
       "definition": {
         "type": "note",
-        "content": "## By ClickHouse User & Client\n`@query_log.user` and `@query_log.client_name` — automatic, no tagging.",
+        "content": "## By ClickHouse User & Client",
         "background_color": "green",
         "font_size": "14",
         "text_align": "left",
@@ -439,7 +436,7 @@
         "show_tick": false,
         "has_padding": true
       },
-      "layout": {"x": 0, "y": 13, "width": 12, "height": 1}
+      "layout": {"x": 0, "y": 15, "width": 12, "height": 1}
     },
     {
       "id": 61,
@@ -471,7 +468,7 @@
           }
         ]
       },
-      "layout": {"x": 0, "y": 14, "width": 4, "height": 4}
+      "layout": {"x": 0, "y": 16, "width": 4, "height": 4}
     },
     {
       "id": 62,
@@ -503,12 +500,12 @@
           }
         ]
       },
-      "layout": {"x": 4, "y": 14, "width": 4, "height": 4}
+      "layout": {"x": 4, "y": 16, "width": 4, "height": 4}
     },
     {
       "id": 63,
       "definition": {
-        "title": "Top users by p95 latency",
+        "title": "Slowest users by p95 latency",
         "title_size": "16",
         "title_align": "left",
         "type": "toplist",
@@ -535,13 +532,13 @@
           }
         ]
       },
-      "layout": {"x": 8, "y": 14, "width": 4, "height": 4}
+      "layout": {"x": 8, "y": 16, "width": 4, "height": 4}
     },
     {
       "id": 50,
       "definition": {
         "type": "note",
-        "content": "## Per-host Distribution\n`@hostname` from each span — automatic, no tagging.",
+        "content": "## Per-host Distribution",
         "background_color": "green",
         "font_size": "14",
         "text_align": "left",
@@ -549,7 +546,7 @@
         "show_tick": false,
         "has_padding": true
       },
-      "layout": {"x": 0, "y": 18, "width": 12, "height": 1}
+      "layout": {"x": 0, "y": 20, "width": 12, "height": 1}
     },
     {
       "id": 9,
@@ -586,13 +583,13 @@
           }
         ]
       },
-      "layout": {"x": 0, "y": 19, "width": 12, "height": 3}
+      "layout": {"x": 0, "y": 21, "width": 12, "height": 3}
     },
     {
       "id": 70,
       "definition": {
         "type": "note",
-        "content": "## Resource Usage\nTop query families by total time, rows read, and memory, plus tables accessed. Needs `@query_log.normalized_query_hash` — older spans (pre-enrichment) are absent.",
+        "content": "## Resource Usage",
         "background_color": "green",
         "font_size": "14",
         "text_align": "left",
@@ -600,18 +597,20 @@
         "show_tick": false,
         "has_padding": true
       },
-      "layout": {"x": 0, "y": 22, "width": 12, "height": 1}
+      "layout": {"x": 0, "y": 24, "width": 12, "height": 1}
     },
     {
       "id": 220,
       "definition": {
+        "custom_links": [{"label": "View query family traces", "link": "/apm/traces?query=resource_name:query @click_dog.source:span_log {{$service}} {{$env}} {{$app}} {{$user}} {{$client}} {{$host}} {{$client_host}} @query_log.normalized_query_hash:{{@query_log.normalized_query_hash.value}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"}],
+        "has_search_bar": "always",
         "title": "Top query families by total query time",
         "title_size": "16",
         "title_align": "left",
-        "type": "toplist",
+        "type": "query_table",
         "requests": [
           {
-            "formulas": [{"formula": "query1", "limit": {"count": 10, "order": "desc"}}],
+            "formulas": [{"formula": "query1", "alias": "total query time", "limit": {"count": 10, "order": "desc"}}],
             "queries": [
               {
                 "data_source": "spans",
@@ -637,18 +636,20 @@
           }
         ]
       },
-      "layout": {"x": 0, "y": 23, "width": 12, "height": 4}
+      "layout": {"x": 0, "y": 25, "width": 12, "height": 5}
     },
     {
       "id": 71,
       "definition": {
+        "custom_links": [{"label": "View query family traces", "link": "/apm/traces?query=resource_name:query @click_dog.source:span_log {{$service}} {{$env}} {{$app}} {{$user}} {{$client}} {{$host}} {{$client_host}} @query_log.normalized_query_hash:{{@query_log.normalized_query_hash.value}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"}],
+        "has_search_bar": "always",
         "title": "Top query families by rows read (p95)",
         "title_size": "16",
         "title_align": "left",
-        "type": "toplist",
+        "type": "query_table",
         "requests": [
           {
-            "formulas": [{"formula": "query1", "limit": {"count": 10, "order": "desc"}}],
+            "formulas": [{"formula": "query1", "alias": "rows read (p95)", "limit": {"count": 10, "order": "desc"}}],
             "queries": [
               {
                 "data_source": "spans",
@@ -674,18 +675,20 @@
           }
         ]
       },
-      "layout": {"x": 0, "y": 27, "width": 6, "height": 4}
+      "layout": {"x": 0, "y": 30, "width": 12, "height": 5}
     },
     {
       "id": 72,
       "definition": {
+        "custom_links": [{"label": "View query family traces", "link": "/apm/traces?query=resource_name:query @click_dog.source:span_log {{$service}} {{$env}} {{$app}} {{$user}} {{$client}} {{$host}} {{$client_host}} @query_log.normalized_query_hash:{{@query_log.normalized_query_hash.value}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"}],
+        "has_search_bar": "always",
         "title": "Top query families by peak memory (p95)",
         "title_size": "16",
         "title_align": "left",
-        "type": "toplist",
+        "type": "query_table",
         "requests": [
           {
-            "formulas": [{"formula": "query1", "limit": {"count": 10, "order": "desc"}}],
+            "formulas": [{"formula": "query1", "alias": "peak memory (p95)", "limit": {"count": 10, "order": "desc"}}],
             "queries": [
               {
                 "data_source": "spans",
@@ -711,7 +714,7 @@
           }
         ]
       },
-      "layout": {"x": 6, "y": 27, "width": 6, "height": 4}
+      "layout": {"x": 0, "y": 35, "width": 12, "height": 5}
     },
     {
       "id": 73,
@@ -743,7 +746,7 @@
           }
         ]
       },
-      "layout": {"x": 0, "y": 31, "width": 6, "height": 4}
+      "layout": {"x": 0, "y": 40, "width": 6, "height": 4}
     },
     {
       "id": 74,
@@ -775,64 +778,13 @@
           }
         ]
       },
-      "layout": {"x": 6, "y": 31, "width": 6, "height": 4}
-    },
-    {
-      "id": 40,
-      "definition": {
-        "type": "note",
-        "content": "## Exact Query Families\nGrouped by `@query_log.normalized_query_hash` with `@query_log.normalized_query` preview — no tagging.",
-        "background_color": "green",
-        "font_size": "14",
-        "text_align": "left",
-        "vertical_align": "center",
-        "show_tick": false,
-        "has_padding": true
-      },
-      "layout": {"x": 0, "y": 35, "width": 12, "height": 1}
-    },
-    {
-      "id": 8,
-      "definition": {
-        "title": "Slowest exact query families",
-        "title_size": "16",
-        "title_align": "left",
-        "type": "toplist",
-        "requests": [
-          {
-            "formulas": [{"formula": "query1", "limit": {"count": 10, "order": "desc"}}],
-            "queries": [
-              {
-                "data_source": "spans",
-                "name": "query1",
-                "search": {"query": "$service resource_name:query @click_dog.source:span_log @query_log.normalized_query_hash:* $env $app $user $client $host $client_host"},
-                "indexes": ["*"],
-                "compute": {"aggregation": "pc95", "metric": "@duration"},
-                "group_by": [
-                  {
-                    "facet": "@query_log.normalized_query_hash",
-                    "limit": 10,
-                    "sort": {"aggregation": "pc95", "order": "desc", "metric": "@duration"}
-                  },
-                  {
-                    "facet": "@query_log.normalized_query",
-                    "limit": 10,
-                    "sort": {"aggregation": "pc95", "order": "desc", "metric": "@duration"}
-                  }
-                ]
-              }
-            ],
-            "response_format": "scalar"
-          }
-        ]
-      },
-      "layout": {"x": 0, "y": 36, "width": 12, "height": 4}
+      "layout": {"x": 6, "y": 40, "width": 6, "height": 4}
     },
     {
       "id": 20,
       "definition": {
         "type": "note",
-        "content": "## By Application\n`@log_comment.app` — needs client `log_comment` tagging (e.g. `{\"app\": \"my-app\"}`); blank until then.",
+        "content": "## By Application · requires `@log_comment.app`",
         "background_color": "yellow",
         "font_size": "14",
         "text_align": "left",
@@ -840,7 +792,7 @@
         "show_tick": false,
         "has_padding": true
       },
-      "layout": {"x": 0, "y": 40, "width": 12, "height": 1}
+      "layout": {"x": 0, "y": 44, "width": 12, "height": 1}
     },
     {
       "id": 3,
@@ -872,12 +824,12 @@
           }
         ]
       },
-      "layout": {"x": 0, "y": 41, "width": 4, "height": 4}
+      "layout": {"x": 0, "y": 45, "width": 4, "height": 4}
     },
     {
       "id": 4,
       "definition": {
-        "title": "Top apps by p95 latency",
+        "title": "Slowest apps by p95 latency",
         "title_size": "16",
         "title_align": "left",
         "type": "toplist",
@@ -904,7 +856,7 @@
           }
         ]
       },
-      "layout": {"x": 4, "y": 41, "width": 4, "height": 4}
+      "layout": {"x": 4, "y": 45, "width": 4, "height": 4}
     },
     {
       "id": 5,
@@ -936,13 +888,13 @@
           }
         ]
       },
-      "layout": {"x": 8, "y": 41, "width": 4, "height": 4}
+      "layout": {"x": 8, "y": 45, "width": 4, "height": 4}
     },
     {
       "id": 30,
       "definition": {
         "type": "note",
-        "content": "## By Named Query\n`@log_comment.query_name` — needs per-query `log_comment` naming (e.g. `{\"query_name\": \"home_dashboard\"}`); blank until then.",
+        "content": "## By Named Query · requires `@log_comment.query_name`",
         "background_color": "yellow",
         "font_size": "14",
         "text_align": "left",
@@ -950,12 +902,12 @@
         "show_tick": false,
         "has_padding": true
       },
-      "layout": {"x": 0, "y": 45, "width": 12, "height": 1}
+      "layout": {"x": 0, "y": 49, "width": 12, "height": 1}
     },
     {
       "id": 6,
       "definition": {
-        "title": "Top named queries by p95 latency",
+        "title": "Slowest named queries by p95 latency",
         "title_size": "16",
         "title_align": "left",
         "type": "toplist",
@@ -982,7 +934,7 @@
           }
         ]
       },
-      "layout": {"x": 0, "y": 46, "width": 6, "height": 4}
+      "layout": {"x": 0, "y": 50, "width": 6, "height": 4}
     },
     {
       "id": 7,
@@ -1014,7 +966,96 @@
           }
         ]
       },
-      "layout": {"x": 6, "y": 46, "width": 6, "height": 4}
+      "layout": {"x": 6, "y": 50, "width": 6, "height": 4}
+    },
+    {
+      "id": 40,
+      "definition": {
+        "type": "note",
+        "content": "## Exact Query Families",
+        "background_color": "green",
+        "font_size": "14",
+        "text_align": "left",
+        "vertical_align": "center",
+        "show_tick": false,
+        "has_padding": true
+      },
+      "layout": {"x": 0, "y": 54, "width": 12, "height": 1}
+    },
+    {
+      "id": 8,
+      "definition": {
+        "custom_links": [{"label": "View query family traces", "link": "/apm/traces?query=resource_name:query @click_dog.source:span_log {{$service}} {{$env}} {{$app}} {{$user}} {{$client}} {{$host}} {{$client_host}} @query_log.normalized_query_hash:{{@query_log.normalized_query_hash.value}}&from_ts={{timestamp_start}}&to_ts={{timestamp_end}}"}],
+        "has_search_bar": "always",
+        "title": "Slowest exact query families",
+        "title_size": "16",
+        "title_align": "left",
+        "type": "query_table",
+        "requests": [
+          {
+            "formulas": [{"formula": "query1", "alias": "latency (p95)", "limit": {"count": 10, "order": "desc"}}],
+            "queries": [
+              {
+                "data_source": "spans",
+                "name": "query1",
+                "search": {"query": "$service resource_name:query @click_dog.source:span_log @query_log.normalized_query_hash:* $env $app $user $client $host $client_host"},
+                "indexes": ["*"],
+                "compute": {"aggregation": "pc95", "metric": "@duration"},
+                "group_by": [
+                  {
+                    "facet": "@query_log.normalized_query_hash",
+                    "limit": 10,
+                    "sort": {"aggregation": "pc95", "order": "desc", "metric": "@duration"}
+                  },
+                  {
+                    "facet": "@query_log.normalized_query",
+                    "limit": 10,
+                    "sort": {"aggregation": "pc95", "order": "desc", "metric": "@duration"}
+                  }
+                ]
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      },
+      "layout": {"x": 0, "y": 55, "width": 12, "height": 5}
+    },
+    {
+      "id": 900,
+      "definition": {
+        "type": "group",
+        "title": "How to read this dashboard",
+        "layout_type": "ordered",
+        "show_title": true,
+        "widgets": [
+          {
+            "id": 901,
+            "definition": {
+              "type": "note",
+              "content": "## Data coverage\n\n**Live-span dashboard.** `click_dog.source=span_log` spans from `system.opentelemetry_span_log`, queried as `resource_name:query @click_dog.source:span_log`. Needs click-dog `v26.03.1`+.\n\n**Volume = exported queries, not total ClickHouse traffic** — only the stream selected by `monitor.min_trace_duration_ms` and filters. For total volume use the [Datadog ClickHouse integration](https://app.datadoghq.com/dash/integration/30297).\n\n**Dimensions.** Automatic `query_log.*` enrichment needs no tagging; `log_comment.*` attribution needs client tagging.\n\n**Backfill** is separate: `click_dog.source=query_log` / `clickhouse.query` / `db.*` spans — use trace search.\n\nSQL in tables is an exported preview and may already be truncated by `max_query_length`. Search filters the returned top 10 rows; use **View query family traces** for the matching family and selected time range. Double-click a widget title for full screen.\n\n## Key Metrics\nAre traces flowing, current volume, p95/p99 latency, slow-query count, top contributors — out of the box.\n\n## Failures\nFailed queries via `@query_log.exception_code` (`query_log` enrichment only — `span_log` has no error status). No data can mean no matching failures or missing telemetry; confirm other widgets are populated.\n\n## By ClickHouse User & Client\n`@query_log.user` and `@query_log.client_name` — automatic, no tagging.\n\n## Per-host Distribution\n`@hostname` from each span — automatic, no tagging.\n\n## Resource Usage\nTop query families by total time, rows read, and memory, plus tables accessed. Needs `@query_log.normalized_query_hash` — older spans (pre-enrichment) are absent.\n\n## Exact Query Families\nGrouped by `@query_log.normalized_query_hash` with `@query_log.normalized_query` preview — no tagging.\n\n## By Application\n`@log_comment.app` — needs client `log_comment` tagging (e.g. `{\"app\": \"my-app\"}`); blank until then.\n\n## By Named Query\n`@log_comment.query_name` — needs per-query `log_comment` naming (e.g. `{\"query_name\": \"home_dashboard\"}`); blank until then.",
+              "background_color": "white",
+              "font_size": "14",
+              "text_align": "left",
+              "vertical_align": "top",
+              "show_tick": false,
+              "has_padding": true
+            },
+            "layout": {
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 18
+            }
+          }
+        ]
+      },
+      "layout": {
+        "x": 0,
+        "y": 60,
+        "width": 12,
+        "height": 19
+      }
     }
   ]
 }

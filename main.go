@@ -254,7 +254,7 @@ Usage:
   click-dog validate [flags]     Validate configuration offline and exit (no ClickHouse/exporter calls)
   click-dog backfill [flags]     One-shot export of a historical time range, then exit
   click-dog analyze <subcommand> Run a local, read-only query analysis report
-  click-dog test <subcommand>    Test exporter delivery or native ClickHouse tracing
+  click-dog test <subcommand>    Test exporter delivery, OTLP receiver TLS, or native ClickHouse tracing
   click-dog test-span            Deprecated alias for 'click-dog test export'
   click-dog flush                Ask the running service (systemd or leader) to export
   click-dog self-update [flags]  Update to the latest release
@@ -274,6 +274,7 @@ Examples:
   click-dog init --ch-host clickhouse.local --collector otel:4317
   click-dog check --config /etc/click-dog/config.yaml
   click-dog test export --config /etc/click-dog/config.yaml
+  click-dog test tls --collector otel.example.com:4317
   click-dog test tracing --config /etc/click-dog/config.yaml
   click-dog backfill --start 2024-01-01T00:00:00Z --end 2024-01-02T00:00:00Z
 `
@@ -619,6 +620,8 @@ func main() {
 			metricsOTELCfg := config.OTELConfig{
 				CollectorAddress: cfg.Metrics.OTLP.CollectorAddress,
 				Secure:           cfg.Metrics.OTLP.Secure,
+				SecureSource:     cfg.Metrics.OTLP.SecureSource,
+				Name:             "metrics.otlp",
 			}
 			conn, connErr := export.NewOTELGRPCConn(metricsOTELCfg)
 			if connErr != nil {
@@ -724,6 +727,10 @@ func runBackfillMode(
 
 	clicklog.Info("Starting backfill mode: %s to %s (min_trace_duration: %dms)",
 		startTime.Format(time.RFC3339), endTime.Format(time.RFC3339), cfg.Monitor.MinTraceDurationMs)
+
+	// Stamp clickhouse.version once for the run. Backfill has no cycle to
+	// refresh on; the attribute describes the server observed at run start.
+	processor.StampServerVersionOnce(ctx, chReader, exporter)
 
 	// Backfill is intentionally NOT leader-gated. It is a one-shot, explicitly
 	// operator-invoked historical export on a chosen host, and runs no election

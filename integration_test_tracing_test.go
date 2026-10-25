@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	chreader "github.com/coltconsulting/click-dog/internal/clickhouse"
 	"github.com/coltconsulting/click-dog/internal/config"
 	"github.com/coltconsulting/click-dog/internal/model"
 )
@@ -67,17 +66,24 @@ func TestTracingCommand_NativeProtocolPropagationIntegration(t *testing.T) {
 		},
 		Monitor: config.MonitorConfig{ExportTimeoutS: 5},
 	}
+	assertNativeTracingCommand(t, cfg, productionTracingTestDependencies())
+}
+
+func assertNativeTracingCommand(t *testing.T, cfg *config.Config, deps tracingTestDependencies) {
+	t.Helper()
+	waitForOTELCollector(t, 30*time.Second)
 	identity, err := generateTracingIdentity()
 	if err != nil {
 		t.Fatal(err)
 	}
 	recorder := &tracingIntegrationExporter{}
-	deps := productionTracingTestDependencies()
-	deps.newReader = func(ctx context.Context, cfg *config.Config) (tracingTestReader, error) {
-		return chreader.NewTracingTestReader(ctx, cfg.ClickHouse)
-	}
+	service := "tracing-test-" + identity.QueryID
+	exporter := newOTELExporter(t, service)
 	deps.buildExporters = func(*config.Config) []builtExporter {
-		return []builtExporter{{Label: "recording[0]", Endpoint: "memory", Exporter: recorder}}
+		return []builtExporter{
+			{Label: "recording[0]", Endpoint: "memory", Exporter: recorder},
+			{Label: "OTEL[0]", Endpoint: integrationOTELAddr(), Exporter: exporter},
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -107,6 +113,16 @@ func TestTracingCommand_NativeProtocolPropagationIntegration(t *testing.T) {
 	}
 	if !linkedNative {
 		t.Fatalf("no exported native span retained parent_span_id=%d", identity.SpanID)
+	}
+	observations := waitForOTELSpanKeys(t, service, recorder.spans, 15*time.Second)
+	linkedReceived := false
+	for _, span := range observations {
+		if span.ServiceName == service && span.TraceID == identity.TraceID && span.ParentSpanID == identity.SpanID {
+			linkedReceived = true
+		}
+	}
+	if !linkedReceived {
+		t.Fatal("OTLP receiver has no native child linked to the test parent")
 	}
 	if !recorder.closed {
 		t.Error("recording exporter was not closed")

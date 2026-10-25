@@ -1,7 +1,8 @@
 # Click-Dog Ansible Inventory
 #
-# List all ClickHouse nodes here. click-dog will be deployed to every host
-# in the [clickhouse] group (one sidecar per node).
+# List every ClickHouse node here. click-dog is deployed to every host in the
+# [clickhouse] group: one sidecar per node, each reading its own local span
+# log, so the fleet together covers the whole cluster.
 #
 # For a 50-node cluster, list all 50 hosts below.
 
@@ -12,6 +13,11 @@ ch-node-03.example.com
 # ... add all 50 nodes ...
 ch-node-50.example.com
 
+# First hosts for playbook-canary.yaml; they must also be listed above. When
+# scaling out from one guided install, put that existing host here.
+[clickhouse_canary]
+ch-node-01.example.com
+
 [clickhouse:vars]
 # ClickHouse connection (click-dog connects to localhost on each node)
 clickhouse_username=click_dog_monitor
@@ -21,10 +27,25 @@ clickhouse_username=click_dog_monitor
 # OTEL collector endpoint (shared across all nodes)
 otel_collector_address=otel-collector.monitoring.internal:4317
 
-# ClickHouse Keeper hosts for HA leader election
-keeper_hosts=["keeper-01:9181", "keeper-02:9181", "keeper-03:9181"]
+# TLS to the collector. otel_secure is optional: unset, each host asks the
+# click-dog it installs (plaintext only for a loopback collector such as the
+# default localhost:4317, TLS otherwise) and checks a TLS receiver by
+# handshake before writing its config. Set otel_secure=false for a collector
+# that serves plaintext over the network (an in-house OpenTelemetry Collector
+# or Datadog Agent on 4317 usually does). Certificate paths are on the
+# control node and imply TLS; see https://click-dog.com/ansible/#otlp-tls.
+# otel_secure=false
+# otel_ca_cert=/secure/pki/otel-collector-ca.pem
+# otel_client_cert=/secure/pki/{{ inventory_hostname }}.crt
+# otel_client_key=/secure/pki/{{ inventory_hostname }}.key
 
-# click-dog version to install
-click_dog_version=latest
+# Pin one release so a release published mid-rollout cannot leave the fleet
+# on mixed versions. `latest` is accepted but resolves per host.
+click_dog_version=vYY.MM.N
+
+# Optional: ClickHouse Keeper hosts for fleet coordination (cluster-wide
+# `click-dog flush` and /clusterz). Not needed for coverage; leave unset.
+# keeper_hosts=["keeper-01:9181", "keeper-02:9181", "keeper-03:9181"]
+
 # Override download URL for air-gapped environments:
 # click_dog_download_url=https://internal-mirror.example.com/click-dog

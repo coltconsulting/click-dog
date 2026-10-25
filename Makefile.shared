@@ -56,7 +56,7 @@ check-fmt:
 	fi
 
 check-lint: ## Run golangci-lint
-	@command -v "$(GOLANGCI_LINT)" >/dev/null 2>&1 || { echo "golangci-lint not installed; run: make dev-setup"; exit 1; }
+	@$(call require_pinned,golangci-lint,$(GOLANGCI_LINT))
 	@mkdir -p "$(AGENT_CACHE_DIR)/go-build" "$(AGENT_CACHE_DIR)/go-mod" "$(AGENT_CACHE_DIR)/golangci-lint"
 	GOCACHE="$(AGENT_CACHE_DIR)/go-build" GOMODCACHE="$(AGENT_CACHE_DIR)/go-mod" GOLANGCI_LINT_CACHE="$(AGENT_CACHE_DIR)/golangci-lint" $(GOLANGCI_LINT) run
 
@@ -65,7 +65,7 @@ check-lint: ## Run golangci-lint
 # `warning` and above: `style` and `info` are advisory, and a lint nobody can
 # keep green stops being a gate.
 check-shell: ## Run shellcheck over the tracked shell sources
-	@command -v "$(SHELLCHECK)" >/dev/null 2>&1 || { echo "shellcheck not installed; run: make dev-setup"; exit 1; }
+	@$(call require_pinned,shellcheck,$(SHELLCHECK))
 	@if git rev-parse --git-dir >/dev/null 2>&1; then \
 		git ls-files -z -- '*.sh'; \
 	else \
@@ -73,30 +73,29 @@ check-shell: ## Run shellcheck over the tracked shell sources
 	fi | xargs -0r "$(SHELLCHECK)" -x --severity=warning
 
 check-workflows:
-	@command -v "$(ACTIONLINT)" >/dev/null 2>&1 || { echo "actionlint not installed; run: make dev-setup"; exit 1; }
+	@$(call require_pinned,actionlint,$(ACTIONLINT))
 	$(ACTIONLINT)
 
 # Run the same vulnerability scan that CI enforces.
 check-vuln: ## Run govulncheck
-	@command -v "$(GOVULNCHECK)" >/dev/null 2>&1 || { echo "govulncheck not installed; run: make dev-setup"; exit 1; }
+	@$(call require_pinned,govulncheck,$(GOVULNCHECK))
 	@mkdir -p "$(AGENT_CACHE_DIR)/go-build" "$(AGENT_CACHE_DIR)/go-mod"
-	GOCACHE="$(AGENT_CACHE_DIR)/go-build" GOMODCACHE="$(AGENT_CACHE_DIR)/go-mod" $(GOVULNCHECK) ./...
+	GOCACHE="$(AGENT_CACHE_DIR)/go-build" GOMODCACHE="$(AGENT_CACHE_DIR)/go-mod" scripts/lib/vulncheck.sh $(GOVULNCHECK)
 
 # --all covers the change deltas under openspec/changes/ as well as the specs
 # tree; a malformed delta otherwise surfaces only at post-merge `openspec archive`.
 check-spec:
 	@if [ ! -d openspec ]; then \
 		echo "skipping OpenSpec validation (internal spec tree absent)"; \
-	elif ! command -v "$(OPENSPEC)" >/dev/null 2>&1; then \
-		echo "openspec not installed; run: make dev-setup"; exit 1; \
 	else \
+		$(call require_pinned,openspec,$(OPENSPEC)) && \
 		"$(OPENSPEC)" validate --all --strict; \
 	fi
 
 # Validate k8s manifests: render kustomize + schema check via kubeconform
 check-k8s:
 	@command -v kubectl >/dev/null 2>&1 || { echo "kubectl not installed; it renders deploy/kubernetes/ (see: make doctor)"; exit 1; }
-	@command -v "$(KUBECONFORM)" >/dev/null 2>&1 || { echo "kubeconform not installed; run: make dev-setup"; exit 1; }
+	@$(call require_pinned,kubeconform,$(KUBECONFORM))
 	@echo "==> Rendering kustomize..."
 	@kubectl kustomize deploy/kubernetes/ > /dev/null
 	@echo "  [ok] kustomize renders cleanly"
@@ -157,6 +156,8 @@ test-scripts: ## Run the installer, release-tooling, and boundary shell suites
 	bash scripts/lib/integration-port-preflight_test.sh
 	bash scripts/lib/development-remote-policy_test.sh
 	bash scripts/lib/dco-verify-commits_test.sh
+	bash scripts/lib/tool-pins_test.sh
+	bash scripts/lib/workflow-pins_test.sh
 	@# Internal-only suites are guarded: this file ships publicly, and an
 	@# unconditional call to an export-ignored script fails the public tree.
 	@if [ -f scripts/lib/dco-verify-patch_test.sh ]; then \

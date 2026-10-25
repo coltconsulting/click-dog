@@ -166,7 +166,7 @@ func TestDetectQueryLogNormalizedSupport(t *testing.T) {
 
 	conn = &fakeConn{row: fakeRow{vals: []any{uint64(3), uint64(3)}}}
 	if !detectQueryLogNormalizedSupport(ctx, conn, "prod", true) {
-		t.Fatal("expected cluster query mode to enable optional fields when all replicas support them")
+		t.Fatal("expected cluster mode to enable optional fields when all replicas support them")
 	}
 	if conn.queryRowCallCount != 1 {
 		t.Errorf("cluster probe calls = %d, want 1", conn.queryRowCallCount)
@@ -187,7 +187,7 @@ func TestDetectQueryLogNormalizedSupport(t *testing.T) {
 
 	conn = &fakeConn{row: fakeRow{count: 1}}
 	if detectQueryLogNormalizedSupport(ctx, conn, "", true) {
-		t.Fatal("cluster query mode without a cluster name should disable optional fields")
+		t.Fatal("cluster mode without a cluster name should disable optional fields")
 	}
 	if conn.queryRowCallCount != 0 {
 		t.Errorf("empty-cluster mode should not probe system.columns, got %d calls", conn.queryRowCallCount)

@@ -5,6 +5,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Resolved from this script's repository root.
 # shellcheck disable=SC1091
 source "$ROOT/scripts/tool-versions.env"
+# shellcheck source=scripts/lib/tool-pins.sh
+source "$ROOT/scripts/lib/tool-pins.sh"
 agent_cache="$ROOT/.agent-cache"
 
 WARNINGS=0
@@ -38,6 +40,25 @@ version_contains() {
     else
         warn "$name expected $expected; found: $summary"
     fi
+}
+
+# The verdict the gate itself gives (scripts/lib/tool-pins.sh): a gate refuses
+# a tool that is not the pinned version, so a mismatch here is a gate that will
+# fail, not a cosmetic difference.
+pinned_tool() {
+    local tool="$1" command_path="$2" gate="$3" status=0
+    tool_pin_check "$tool" "$command_path" || status=$?
+    case "$status" in
+        0) pass "$tool $TOOL_PIN_EXPECTED" ;;
+        2) warn "$tool missing (run: make dev-setup)" ;;
+        *)
+            if [[ "${ALLOW_UNPINNED_TOOLS:-}" == 1 ]]; then
+                warn "$tool at $command_path is ${TOOL_PIN_FOUND:-an unreadable version}, not the pinned $TOOL_PIN_EXPECTED; make $gate accepts it only because ALLOW_UNPINNED_TOOLS=1"
+            else
+                warn "$tool at $command_path is ${TOOL_PIN_FOUND:-an unreadable version}, not the pinned $TOOL_PIN_EXPECTED; make $gate will refuse it (run: make dev-setup)"
+            fi
+            ;;
+    esac
 }
 
 printf 'click-dog doctor\n'
@@ -128,16 +149,12 @@ kubeconform_bin="$(prefer_local kubeconform "$agent_cache/bin/kubeconform")"
 shellcheck_bin="$(prefer_local shellcheck "$agent_cache/bin/shellcheck")"
 openspec_bin="$(prefer_local openspec "$agent_cache/npm/node_modules/.bin/openspec")"
 
-version_contains golangci-lint "$lint_bin" "$GOLANGCI_LINT_VERSION" version
-version_contains govulncheck "$vuln_bin" "$GOVULNCHECK_VERSION" -version
-version_contains actionlint "$actionlint_bin" "$ACTIONLINT_VERSION" -version
-if [[ "$kubeconform_bin" == "$agent_cache/bin/kubeconform" ]]; then
-    pass "kubeconform $KUBECONFORM_VERSION (source-pinned local build)"
-else
-    version_contains kubeconform "$kubeconform_bin" "$KUBECONFORM_VERSION" -v
-fi
-version_contains shellcheck "$shellcheck_bin" "$SHELLCHECK_VERSION" --version
-version_contains OpenSpec "$openspec_bin" "$OPENSPEC_VERSION" --version
+pinned_tool golangci-lint "$lint_bin" check-lint
+pinned_tool govulncheck "$vuln_bin" check-vuln
+pinned_tool actionlint "$actionlint_bin" check-workflows
+pinned_tool kubeconform "$kubeconform_bin" check-k8s
+pinned_tool shellcheck "$shellcheck_bin" check-shell
+pinned_tool openspec "$openspec_bin" check-spec
 if [[ -f "$ROOT/.beads/issues.jsonl" ]]; then
     bd_bin="$(prefer_local bd "$agent_cache/bin/bd")"
     version_contains bd "$bd_bin" "$BD_VERSION" --version

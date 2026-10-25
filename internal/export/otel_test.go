@@ -63,7 +63,7 @@ func newTestExporter(client *mockTraceClient) *OTELExporter {
 		grpcClient:  client,
 		serviceName: "test-service",
 	}
-	exp.wrapperBytes = proto.Size(exp.buildExportRequest(nil))
+	exp.resource.Store(exp.newResourceState(""))
 	return exp
 }
 
@@ -94,7 +94,7 @@ func TestExportOTLPSpans_LargeBatchChunks(t *testing.T) {
 	spans := makeSpans(4000, 1000)
 
 	// Verify our test data is actually over the limit
-	req := exp.buildExportRequest(spans)
+	req := exp.buildExportRequest(exp.currentResource(), spans)
 	if proto.Size(req) <= grpcMaxBytes {
 		t.Fatal("test spans should exceed grpcMaxBytes")
 	}

@@ -26,7 +26,7 @@ func (s *stubMetricExporter) Export(context.Context, *metricdata.ResourceMetrics
 	return s.err
 }
 
-func captureSelfMetricsLog(t *testing.T) *bytes.Buffer {
+func captureClicklog(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	// Mutates clicklog/stdlog process globals; keep callers non-parallel and
 	// restore the exact prior stdlog state on cleanup.
@@ -53,7 +53,7 @@ func captureSelfMetricsLog(t *testing.T) *bytes.Buffer {
 // each dropped batch produced an unbounded ERROR stream that buried real
 // errors while span export was healthy.
 func TestSelfMetricsExporter_SuppressesRepeatedErrors(t *testing.T) {
-	buf := captureSelfMetricsLog(t)
+	buf := captureClicklog(t)
 	stub := &stubMetricExporter{err: errors.New("unknown service MetricsService")}
 	exp := &logAndDropMetricExporter{Exporter: stub}
 
@@ -69,7 +69,7 @@ func TestSelfMetricsExporter_SuppressesRepeatedErrors(t *testing.T) {
 }
 
 func TestSelfMetricsExporter_LogsEachDistinctError(t *testing.T) {
-	buf := captureSelfMetricsLog(t)
+	buf := captureClicklog(t)
 	stub := &stubMetricExporter{err: errors.New("connection refused")}
 	exp := &logAndDropMetricExporter{Exporter: stub}
 
@@ -93,7 +93,7 @@ func TestSelfMetricsExporter_LogsEachDistinctError(t *testing.T) {
 // A persistent failure must still surface periodically — suppression bounds
 // the rate, it does not silence the condition.
 func TestSelfMetricsExporter_RepeatsAfterInterval(t *testing.T) {
-	buf := captureSelfMetricsLog(t)
+	buf := captureClicklog(t)
 	stub := &stubMetricExporter{err: errors.New("unknown service MetricsService")}
 	exp := &logAndDropMetricExporter{Exporter: stub}
 
@@ -120,7 +120,7 @@ func TestSelfMetricsExporter_RepeatsAfterInterval(t *testing.T) {
 // the whole outage, so the batch that triggered the repeat must not be counted
 // twice.
 func TestSelfMetricsExporter_RecoveryCountSurvivesARepeat(t *testing.T) {
-	buf := captureSelfMetricsLog(t)
+	buf := captureClicklog(t)
 	stub := &stubMetricExporter{err: errors.New("unknown service MetricsService")}
 	exp := &logAndDropMetricExporter{Exporter: stub}
 
@@ -142,7 +142,7 @@ func TestSelfMetricsExporter_RecoveryCountSurvivesARepeat(t *testing.T) {
 }
 
 func TestSelfMetricsExporter_LogsRecovery(t *testing.T) {
-	buf := captureSelfMetricsLog(t)
+	buf := captureClicklog(t)
 	stub := &stubMetricExporter{err: errors.New("unknown service MetricsService")}
 	exp := &logAndDropMetricExporter{Exporter: stub}
 

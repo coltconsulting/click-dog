@@ -7,8 +7,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/coltconsulting/click-dog/internal/config"
 )
 
 func TestDeployKubernetesInitialGeneration(t *testing.T) {
@@ -24,6 +29,7 @@ func TestDeployKubernetesInitialGeneration(t *testing.T) {
 
 	err := deployKubernetes(deployGenerateOptions{
 		CollectorAddress:  "otel-collector.monitoring:4317",
+		OTELSecure:        boolPtr(false),
 		OutDir:            outDir,
 		Version:           "26.05.1",
 		ClickHouseHost:    "clickhouse.clickhouse.svc.cluster.local",
@@ -72,6 +78,7 @@ func TestDeployKubernetesInitialGeneration(t *testing.T) {
 		"path: /readyz",
 		"runAsNonRoot: true",
 		"runAsUser: 65532",
+		"runAsGroup: 65532",
 		"allowPrivilegeEscalation: false",
 		"readOnlyRootFilesystem: true",
 		"- ALL",
@@ -147,11 +154,73 @@ func TestDeployDockerInitialGeneration(t *testing.T) {
 	}
 }
 
+func TestDeployDocker_ConfigReadableByImageUser(t *testing.T) {
+	// os.WriteFile keeps an existing file's mode, as a umask of 027 would
+	// lower a new one's; either leaves the container's user unable to read it.
+	outDir := t.TempDir()
+	cfgPath := filepath.Join(outDir, "click-dog.yaml")
+	if err := os.WriteFile(cfgPath, []byte("old\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := deployDocker(deployGenerateOptions{
+		CollectorAddress: "localhost:4317",
+		OutDir:           outDir,
+		Version:          "v26.05.1",
+		ClickHouseUser:   "click_dog_monitor",
+		ClickHousePass:   "secret",
+	}, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("deployDocker returned error: %v", err)
+	}
+
+	info, err := os.Stat(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0644 {
+		t.Fatalf("click-dog.yaml mode = %v, want 0644", got)
+	}
+}
+
+func TestDeployDocker_SymlinkedConfigKeepsTargetMode(t *testing.T) {
+	// Widening the mode would follow the link to a file outside the output
+	// directory, which the operator may keep private on purpose.
+	outDir := t.TempDir()
+	target := filepath.Join(t.TempDir(), "shared.yaml")
+	if err := os.WriteFile(target, []byte("old\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(outDir, "click-dog.yaml")); err != nil {
+		t.Fatal(err)
+	}
+
+	err := deployDocker(deployGenerateOptions{
+		CollectorAddress: "localhost:4317",
+		OutDir:           outDir,
+		Version:          "v26.05.1",
+		ClickHouseUser:   "click_dog_monitor",
+		ClickHousePass:   "secret",
+	}, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatalf("deployDocker returned error: %v", err)
+	}
+
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0600 {
+		t.Fatalf("symlink target mode = %v, want 0600", got)
+	}
+}
+
 func TestDeployKubernetesQuotesTemplateScalars(t *testing.T) {
 	outDir := t.TempDir()
 	payload := "otel:4317\n        - name: injected\n          image: attacker.invalid/poc:1"
 	err := deployKubernetes(deployGenerateOptions{
 		CollectorAddress:  payload,
+		OTELSecure:        boolPtr(false),
 		OutDir:            outDir,
 		Version:           "26.05.1",
 		ClickHouseHost:    "clickhouse.example\n---\ninjected",
@@ -191,6 +260,7 @@ func TestDeployRejectsUnsafeVersions(t *testing.T) {
 			outDir := t.TempDir()
 			err := deployKubernetes(deployGenerateOptions{
 				CollectorAddress: "otel:4317",
+				OTELSecure:       boolPtr(false),
 				OutDir:           outDir,
 				Version:          version,
 				ClickHouseHost:   "clickhouse.clickhouse.svc.cluster.local",
@@ -213,6 +283,7 @@ func TestDeployKubernetesUpdateBumpsImageAndBacksUp(t *testing.T) {
 
 	err := deployKubernetes(deployGenerateOptions{
 		CollectorAddress: "otel:4317",
+		OTELSecure:       boolPtr(false),
 		OutDir:           outDir,
 		Version:          "26.05.1",
 		ClickHouseHost:   "clickhouse.clickhouse.svc.cluster.local",
@@ -259,6 +330,7 @@ func TestDeployKubernetesRejectsLocalhostHost(t *testing.T) {
 		var stderr bytes.Buffer
 		err := deployKubernetes(deployGenerateOptions{
 			CollectorAddress: "otel:4317",
+			OTELSecure:       boolPtr(false),
 			OutDir:           t.TempDir(),
 			Version:          "26.05.1",
 			ClickHouseHost:   host,
@@ -298,7 +370,7 @@ func TestParseDeployGenerateFlagsAliases(t *testing.T) {
 	opts := deployGenerateOptions{OutDir: defaultDeployDockerOutDir}
 	err := parseDeployGenerateFlags(
 		"deploy docker",
-		[]string{"-c", "otel:4317", "-o", "/tmp/out", "-v", "v26.05.1", "-u", "reader", "-p", "secret", "--update"},
+		[]string{"-c", "otel:4317", "-o", "/tmp/out", "-v", "v26.05.1", "-u", "reader", "-p", "secret", "--update", "--otel-secure"},
 		&opts,
 		io.Discard,
 		func(io.Writer, *flag.FlagSet) {},
@@ -328,6 +400,333 @@ func TestParseDeployGenerateFlagsAliases(t *testing.T) {
 	if !opts.Update {
 		t.Fatal("Update = false, want true")
 	}
+	if opts.OTELSecure == nil || !*opts.OTELSecure {
+		t.Fatalf("OTELSecure = %v, want true", opts.OTELSecure)
+	}
+}
+
+// TestDeployGenerate_OTELSecure pins --otel-secure for both generators: either
+// value renders exporters.otel[0].secure (the key `click-dog init` writes) and
+// nothing else, and without it a loopback collector gets the rule comment
+// while any other collector is refused. The rendered config is loaded through config.LoadConfig so the
+// key is checked where it lands, not just that the text appears somewhere —
+// clickhouse.secure must stay off because both generators target port 9000.
+func TestDeployGenerate_OTELSecure(t *testing.T) {
+	t.Setenv("CLICKHOUSE_USERNAME", "click_dog_monitor")
+	t.Setenv("CLICKHOUSE_PASSWORD", "secret")
+
+	generators := []struct {
+		name   string
+		run    func(deployGenerateOptions) error
+		config func(t *testing.T, outDir string) string
+	}{
+		{
+			name: "kubernetes",
+			run: func(o deployGenerateOptions) error {
+				o.ClickHouseHost = "clickhouse.clickhouse.svc.cluster.local"
+				return deployKubernetes(o, io.Discard, io.Discard)
+			},
+			config: configMapClickDogYAML,
+		},
+		{
+			name: "docker",
+			run: func(o deployGenerateOptions) error {
+				return deployDocker(o, io.Discard, io.Discard)
+			},
+			config: func(t *testing.T, outDir string) string {
+				return readFile(t, filepath.Join(outDir, "click-dog.yaml"))
+			},
+		},
+	}
+	for _, g := range generators {
+		for _, tc := range []struct {
+			name      string
+			collector string
+			flag      *bool
+			want      bool
+			wantLine  string // "" means the rule comment
+		}{
+			{"otel-secure=true", "otel.example.com:4317", boolPtr(true), true, "secure: true"},
+			{"otel-secure=false", "otel-collector.monitoring:4317", boolPtr(false), false, "secure: false"},
+			{"loopback automatic", "localhost:4317", nil, false, ""},
+		} {
+			secure := tc.want
+			t.Run(g.name+"/"+tc.name, func(t *testing.T) {
+				outDir := t.TempDir()
+				if err := g.run(deployGenerateOptions{
+					CollectorAddress: tc.collector,
+					OutDir:           outDir,
+					Version:          "26.05.1",
+					ClickHouseUser:   "click_dog_monitor",
+					ClickHousePass:   "secret",
+					OTELSecure:       tc.flag,
+				}); err != nil {
+					t.Fatalf("generate: %v", err)
+				}
+
+				rendered := g.config(t, outDir)
+				if tc.wantLine != "" {
+					if got := strings.Count(rendered, tc.wantLine); got != 1 {
+						t.Fatalf("%q appears %d times, want 1:\n%s", tc.wantLine, got, rendered)
+					}
+				} else if strings.Contains(rendered, "secure: ") || !strings.Contains(rendered, "# secure omitted: plaintext while collector_address is loopback") {
+					t.Fatalf("want the rule comment and no secure key:\n%s", rendered)
+				}
+				if g.name == "kubernetes" && strings.Contains(rendered, "# ca_cert:") != (tc.flag != nil && *tc.flag) {
+					t.Errorf("commented TLS file lines belong with secure: true only:\n%s", rendered)
+				}
+				cfgPath := filepath.Join(t.TempDir(), "click-dog.yaml")
+				if err := os.WriteFile(cfgPath, []byte(rendered), 0600); err != nil {
+					t.Fatal(err)
+				}
+				cfg, err := config.LoadConfig(cfgPath)
+				if err != nil {
+					t.Fatalf("LoadConfig: %v\n--- rendered ---\n%s", err, rendered)
+				}
+				if len(cfg.Exporters.OTEL) != 1 {
+					t.Fatalf("want one OTEL exporter, got %d", len(cfg.Exporters.OTEL))
+				}
+				if got := cfg.Exporters.OTEL[0].Secure; got != secure {
+					t.Errorf("exporters.otel[0].secure = %v, want %v", got, secure)
+				}
+				if cfg.Exporters.OTEL[0].CACert != "" {
+					t.Errorf("exporters.otel[0].ca_cert = %q, want empty (system trust store)", cfg.Exporters.OTEL[0].CACert)
+				}
+				if cfg.ClickHouse.Secure {
+					t.Error("clickhouse.secure = true; --otel-secure must not touch the ClickHouse connection")
+				}
+			})
+		}
+	}
+}
+
+// TestDeployKubernetes_OTELTLSVolume pins the optional OTLP TLS mount every
+// generated Deployment carries, matching deploy/kubernetes/deployment.yaml:
+// ConfigMap click-dog-otel-ca and Secret click-dog-otel-client projected
+// read-only at /etc/click-dog/tls, both optional so the pod starts without
+// them, and the client key 0440 under fsGroup 65532 so only click-dog reads it.
+// The pod also runs in primary group 65532, so the key is not readable through
+// group 0 when fsGroup is missing.
+func TestDeployKubernetes_OTELTLSVolume(t *testing.T) {
+	outDir := t.TempDir()
+	if err := deployKubernetes(deployGenerateOptions{
+		CollectorAddress: "otel.example.com:4317",
+		OTELSecure:       boolPtr(false),
+		OutDir:           outDir,
+		Version:          "26.05.1",
+		ClickHouseHost:   "clickhouse.clickhouse.svc.cluster.local",
+		ClickHouseUser:   "click_dog_monitor",
+		ClickHousePass:   "secret",
+	}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("deployKubernetes: %v", err)
+	}
+
+	type keyPath struct {
+		Key  string `yaml:"key"`
+		Path string `yaml:"path"`
+		Mode *int   `yaml:"mode"`
+	}
+	type source struct {
+		Name     string    `yaml:"name"`
+		Optional bool      `yaml:"optional"`
+		Items    []keyPath `yaml:"items"`
+	}
+	var d struct {
+		Spec struct {
+			Template struct {
+				Spec struct {
+					SecurityContext struct {
+						RunAsUser  int `yaml:"runAsUser"`
+						RunAsGroup int `yaml:"runAsGroup"`
+						FSGroup    int `yaml:"fsGroup"`
+					} `yaml:"securityContext"`
+					Containers []struct {
+						VolumeMounts []struct {
+							Name      string `yaml:"name"`
+							MountPath string `yaml:"mountPath"`
+							ReadOnly  bool   `yaml:"readOnly"`
+						} `yaml:"volumeMounts"`
+					} `yaml:"containers"`
+					Volumes []struct {
+						Name      string `yaml:"name"`
+						Projected *struct {
+							Sources []struct {
+								ConfigMap *source `yaml:"configMap"`
+								Secret    *source `yaml:"secret"`
+							} `yaml:"sources"`
+						} `yaml:"projected"`
+					} `yaml:"volumes"`
+				} `yaml:"spec"`
+			} `yaml:"template"`
+		} `yaml:"spec"`
+	}
+	if err := yaml.Unmarshal([]byte(readFile(t, filepath.Join(outDir, "deployment.yaml"))), &d); err != nil {
+		t.Fatalf("parsing deployment.yaml: %v", err)
+	}
+	pod := d.Spec.Template.Spec
+	if pod.SecurityContext.FSGroup != pod.SecurityContext.RunAsUser || pod.SecurityContext.FSGroup != 65532 {
+		t.Errorf("fsGroup = %d, want 65532 (the runAsUser)", pod.SecurityContext.FSGroup)
+	}
+	if pod.SecurityContext.RunAsGroup != 65532 {
+		t.Errorf("runAsGroup = %d, want 65532 (unset runs click-dog in group 0)", pod.SecurityContext.RunAsGroup)
+	}
+
+	mounted := false
+	for _, m := range pod.Containers[0].VolumeMounts {
+		if m.Name == "otel-tls" {
+			mounted = m.MountPath == "/etc/click-dog/tls" && m.ReadOnly
+		}
+	}
+	if !mounted {
+		t.Errorf("otel-tls not mounted read-only at /etc/click-dog/tls: %+v", pod.Containers[0].VolumeMounts)
+	}
+
+	var ca, client *source
+	for _, v := range pod.Volumes {
+		if v.Name != "otel-tls" || v.Projected == nil {
+			continue
+		}
+		for _, s := range v.Projected.Sources {
+			if s.ConfigMap != nil {
+				ca = s.ConfigMap
+			}
+			if s.Secret != nil {
+				client = s.Secret
+			}
+		}
+	}
+	if ca == nil || ca.Name != "click-dog-otel-ca" || !ca.Optional ||
+		len(ca.Items) != 1 || ca.Items[0] != (keyPath{Key: "ca.pem", Path: "ca.pem"}) {
+		t.Errorf("CA source = %+v, want optional ConfigMap click-dog-otel-ca, ca.pem -> ca.pem", ca)
+	}
+	if client == nil || client.Name != "click-dog-otel-client" || !client.Optional || len(client.Items) != 2 {
+		t.Fatalf("client source = %+v, want optional Secret click-dog-otel-client with two items", client)
+	}
+	if got := client.Items[0]; got.Key != "tls.crt" || got.Path != "client.crt" || got.Mode != nil {
+		t.Errorf("client cert item = %+v, want tls.crt -> client.crt at the default mode", got)
+	}
+	if got := client.Items[1]; got.Key != "tls.key" || got.Path != "client.key" || got.Mode == nil || *got.Mode != 0o440 {
+		t.Errorf("client key item = %+v, want tls.key -> client.key with mode 0440", got)
+	}
+
+	// Without --otel-secure the ConfigMap names none of the mounted files.
+	if strings.Contains(readFile(t, filepath.Join(outDir, "configmap.yaml")), "/etc/click-dog/tls/") {
+		t.Error("plaintext configmap.yaml should not mention the TLS mount")
+	}
+}
+
+// TestDeployKubernetes_SecurityContextMatchesShippedManifest keeps the
+// generated Deployment and deploy/kubernetes/deployment.yaml on one pod
+// identity: the same pod and container securityContext, running click-dog as
+// user and group 65532. make check-k8s only validates the shipped file's
+// schema, so without this a drift in either copy goes unnoticed.
+func TestDeployKubernetes_SecurityContextMatchesShippedManifest(t *testing.T) {
+	outDir := t.TempDir()
+	if err := deployKubernetes(deployGenerateOptions{
+		CollectorAddress: "otel.example.com:4317",
+		OTELSecure:       boolPtr(false),
+		OutDir:           outDir,
+		Version:          "26.05.1",
+		ClickHouseHost:   "clickhouse.clickhouse.svc.cluster.local",
+		ClickHouseUser:   "click_dog_monitor",
+		ClickHousePass:   "secret",
+	}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("deployKubernetes: %v", err)
+	}
+
+	shippedPod, shippedContainer := podSecurityContexts(t, shippedDeployment)
+	genPod, genContainer := podSecurityContexts(t, filepath.Join(outDir, "deployment.yaml"))
+	if !reflect.DeepEqual(shippedPod, genPod) {
+		t.Errorf("pod securityContext differs:\n  shipped:   %+v\n  generated: %+v", shippedPod, genPod)
+	}
+	if !reflect.DeepEqual(shippedContainer, genContainer) {
+		t.Errorf("container securityContext differs:\n  shipped:   %+v\n  generated: %+v", shippedContainer, genContainer)
+	}
+	if got := shippedPod["runAsGroup"]; got != 65532 {
+		t.Errorf("shipped runAsGroup = %v, want 65532 (unset runs click-dog in group 0)", got)
+	}
+}
+
+// shippedDeployment is the checked-in sample manifest the generator mirrors.
+var shippedDeployment = filepath.Join("deploy", "kubernetes", "deployment.yaml")
+
+// podSecurityContexts returns a Deployment manifest's pod securityContext and
+// its click-dog container's securityContext.
+func podSecurityContexts(t *testing.T, path string) (pod, container map[string]any) {
+	t.Helper()
+	var d struct {
+		Spec struct {
+			Template struct {
+				Spec struct {
+					SecurityContext map[string]any `yaml:"securityContext"`
+					Containers      []struct {
+						Name            string         `yaml:"name"`
+						SecurityContext map[string]any `yaml:"securityContext"`
+					} `yaml:"containers"`
+				} `yaml:"spec"`
+			} `yaml:"template"`
+		} `yaml:"spec"`
+	}
+	if err := yaml.Unmarshal([]byte(readFile(t, path)), &d); err != nil {
+		t.Fatalf("parsing %s: %v", path, err)
+	}
+	spec := d.Spec.Template.Spec
+	for _, c := range spec.Containers {
+		if c.Name == "click-dog" {
+			return spec.SecurityContext, c.SecurityContext
+		}
+	}
+	t.Fatalf("%s has no click-dog container", path)
+	return nil, nil
+}
+
+// TestDeployUpdate_RejectsOTELSecure: --update only bumps the image tag, so
+// --otel-secure there would be silently dropped, leaving a plaintext exporter
+// behind a command line that asked for TLS. Both generators refuse it before
+// touching the output directory.
+func TestDeployUpdate_RejectsOTELSecure(t *testing.T) {
+	for _, tc := range []struct {
+		name, file string
+		run        func(deployGenerateOptions) error
+	}{
+		{"kubernetes", "configmap.yaml", func(o deployGenerateOptions) error { return deployKubernetes(o, io.Discard, io.Discard) }},
+		{"docker", "click-dog.yaml", func(o deployGenerateOptions) error { return deployDocker(o, io.Discard, io.Discard) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			outDir := t.TempDir()
+			err := tc.run(deployGenerateOptions{OutDir: outDir, Version: "26.05.2", Update: true, OTELSecure: boolPtr(true)})
+			if err == nil {
+				t.Fatal("expected --update --otel-secure to be refused")
+			}
+			if !strings.Contains(err.Error(), "set secure under exporters.otel in "+tc.file) {
+				t.Errorf("error should say where to set it by hand, got: %v", err)
+			}
+			entries, readErr := os.ReadDir(outDir)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if len(entries) != 0 {
+				t.Errorf("refusal wrote into the output directory: %v", entries)
+			}
+		})
+	}
+}
+
+// configMapClickDogYAML returns the click-dog.yaml document embedded in a
+// generated configmap.yaml.
+func configMapClickDogYAML(t *testing.T, outDir string) string {
+	t.Helper()
+	var cm struct {
+		Data map[string]string `yaml:"data"`
+	}
+	if err := yaml.Unmarshal([]byte(readFile(t, filepath.Join(outDir, "configmap.yaml"))), &cm); err != nil {
+		t.Fatalf("parsing configmap.yaml: %v", err)
+	}
+	doc, ok := cm.Data["click-dog.yaml"]
+	if !ok {
+		t.Fatal("configmap.yaml has no data.click-dog.yaml")
+	}
+	return doc
 }
 
 func TestEscapeComposeEnv(t *testing.T) {
@@ -357,6 +756,7 @@ func TestDeployDockerUpdateBumpsImageAndBacksUp(t *testing.T) {
 
 	if err := deployDocker(deployGenerateOptions{
 		CollectorAddress: "otel:4317",
+		OTELSecure:       boolPtr(false),
 		OutDir:           outDir,
 		Version:          "26.05.1",
 		ClickHouseUser:   "click_dog_monitor",
@@ -453,6 +853,7 @@ func TestPrepareInitialDeployOptionsResolvesVersion(t *testing.T) {
 
 	opts := deployGenerateOptions{
 		CollectorAddress: "otel:4317",
+		OTELSecure:       boolPtr(false),
 		OutDir:           "/tmp/ignored",
 		ClickHouseUser:   "click_dog_monitor",
 		ClickHousePass:   "secret",
@@ -482,6 +883,7 @@ func TestPrepareInitialDeployOptions_PasswordFlagWarning(t *testing.T) {
 
 	opts := deployGenerateOptions{
 		CollectorAddress: "otel:4317",
+		OTELSecure:       boolPtr(false),
 		OutDir:           "/tmp/ignored",
 		ClickHouseUser:   "click_dog_monitor",
 		ClickHousePass:   "secret",
@@ -506,6 +908,7 @@ func TestPrepareInitialDeployOptionsWrapsResolverError(t *testing.T) {
 
 	opts := deployGenerateOptions{
 		CollectorAddress: "otel:4317",
+		OTELSecure:       boolPtr(false),
 		OutDir:           "/tmp/ignored",
 		ClickHouseUser:   "click_dog_monitor",
 		ClickHousePass:   "secret",
@@ -552,4 +955,73 @@ func readFile(t *testing.T, path string) string {
 		t.Fatalf("reading %s: %v", path, err)
 	}
 	return string(data)
+}
+
+// TestDeployGenerate_RemoteCollectorNeedsTransport pins the refusal: the
+// generators cannot see the collector's network, so a non-loopback collector
+// without --otel-secure fails before anything is written.
+func TestDeployGenerate_RemoteCollectorNeedsTransport(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(deployGenerateOptions) error
+	}{
+		{"kubernetes", func(o deployGenerateOptions) error {
+			o.ClickHouseHost = "clickhouse.clickhouse.svc.cluster.local"
+			return deployKubernetes(o, io.Discard, io.Discard)
+		}},
+		{"docker", func(o deployGenerateOptions) error { return deployDocker(o, io.Discard, io.Discard) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			outDir := filepath.Join(t.TempDir(), "out")
+			err := tc.run(deployGenerateOptions{
+				CollectorAddress: "otel-collector.monitoring:4317",
+				OutDir:           outDir,
+				Version:          "26.05.1",
+				ClickHouseUser:   "click_dog_monitor",
+				ClickHousePass:   "secret",
+			})
+			if err == nil {
+				t.Fatal("want refusal")
+			}
+			for _, want := range []string{"--otel-secure=true", "--otel-secure=false", "usually serve plaintext"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error lacks %q: %v", want, err)
+				}
+			}
+			if _, statErr := os.Stat(outDir); statErr == nil {
+				t.Error("refusal created the output directory")
+			}
+		})
+	}
+}
+
+func TestParseDeployGenerateFlags_StrictOTELSecure(t *testing.T) {
+	for _, tc := range []struct {
+		args    []string
+		want    *bool
+		wantErr string
+	}{
+		{[]string{"-c", "x:1"}, nil, ""},
+		{[]string{"--otel-secure", "-c", "x:1"}, boolPtr(true), ""},
+		{[]string{"--otel-secure=false", "-c", "x:1"}, boolPtr(false), ""},
+		{[]string{"--otel-secure", "false", "-c", "x:1"}, nil, "--otel-secure=false"},
+		{[]string{"-c", "x:1", "stray"}, nil, `unexpected argument "stray"`},
+	} {
+		var opts deployGenerateOptions
+		var errOut bytes.Buffer
+		err := parseDeployGenerateFlags("deploy docker", tc.args, &opts, &errOut, deployDockerUsage)
+		if tc.wantErr != "" {
+			if err == nil || !strings.Contains(errOut.String(), tc.wantErr) {
+				t.Errorf("%v: err=%v stderr=%q, want %q", tc.args, err, errOut.String(), tc.wantErr)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%v: %v", tc.args, err)
+			continue
+		}
+		if (opts.OTELSecure == nil) != (tc.want == nil) || (tc.want != nil && *opts.OTELSecure != *tc.want) {
+			t.Errorf("%v: OTELSecure = %v, want %v", tc.args, opts.OTELSecure, tc.want)
+		}
+	}
 }

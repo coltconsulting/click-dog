@@ -66,7 +66,7 @@ func handleCircuitOpen(
 // Hardcoded 2x threshold: with default BackoffFactor 2.0, canary triggers
 // after a single failure. This is intentional — canary is cheap and we want
 // early degraded-mode visibility. A future config knob could override this.
-func handleElevatedBackoff(
+func (p *Pipeline) handleElevatedBackoff(
 	ctx context.Context,
 	exporter model.SpanExporter,
 	cfg *config.Config,
@@ -87,6 +87,10 @@ func handleElevatedBackoff(
 	if currentInterval <= 2*baseInterval {
 		return false, nil
 	}
+
+	// The canary exports before this helper returns. Clear the cached version
+	// now so the first degraded span cannot carry the previous healthy stamp.
+	p.serverVersion.Clear(exporter)
 
 	clicklog.Debug("Backoff elevated (%v > 2x base), running canary", currentInterval)
 	var prevState resilience.CircuitState

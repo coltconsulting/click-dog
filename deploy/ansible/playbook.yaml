@@ -59,17 +59,91 @@
         clickhouse_port: "{{ clickhouse_port | default(9000) }}"
         clickhouse_username: "{{ clickhouse_username | default('click_dog_monitor') }}"
         otel_collector_address: "{{ otel_collector_address | default('localhost:4317') }}"
-        keeper_hosts: "{{ keeper_hosts | default('[\"localhost:9181\"]') }}"
-        # TLS / Let's Encrypt (set tls_enabled=true to provision certs via certbot)
-        tls_enabled: "{{ tls_enabled | default(false) }}"
-        tls_domain: "{{ tls_domain | default('') }}"
-        tls_email: "{{ tls_email | default('') }}"
+        # Off unless set: per-node sidecars need no Keeper for coverage.
+        # Keeper hosts only add coordination (cluster-wide flush, /clusterz).
+        keeper_hosts: "{{ keeper_hosts | default('[]') }}"
+        # OTLP TLS to the collector. otel_secure is optional: unset, the
+        # installed click-dog decides (plaintext only for a loopback
+        # collector) and a TLS choice is checked by handshake. The
+        # certificate paths are on the control node; set them per host in
+        # inventory when each node has its own client certificate.
+        otel_secure: "{{ otel_secure | default('') }}"
+        otel_ca_cert: "{{ otel_ca_cert | default('') }}"
+        otel_client_cert: "{{ otel_client_cert | default('') }}"
+        otel_client_key: "{{ otel_client_key | default('') }}"
       tags: [always]
 
-    - name: Derive HA mode from the Keeper hosts
+    - name: Derive HA mode and OTLP TLS material from their inputs
       ansible.builtin.set_fact:
         ha_enabled: "{{ keeper_hosts | string | length > 2 }}"
+        otel_ca_enabled: "{{ otel_ca_cert | length > 0 }}"
+        otel_mtls_enabled: "{{ otel_client_cert | length > 0 }}"
+        otel_secure_set: "{{ otel_secure | string | length > 0 }}"
+        # Any certificate material means TLS. --print-otel-secure has no
+        # client-certificate input, so a loopback mTLS-only inventory must
+        # not let it decide plaintext.
+        otel_tls_material: "{{ otel_ca_cert | length > 0 or otel_client_cert | length > 0 or otel_client_key | length > 0 }}"
       tags: [always]
+
+    # Fail before touching the host: a run that asked for TLS must not deploy
+    # a plaintext exporter.
+    - name: Reject the retired Let's Encrypt TLS variables
+      ansible.builtin.assert:
+        that:
+          - not (tls_enabled | default(false) | bool)
+        fail_msg: >-
+          tls_enabled, tls_domain, and tls_email were removed. Let's Encrypt no
+          longer issues client-authentication certificates, and a host's own
+          certificate chain cannot verify the collector. TLS is the default
+          for a collector that is not loopback; set otel_secure=true to
+          require it, and, for a private CA or mutual TLS, otel_ca_cert,
+          otel_client_cert, and otel_client_key; see
+          https://click-dog.com/ansible/#otlp-tls.
+
+    - name: Validate OTLP TLS inputs
+      ansible.builtin.assert:
+        that:
+          - not (otel_secure_set | bool) or otel_secure | bool or not (otel_tls_material | bool)
+          - (otel_client_cert | length > 0) == (otel_client_key | length > 0)
+        fail_msg: >-
+          otel_ca_cert, otel_client_cert, and otel_client_key only apply over
+          TLS, so they cannot be combined with otel_secure=false; remove
+          otel_secure=false or the certificate variables. otel_client_cert
+          and otel_client_key must be set together.
+
+    # The playbook cannot tell its own copies from files a guided install or
+    # an operator put there (install.sh writes ca.pem to trust a self-signed
+    # collector), so it never deletes them: a file on the host that the
+    # inventory does not supply stops the run instead of being dropped.
+    - name: Look for OTLP TLS files already on the host
+      ansible.builtin.stat:
+        path: "{{ tls_cert_dir }}/{{ item }}"
+      loop: [ca.pem, client.crt, client.key]
+      register: otel_tls_on_host
+
+    - name: Refuse to drop OTLP TLS files the inventory does not supply
+      ansible.builtin.assert:
+        that:
+          - otel_tls_unsupplied | length == 0
+        fail_msg: >-
+          {{ otel_tls_unsupplied | join(' and ') }} {{ 'is' if otel_tls_unsupplied | length == 1 else 'are' }}
+          in {{ tls_cert_dir }} on this host, but the inventory does not
+          supply {{ 'it' if otel_tls_unsupplied | length == 1 else 'them' }},
+          so the rendered configuration would stop using
+          {{ 'it' if otel_tls_unsupplied | length == 1 else 'them' }}. Either
+          copy {{ 'it' if otel_tls_unsupplied | length == 1 else 'them' }} to
+          the control node and set {{ otel_tls_unsupplied
+          | map('extract', {'ca.pem': 'otel_ca_cert', 'client.crt': 'otel_client_cert', 'client.key': 'otel_client_key'})
+          | join(' and ') }}, or remove
+          {{ 'it' if otel_tls_unsupplied | length == 1 else 'them' }} from the
+          host{{ '; without ca.pem the collector is verified against the system trust roots' if 'ca.pem' in otel_tls_unsupplied else '' }}.
+      vars:
+        otel_tls_supplied: >-
+          {{ (['ca.pem'] if otel_ca_enabled | bool else [])
+             + (['client.crt', 'client.key'] if otel_mtls_enabled | bool else []) }}
+        otel_tls_unsupplied: >-
+          {{ otel_tls_on_host.results | selectattr('stat.exists')
+             | map(attribute='item') | reject('in', otel_tls_supplied) | list }}
 
     # ── System user ──────────────────────────────────────────────
     - name: Check for an existing click-dog system group
@@ -197,7 +271,9 @@
           - click_dog_download_url is defined or click_dog_version == 'latest' or click_dog_version is regex('^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$')
           - click_dog_download_url is not defined or (click_dog_download_checksum is defined and (click_dog_download_checksum | string) is regex('^[0-9a-fA-F]{64}$'))
         fail_msg: >-
-          Release tags must be vX.Y.Z, architectures must be amd64/arm64, and
+          click_dog_version must be `latest` or a release tag such as v26.09.1
+          (got '{{ click_dog_version }}'; replace the inventory example's
+          vYY.MM.N placeholder), architectures must be amd64/arm64, and
           click_dog_download_url requires a trusted 64-character
           click_dog_download_checksum.
       when: click_dog_local_binary is not defined
@@ -417,6 +493,158 @@
             state: absent
           when: click_dog_release_staging is defined and click_dog_release_staging.path is defined
 
+    # ── OTLP TLS ─────────────────────────────────────────────────
+    # click-dog only dials out, so TLS material comes from the PKI that serves
+    # the collector, not from this host: otel_ca_cert verifies the collector's
+    # server certificate (the system roots do when it is unset), and the client
+    # pair authenticates click-dog when the collector requires mTLS. These
+    # copies are the paths click-dog.yaml.j2 renders.
+    - name: Create TLS directory
+      ansible.builtin.file:
+        path: "{{ tls_cert_dir }}"
+        state: directory
+        owner: "{{ click_dog_user }}"
+        group: "{{ click_dog_group }}"
+        mode: "0750"
+      when: otel_ca_enabled | bool or otel_mtls_enabled | bool
+
+    - name: Install the collector CA certificate
+      ansible.builtin.copy:
+        src: "{{ otel_ca_cert }}"
+        dest: "{{ tls_cert_dir }}/ca.pem"
+        owner: "{{ click_dog_user }}"
+        group: "{{ click_dog_group }}"
+        mode: "0640"
+      when: otel_ca_enabled | bool
+      notify: restart click-dog
+
+    - name: Install the OTLP client certificate
+      ansible.builtin.copy:
+        src: "{{ otel_client_cert }}"
+        dest: "{{ tls_cert_dir }}/client.crt"
+        owner: "{{ click_dog_user }}"
+        group: "{{ click_dog_group }}"
+        mode: "0640"
+      when: otel_mtls_enabled | bool
+      # No restart: click-dog re-reads the client pair on each new collector
+      # connection, and a restart would clear its dedup cache and resend
+      # spans still inside the lookback window. A first-time mTLS setup still
+      # restarts through the configuration change.
+
+    - name: Install the OTLP client key
+      ansible.builtin.copy:
+        src: "{{ otel_client_key }}"
+        dest: "{{ tls_cert_dir }}/client.key"
+        owner: "{{ click_dog_user }}"
+        group: "{{ click_dog_group }}"
+        mode: "0600"
+      diff: false
+      when: otel_mtls_enabled | bool
+      # No restart, as for the certificate above.
+
+    # Earlier playbooks installed this hook for a Let's Encrypt certificate
+    # the configuration no longer uses; left behind, renewals would restart
+    # click-dog. Hosts where it ran also hold copies of that certificate and
+    # its private key. The certificate under /etc/letsencrypt is left to the
+    # operator.
+    - name: Remove the retired certbot renewal hook and certificate copies
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/letsencrypt/renewal-hooks/post/click-dog-restart.sh
+        - "{{ tls_cert_dir }}/tls.crt"
+        - "{{ tls_cert_dir }}/tls.key"
+        - "{{ tls_cert_dir }}/fullchain.pem"
+
+    # ── OTLP transport ───────────────────────────────────────────
+    # Each host is the host that exports, so it decides as `install.sh
+    # install` does: an unset otel_secure is answered by the click-dog just
+    # installed (never by a copy of its rule here), and a TLS choice is checked
+    # by handshake before the configuration is written. Both probes run the
+    # binary already in place, since the release is extracted over the old
+    # one; a host that fails here stops before its configuration is written
+    # and before the restart handler runs.
+    - name: Ask click-dog which OTLP transport the collector gets
+      ansible.builtin.command:
+        argv: >-
+          {{ [click_dog_install_dir ~ '/click-dog', 'init', '--print-otel-secure',
+              '--collector', otel_collector_address]
+             + (['--otel-ca-cert', tls_cert_dir ~ '/ca.pem'] if otel_ca_enabled | bool else []) }}
+      register: otel_transport_probe
+      changed_when: false
+      check_mode: false
+      # A --check run of a first deploy has no binary yet; it previews TLS.
+      failed_when: otel_transport_probe.rc != 0 and not ansible_check_mode
+      when: not (otel_secure_set | bool)
+
+    - name: Settle the OTLP transport
+      ansible.builtin.set_fact:
+        otel_transport_tls: >-
+          {{ (otel_secure | bool) if (otel_secure_set | bool)
+             else ((otel_tls_material | bool)
+                   or ((otel_transport_probe.stdout | default('') | trim) or 'true') == 'true') }}
+
+    - name: Render secure explicitly unless a loopback collector was left automatic
+      ansible.builtin.set_fact:
+        otel_secure_rendered: "{{ otel_secure_set | bool or otel_transport_tls | bool }}"
+
+    # Scheme targets (dns:, passthrough:, unix:) are not host:port addresses
+    # the check can dial, as in install.sh.
+    - name: Check the OTLP receiver's TLS handshake
+      ansible.builtin.command:
+        argv: >-
+          {{ [click_dog_install_dir ~ '/click-dog', 'test', 'tls',
+              '--collector', otel_collector_address, '--json']
+             + (['--ca-cert', tls_cert_dir ~ '/ca.pem'] if otel_ca_enabled | bool else [])
+             + (['--client-cert', tls_cert_dir ~ '/client.crt',
+                 '--client-key', tls_cert_dir ~ '/client.key'] if otel_mtls_enabled | bool else []) }}
+      register: otel_tls_check
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      when:
+        - otel_transport_tls | bool
+        - otel_collector_address is not match('(?i)^(dns|passthrough|unix|unix-abstract):')
+
+    # test tls --json prints one indented object; exit 1 is any verdict but
+    # ok, so the verdict decides. An inconclusive check (receiver not up yet,
+    # a binary that cannot run, no JSON) is a note, as in install.sh.
+    - name: Read the OTLP TLS check
+      ansible.builtin.set_fact:
+        otel_tls_result: "{{ otel_tls_check.stdout | from_json if (otel_tls_check.stdout | default('') | trim).startswith('{') else {} }}"
+      when: otel_tls_check is not skipped
+
+    - name: Note an inconclusive OTLP TLS check
+      ansible.builtin.debug:
+        msg: >-
+          TLS to {{ otel_collector_address }} not verified
+          ({{ otel_tls_result.message | default('click-dog test tls gave no verdict') }});
+          `click-dog check` tests it once the service runs.
+      when:
+        - otel_tls_check is not skipped
+        - (otel_tls_result.verdict | default('unknown')) == 'unknown'
+        - (otel_tls_result.reason | default('')) != 'config' or ansible_check_mode
+
+    - name: Stop on an OTLP receiver that does not match the transport
+      ansible.builtin.fail:
+        msg: >-
+          {{ otel_collector_address }} failed the TLS check click-dog would
+          export with: {{ otel_tls_result.verdict }}{{ ' (' ~ otel_tls_result.reason ~ ')' if otel_tls_result.reason | default('') else '' }}:
+          {{ otel_tls_result.message | default('') }}.
+          {% if otel_tls_result.verdict == 'plaintext' %}The receiver serves plaintext;
+          set otel_secure=false to export in plaintext, or enable TLS on the receiver.
+          {% elif otel_tls_result.verdict == 'untrusted' and not otel_ca_enabled | bool %}Set
+          otel_ca_cert to the CA that signed the collector's certificate.
+          {% elif otel_tls_result.verdict == 'client-cert' %}The collector requires a client
+          certificate; set otel_client_cert and otel_client_key.
+          {% endif %}See https://click-dog.com/ansible/#otlp-tls.
+      when:
+        - otel_tls_check is not skipped
+        - (otel_tls_result.verdict | default('unknown')) != 'ok'
+        - (otel_tls_result.verdict | default('unknown')) != 'unknown'
+          or ((otel_tls_result.reason | default('')) == 'config' and not ansible_check_mode)
+
     # ── Configuration ────────────────────────────────────────────
     # Write the password to a 0600 file the click-dog user owns; the config
     # references it via clickhouse.password_file. This keeps the secret out of
@@ -441,75 +669,6 @@
         group: "{{ click_dog_group }}"
         mode: "0640"
       notify: restart click-dog
-
-    # ── TLS / Let's Encrypt ─────────────────────────────────────
-    - name: Validate TLS domain format
-      ansible.builtin.assert:
-        that:
-          - tls_domain is regex('^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*$')
-          - tls_email | length > 0
-        fail_msg: "tls_domain must be a valid hostname (got '{{ tls_domain }}') and tls_email must be set"
-      when: tls_enabled | bool
-
-    - name: Install certbot
-      ansible.builtin.package:
-        name: certbot
-        state: present
-      when: tls_enabled | bool
-
-    - name: Create TLS directory
-      ansible.builtin.file:
-        path: "{{ tls_cert_dir }}"
-        state: directory
-        owner: "{{ click_dog_user }}"
-        group: "{{ click_dog_group }}"
-        mode: "0750"
-      when: tls_enabled | bool
-
-    - name: Obtain Let's Encrypt certificate
-      ansible.builtin.command:
-        cmd: >-
-          certbot certonly --standalone --non-interactive --agree-tos
-          --email "{{ tls_email }}"
-          --domain "{{ tls_domain }}"
-          --cert-path "{{ tls_cert_dir }}/tls.crt"
-          --key-path "{{ tls_cert_dir }}/tls.key"
-          --fullchain-path "{{ tls_cert_dir }}/fullchain.pem"
-        creates: "{{ tls_cert_dir }}/fullchain.pem"
-      when: tls_enabled | bool
-      notify: restart click-dog
-
-    - name: Set certificate permissions
-      ansible.builtin.file:
-        path: "{{ item }}"
-        owner: "{{ click_dog_user }}"
-        group: "{{ click_dog_group }}"
-        mode: "0640"
-      loop:
-        - "{{ tls_cert_dir }}/tls.crt"
-        - "{{ tls_cert_dir }}/tls.key"
-        - "{{ tls_cert_dir }}/fullchain.pem"
-      when: tls_enabled | bool
-
-    # The renewal hook is a static script with all values baked in at deploy
-    # time (no shell variables). The "Validate TLS domain format" assert task
-    # above guarantees tls_domain is a valid hostname before we reach this point.
-    - name: Configure certbot auto-renewal hook
-      ansible.builtin.copy:
-        dest: /etc/letsencrypt/renewal-hooks/post/click-dog-restart.sh
-        owner: root
-        group: root
-        content: |
-          #!/bin/bash
-          set -euo pipefail
-          cp -- "/etc/letsencrypt/live/{{ tls_domain }}/fullchain.pem" "{{ tls_cert_dir }}/fullchain.pem"
-          cp -- "/etc/letsencrypt/live/{{ tls_domain }}/privkey.pem" "{{ tls_cert_dir }}/tls.key"
-          cp -- "/etc/letsencrypt/live/{{ tls_domain }}/cert.pem" "{{ tls_cert_dir }}/tls.crt"
-          chown -- "{{ click_dog_user }}:{{ click_dog_group }}" "{{ tls_cert_dir }}/fullchain.pem" "{{ tls_cert_dir }}/tls.key" "{{ tls_cert_dir }}/tls.crt"
-          chmod 640 "{{ tls_cert_dir }}/fullchain.pem" "{{ tls_cert_dir }}/tls.key" "{{ tls_cert_dir }}/tls.crt"
-          systemctl restart click-dog
-        mode: "0755"
-      when: tls_enabled | bool
 
     # ── Systemd ──────────────────────────────────────────────────
     - name: Deploy systemd unit file

@@ -1,7 +1,10 @@
 FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 
+# 65532 matches the runAsUser/runAsGroup the Kubernetes manifests set, so a pod
+# that sets only runAsUser: 65532 still gets group 65532 from this account
+# instead of group 0.
 RUN apk add --no-cache ca-certificates tzdata \
-    && addgroup -S clickdog && adduser -S clickdog -G clickdog
+    && addgroup -S -g 65532 clickdog && adduser -S -u 65532 -G clickdog clickdog
 
 # Bare declaration on purpose: buildx auto-injects linux/amd64 /
 # linux/arm64 here, and a Dockerfile-level default would shadow it
@@ -9,7 +12,8 @@ RUN apk add --no-cache ca-certificates tzdata \
 ARG TARGETPLATFORM
 COPY ${TARGETPLATFORM}/click-dog /usr/local/bin/click-dog
 
-USER clickdog
+# Numeric so the kubelet can verify runAsNonRoot without a pod runAsUser.
+USER 65532:65532
 
 ENTRYPOINT ["click-dog"]
 CMD ["-config", "/etc/click-dog/click-dog.yaml"]

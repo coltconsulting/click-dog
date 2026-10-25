@@ -11,7 +11,10 @@ import (
 )
 
 // Compile-time check that *MultiExporter satisfies model.SpanExporter.
-var _ model.SpanExporter = (*MultiExporter)(nil)
+var (
+	_ model.SpanExporter         = (*MultiExporter)(nil)
+	_ model.ServerVersionStamper = (*MultiExporter)(nil)
+)
 
 // MultiExporterPolicy controls how MultiExporter interprets live span fan-out
 // results when some sinks fail or accept different span subsets.
@@ -62,6 +65,18 @@ type MultiExporter struct {
 	exporters  []model.SpanExporter
 	names      []string
 	spanPolicy MultiExporterPolicy
+}
+
+// SetServerVersion forwards the ClickHouse server version to every child that
+// accepts one, so fan-out does not silently drop the stamp. Children that do
+// not implement model.ServerVersionStamper (Splunk HEC has no OTLP Resource
+// equivalent) are skipped.
+func (m *MultiExporter) SetServerVersion(version string) {
+	for _, exporter := range m.exporters {
+		if stamper, ok := exporter.(model.ServerVersionStamper); ok {
+			stamper.SetServerVersion(version)
+		}
+	}
 }
 
 // NewMultiExporter creates a MultiExporter wrapping the given exporters.

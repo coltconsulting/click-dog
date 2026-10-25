@@ -295,14 +295,32 @@ type ClickHouseConfig struct {
 }
 
 type OTELConfig struct {
-	CollectorAddress   string `yaml:"collector_address"`
-	ServiceName        string `yaml:"service_name"`
-	MaxQueryLength     int    `yaml:"max_query_length"`     // Max query length to export (default: 100000)
-	Secure             bool   `yaml:"secure"`               // Enable TLS for gRPC connection (default: false)
+	CollectorAddress string `yaml:"collector_address"`
+	ServiceName      string `yaml:"service_name"`
+	MaxQueryLength   int    `yaml:"max_query_length"` // Max query length to export (default: 100000)
+	// SecureSetting is the YAML secure key as written; nil when omitted.
+	// Omitted means TLS unless TLS material is set or the collector is a
+	// loopback target (see ResolveOTLPTransport). Code reads Secure.
+	SecureSetting      *bool  `yaml:"secure"`
 	InsecureSkipVerify bool   `yaml:"insecure_skip_verify"` // Skip TLS certificate verification (default: false, INSECURE)
 	CACert             string `yaml:"ca_cert"`              // Path to CA certificate file for TLS verification
 	ClientCert         string `yaml:"client_cert"`          // Path to client certificate for mTLS
 	ClientKey          string `yaml:"client_key"`           // Path to client key for mTLS
+
+	// Secure is the resolved transport: true for TLS. LoadConfig sets it from
+	// SecureSetting, the TLS material, and the collector address.
+	Secure bool `yaml:"-"`
+	// SecureSource records whether Secure was chosen automatically or set
+	// explicitly. The zero value means automatic.
+	SecureSource TransportSource `yaml:"-"`
+	// Name labels the connection in logs and dial errors, e.g.
+	// "exporters.otel[0]". Empty means "exporters.otel".
+	Name string `yaml:"-"`
+
+	// rawCollectorAddress is collector_address before ${ENV} expansion, kept
+	// so Validate can tell an empty host the operator wrote (":4317") from
+	// one an unset variable produced.
+	rawCollectorAddress string
 }
 
 // CanaryConfig configures lightweight canary queries during degraded mode.
@@ -331,12 +349,19 @@ type OTLPMetricsConfig struct {
 	Enabled               bool   `yaml:"enabled"`
 	InheritOTELConnection bool   `yaml:"inherit_otel_connection"`
 	CollectorAddress      string `yaml:"collector_address"`
-	// Secure enables TLS for standalone metrics connections. For CA or mTLS
-	// client certificates, use inherit_otel_connection with exporters.otel[0].
-	Secure          bool   `yaml:"secure"`
-	Host            string `yaml:"host"`
-	ServiceName     string `yaml:"service_name"`
-	IntervalSeconds int    `yaml:"interval_seconds"`
+	// SecureSetting is the YAML secure key for a standalone connection; nil
+	// when omitted, which means TLS unless the collector is a loopback
+	// target. For CA or mTLS client certificates, use inherit_otel_connection
+	// with exporters.otel[0].
+	SecureSetting *bool `yaml:"secure"`
+	// Secure and SecureSource are the resolved transport, set by LoadConfig.
+	Secure       bool            `yaml:"-"`
+	SecureSource TransportSource `yaml:"-"`
+	// rawCollectorAddress: see OTELConfig.rawCollectorAddress.
+	rawCollectorAddress string
+	Host                string `yaml:"host"`
+	ServiceName         string `yaml:"service_name"`
+	IntervalSeconds     int    `yaml:"interval_seconds"`
 	// Rename maps canonical metric keys to emitted OTLP names. Keys are
 	// validated even when OTLP metrics are disabled so typos fail early.
 	Rename map[string]string `yaml:"rename"`
@@ -663,6 +688,7 @@ func LoadConfig(path string) (*Config, error) {
 
 	// Expand env vars in exporters config
 	for i := range config.Exporters.OTEL {
+		config.Exporters.OTEL[i].rawCollectorAddress = config.Exporters.OTEL[i].CollectorAddress
 		config.Exporters.OTEL[i].CollectorAddress = expandEnvVars(config.Exporters.OTEL[i].CollectorAddress)
 		config.Exporters.OTEL[i].ServiceName = expandEnvVars(config.Exporters.OTEL[i].ServiceName)
 		config.Exporters.OTEL[i].CACert = expandEnvVars(config.Exporters.OTEL[i].CACert)
@@ -673,6 +699,7 @@ func LoadConfig(path string) (*Config, error) {
 		config.Exporters.SplunkHEC[i].Endpoint = expandEnvVars(config.Exporters.SplunkHEC[i].Endpoint)
 		config.Exporters.SplunkHEC[i].Token = expandEnvVars(config.Exporters.SplunkHEC[i].Token)
 	}
+	config.Metrics.OTLP.rawCollectorAddress = config.Metrics.OTLP.CollectorAddress
 	config.Metrics.OTLP.CollectorAddress = expandEnvVars(config.Metrics.OTLP.CollectorAddress)
 	config.Metrics.OTLP.Host = expandEnvVars(config.Metrics.OTLP.Host)
 	config.Metrics.OTLP.ServiceName = expandEnvVars(config.Metrics.OTLP.ServiceName)
@@ -775,6 +802,14 @@ func LoadConfig(path string) (*Config, error) {
 			config.Filters.QueryTextMode = QueryTextModeRaw
 		}
 	}
+
+	// Resolve each OTLP connection's transport once, from the expanded
+	// address, so validate and the running service make the same choice.
+	for i := range config.Exporters.OTEL {
+		config.Exporters.OTEL[i].Name = fmt.Sprintf("exporters.otel[%d]", i)
+		config.Exporters.OTEL[i].resolveTransport()
+	}
+	config.Metrics.OTLP.resolveTransport()
 
 	// Set defaults for exporters
 	for i := range config.Exporters.OTEL {
@@ -993,24 +1028,12 @@ func (c *Config) queryTextModeWarnings() []string {
 }
 
 // tlsMaterialWarnings reports certificate settings that are accepted but have
-// no effect because TLS is disabled. An incomplete OTEL client certificate
-// pair is deliberately omitted here because Validate reports that incoherent
-// configuration as a hard error instead.
+// no effect because TLS is disabled. OTLP exporters are absent: their TLS
+// material implies TLS, and Validate rejects it with an explicit secure: false.
 func (c *Config) tlsMaterialWarnings() []string {
 	var warnings []string
 	if !c.ClickHouse.Secure && c.ClickHouse.CACert != "" {
 		warnings = append(warnings, "clickhouse.ca_cert is configured but clickhouse.secure is false; the CA certificate will be ignored. Set clickhouse.secure: true to use it, or remove clickhouse.ca_cert")
-	}
-	for i, o := range c.Exporters.OTEL {
-		if o.Secure {
-			continue
-		}
-		if o.CACert != "" {
-			warnings = append(warnings, fmt.Sprintf("exporters.otel[%d].ca_cert is configured but exporters.otel[%d].secure is false; the CA certificate will be ignored. Set secure: true for this exporter to use it, or remove ca_cert", i, i))
-		}
-		if o.ClientCert != "" && o.ClientKey != "" {
-			warnings = append(warnings, fmt.Sprintf("exporters.otel[%d].client_cert and client_key are configured but exporters.otel[%d].secure is false; the mTLS client certificate will be ignored. Set secure: true for this exporter to use it, or remove client_cert and client_key", i, i))
-		}
 	}
 	return warnings
 }
@@ -1165,6 +1188,10 @@ func (c *Config) Validate() error {
 		}
 		if !c.Metrics.OTLP.InheritOTELConnection && strings.TrimSpace(c.Metrics.OTLP.CollectorAddress) == "" {
 			errs = append(errs, "metrics.otlp.collector_address is required when inherit_otel_connection is false")
+		} else if !c.Metrics.OTLP.InheritOTELConnection {
+			if msg := otlpAddressError("metrics.otlp.collector_address", c.Metrics.OTLP.rawCollectorAddress, c.Metrics.OTLP.CollectorAddress); msg != "" {
+				errs = append(errs, msg)
+			}
 		}
 	}
 	renameTargets := make(map[string]string, len(c.Metrics.OTLP.Rename))
@@ -1239,8 +1266,13 @@ func (c *Config) Validate() error {
 		errs = append(errs, "clickhouse.insecure_skip_verify requires secure: true")
 	}
 	for i, o := range c.Exporters.OTEL {
-		if o.InsecureSkipVerify && !o.Secure {
-			errs = append(errs, fmt.Sprintf("exporters.otel[%d].insecure_skip_verify requires secure: true", i))
+		// TLS material implies TLS when secure is omitted, so plaintext with
+		// material means the operator wrote secure: false beside it.
+		if fields := o.tlsMaterialFields(); !o.Secure && len(fields) > 0 {
+			errs = append(errs, fmt.Sprintf("exporters.otel[%d].secure is false but %s %s set; these only apply over TLS. Remove secure: false to use TLS, or remove %s", i, strings.Join(fields, ", "), pluralVerb(len(fields)), strings.Join(fields, ", ")))
+		}
+		if msg := otlpAddressError(fmt.Sprintf("exporters.otel[%d].collector_address", i), o.rawCollectorAddress, o.CollectorAddress); msg != "" {
+			errs = append(errs, msg)
 		}
 		if (o.ClientCert != "") != (o.ClientKey != "") {
 			errs = append(errs, fmt.Sprintf("exporters.otel[%d].client_cert and exporters.otel[%d].client_key must be provided together for mTLS; set both fields or remove the configured one", i, i))
@@ -1566,4 +1598,39 @@ func (m *MonitorConfig) ShouldEnrichFromQueryLog() bool {
 		return true
 	}
 	return *m.EnrichFromQueryLog
+}
+
+// otlpAddressError rejects a collector address whose host is a listen address
+// (0.0.0.0, ::) or became empty through ${ENV} expansion, either of which
+// would otherwise be dialed, and treated as loopback, on the local host. raw
+// is the address before expansion; empty when the config was built in code.
+func otlpAddressError(field, raw, expanded string) string {
+	if strings.TrimSpace(expanded) == "" {
+		return ""
+	}
+	target := ParseOTLPTarget(expanded)
+	if target.Socket() {
+		return ""
+	}
+	if target.Unspecified() {
+		return fmt.Sprintf("%s %q is a listen address, not a collector address; use the collector's host name or IP (localhost for a collector on this host)", field, expanded)
+	}
+	if target.Host == "" && raw != "" && raw != expanded && ParseOTLPTarget(raw).Host != "" {
+		return fmt.Sprintf("%s %q expands to %q, which has no host; set the environment variable it names or write the host", field, raw, expanded)
+	}
+	return ""
+}
+
+// OTLPCollectorAddressError is the check config load makes on a collector
+// address, for tools that take one before any config exists (`click-dog
+// init`). It returns "" when the address is usable.
+func OTLPCollectorAddressError(address string) string {
+	return otlpAddressError("collector address", "", address)
+}
+
+func pluralVerb(n int) string {
+	if n == 1 {
+		return "is"
+	}
+	return "are"
 }

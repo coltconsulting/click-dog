@@ -278,6 +278,25 @@ type ConnectivityChecker interface {
 	CheckConnectivity(ctx context.Context) error
 }
 
+// ServerVersionStamper is the optional companion to SpanExporter for backends
+// that carry the ClickHouse server version on their telemetry envelope. The
+// OTLP exporter puts it on the Resource; backends with no equivalent envelope
+// simply don't implement it. Like ConnectivityChecker it is deliberately
+// separate from SpanExporter so non-network sinks need no stub.
+type ServerVersionStamper interface {
+	// SetServerVersion sets the ClickHouse server version stamped on exported
+	// telemetry. An empty version clears it rather than emitting a placeholder.
+	SetServerVersion(version string)
+}
+
+// ServerVersionReader is the optional companion to a ClickHouse read surface
+// for readers that can report the connected server's version. The value
+// describes the server the reader is connected to, not the node that produced
+// any particular row.
+type ServerVersionReader interface {
+	ServerVersion(ctx context.Context) (string, error)
+}
+
 // CanaryQuerier is the interface for running lightweight canary queries.
 // Extracted from *ClickHouseReader to allow unit testing without a real connection.
 type CanaryQuerier interface {

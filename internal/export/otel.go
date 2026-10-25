@@ -7,8 +7,11 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"fmt"
+	"net"
+	"net/netip"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -35,8 +38,9 @@ import (
 // `click-dog check` picks it up; exporters with no meaningful probe simply
 // omit it.
 var (
-	_ model.SpanExporter        = (*OTELExporter)(nil)
-	_ model.ConnectivityChecker = (*OTELExporter)(nil)
+	_ model.SpanExporter         = (*OTELExporter)(nil)
+	_ model.ConnectivityChecker  = (*OTELExporter)(nil)
+	_ model.ServerVersionStamper = (*OTELExporter)(nil)
 )
 
 type OTELExporter struct {
@@ -44,9 +48,25 @@ type OTELExporter struct {
 	grpcClient     collectorpb.TraceServiceClient
 	serviceName    string
 	maxQueryLength int
-	// wrapperBytes is the proto-encoded size of an empty ExportTraceServiceRequest
-	// (ResourceSpans/ScopeSpans envelope with no Spans). Cached so streamChunks
-	// can estimate per-chunk size without rebuilding the envelope each span.
+	// resource holds the current Resource contents and the wrapper size that
+	// matches them. The two travel together in one atomic value because the
+	// size estimate is only correct for the Resource it was measured from:
+	// SetServerVersion swaps both at once, and each export snapshots the pair
+	// so its chunk accounting and its emitted envelope cannot disagree.
+	resource atomic.Pointer[resourceState]
+}
+
+// resourceState is one immutable (Resource contents, wrapper size) pair.
+type resourceState struct {
+	// serverVersion is the connected ClickHouse server's version(), or empty
+	// when it could not be resolved. Empty omits the attribute entirely rather
+	// than emitting a placeholder.
+	serverVersion string
+
+	// wrapperBytes is the proto-encoded size of an empty
+	// ExportTraceServiceRequest (ResourceSpans/ScopeSpans envelope with no
+	// Spans) built from this state. Cached so streamChunks can estimate
+	// per-chunk size without rebuilding the envelope each span.
 	wrapperBytes int
 }
 
@@ -66,74 +86,207 @@ func NewOTELExporter(cfg config.OTELConfig) (*OTELExporter, error) {
 		serviceName:    cfg.ServiceName,
 		maxQueryLength: cfg.MaxQueryLength,
 	}
-	exp.wrapperBytes = proto.Size(exp.buildExportRequest(nil))
+	exp.resource.Store(exp.newResourceState(""))
 	return exp, nil
+}
+
+// newResourceState measures the wrapper size for a given server version so the
+// pair is always constructed together.
+func (o *OTELExporter) newResourceState(serverVersion string) *resourceState {
+	st := &resourceState{serverVersion: serverVersion}
+	st.wrapperBytes = proto.Size(o.buildExportRequest(st, nil))
+	return st
+}
+
+// SetServerVersion updates the ClickHouse server version stamped on the OTLP
+// Resource. An empty version clears the attribute.
+//
+// It is deliberately a whole-state swap. streamChunks snapshots the pair once
+// and uses it for every chunk it sends, so within one pass a batch's size
+// accounting can never describe a different Resource than the one it sends.
+// A ResourceExhausted bisection re-enters streamChunks and takes a fresh
+// snapshot, which is equally consistent: that pass re-measures against
+// whatever state it loaded.
+func (o *OTELExporter) SetServerVersion(serverVersion string) {
+	if current := o.resource.Load(); current != nil && current.serverVersion == serverVersion {
+		return
+	}
+	o.resource.Store(o.newResourceState(serverVersion))
+}
+
+// currentResource snapshots the Resource state for one export.
+//
+// Both constructors seed the state, so a nil load means a future construction
+// path forgot to. Seeding here rather than returning a zero value is
+// deliberate: a zero wrapperBytes would silently under-count every chunk by the
+// whole envelope, and the only symptom would be ResourceExhausted retries in
+// sendOrSplit quietly doubling the export round trips.
+func (o *OTELExporter) currentResource() *resourceState {
+	if st := o.resource.Load(); st != nil {
+		return st
+	}
+	seeded := o.newResourceState("")
+	if o.resource.CompareAndSwap(nil, seeded) {
+		return seeded
+	}
+	return o.resource.Load()
 }
 
 // NewOTELGRPCConn creates the shared OTLP gRPC connection used by span and
 // metrics exporters. The returned connection is lazy; the first RPC establishes
 // the network connection.
+//
+// Plaintext chosen automatically (secure omitted, loopback collector) is held
+// to the local host: it ignores proxy settings and dials only loopback
+// addresses. An explicit secure: false dials as configured.
 func NewOTELGRPCConn(cfg config.OTELConfig) (*grpc.ClientConn, error) {
-	// Configure transport credentials
-	var transportCreds credentials.TransportCredentials
+	name := cfg.Name
+	if name == "" {
+		name = "exporters.otel"
+	}
+	transport := config.TransportSummary(cfg.CollectorAddress, cfg.Secure, cfg.SecureSource)
+	opts := []grpc.DialOption{}
+
 	if cfg.Secure {
-		// Validate mTLS configuration - both cert and key must be provided together
-		if (cfg.ClientCert != "") != (cfg.ClientKey != "") {
-			return nil, fmt.Errorf("mTLS requires both client_cert and client_key to be specified, got only one")
+		tlsConfig, err := newOTELTLSConfig(cfg)
+		if err != nil {
+			return nil, err
 		}
-
-		// MinVersion is Go's current client default, stated explicitly so the
-		// floor is a property of this config rather than of the toolchain, and
-		// so it matches internal/leader's Keeper dialer. Not a behavior change.
-		tlsConfig := &tls.Config{
-			MinVersion:         tls.VersionTLS12,
-			InsecureSkipVerify: cfg.InsecureSkipVerify,
-		}
-
-		// Load CA certificate if provided
-		if cfg.CACert != "" {
-			caCert, err := os.ReadFile(cfg.CACert)
-			if err != nil {
-				return nil, fmt.Errorf("failed to read OTEL CA certificate: %w", err)
-			}
-			caCertPool := x509.NewCertPool()
-			if !caCertPool.AppendCertsFromPEM(caCert) {
-				return nil, fmt.Errorf("failed to parse OTEL CA certificate")
-			}
-			tlsConfig.RootCAs = caCertPool
-		}
-
-		// Load client certificate for mTLS if provided
-		if cfg.ClientCert != "" && cfg.ClientKey != "" {
-			clientCert, err := tls.LoadX509KeyPair(cfg.ClientCert, cfg.ClientKey)
-			if err != nil {
-				return nil, fmt.Errorf("failed to load OTEL client certificate: %w", err)
-			}
-			tlsConfig.Certificates = []tls.Certificate{clientCert}
-		}
-
-		transportCreds = credentials.NewTLS(tlsConfig)
+		opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
 
 		if cfg.InsecureSkipVerify {
-			clicklog.Warn("OTEL TLS certificate verification is disabled - this is insecure and should only be used for testing")
+			clicklog.Warn("%s → %s: TLS (%s) with certificate verification disabled - this is insecure and should only be used for testing", name, cfg.CollectorAddress, cfg.SecureSource)
 		} else {
-			clicklog.Info("OTEL export using TLS encryption")
+			clicklog.Info("%s → %s: transport %s", name, cfg.CollectorAddress, transport)
 		}
 	} else {
-		transportCreds = insecure.NewCredentials()
-		clicklog.Warn("OTEL export using plaintext connection (secure: false) — span payloads travel unencrypted; set exporters.otel[].secure: true for TLS")
+		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		target := config.ParseOTLPTarget(cfg.CollectorAddress)
+		switch {
+		case cfg.SecureSource.IsExplicit() && !target.Loopback():
+			clicklog.Warn("%s → %s: transport plaintext (%s.secure: false) — span payloads and query text travel unencrypted to a collector that is not on this host; remove secure: false to use TLS", name, cfg.CollectorAddress, name)
+		case cfg.SecureSource.IsExplicit():
+			clicklog.Info("%s → %s: transport %s", name, cfg.CollectorAddress, transport)
+		default:
+			// A context dialer also turns off grpc's proxy resolver;
+			// WithNoProxy says so outright. Sockets keep grpc's own dialer.
+			opts = append(opts, grpc.WithNoProxy())
+			if !target.Socket() {
+				opts = append(opts, grpc.WithContextDialer(loopbackOnlyDialer(name, net.DefaultResolver)))
+			}
+			clicklog.Info("%s → %s: transport %s (loopback collector; stays on this host)", name, cfg.CollectorAddress, transport)
+		}
 	}
 
-	// Create gRPC connection to OTEL collector
-	conn, err := grpc.NewClient(
-		cfg.CollectorAddress,
-		grpc.WithTransportCredentials(transportCreds),
-	)
+	conn, err := grpc.NewClient(cfg.CollectorAddress, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create gRPC connection: %w", err)
 	}
 
 	return conn, nil
+}
+
+// ipResolver is the slice of *net.Resolver the loopback dialer needs; tests
+// substitute a stub.
+type ipResolver interface {
+	LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error)
+}
+
+// loopbackOnlyDialer dials automatic plaintext only to loopback addresses.
+// Under the dns resolver grpc hands it a resolved ip:port; under passthrough
+// it gets the configured host:port, which it resolves itself so that only a
+// verified loopback IP is dialed. A name that resolves to any non-loopback
+// address is refused rather than dialed.
+func loopbackOnlyDialer(name string, resolver ipResolver) func(context.Context, string) (net.Conn, error) {
+	var d net.Dialer
+	return func(ctx context.Context, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, fmt.Errorf("%s: plaintext dial of %q: %w", name, addr, err)
+		}
+		if host == "" {
+			host = "localhost"
+		}
+		var ips []netip.Addr
+		if ip, parseErr := netip.ParseAddr(host); parseErr == nil {
+			ips = []netip.Addr{ip}
+		} else {
+			found, lookupErr := resolver.LookupIPAddr(ctx, host)
+			if lookupErr != nil {
+				return nil, fmt.Errorf("%s: resolve %q for plaintext dial: %w", name, host, lookupErr)
+			}
+			for _, a := range found {
+				if ip, ok := netip.AddrFromSlice(a.IP); ok {
+					ips = append(ips, ip)
+				}
+			}
+		}
+		if len(ips) == 0 {
+			return nil, fmt.Errorf("%s: %q resolved to no addresses", name, host)
+		}
+		for _, ip := range ips {
+			if !ip.Unmap().IsLoopback() {
+				return nil, fmt.Errorf("%s: refusing plaintext to %s: %s is not a loopback address, and plaintext is automatic only for a collector on this host; set %s.secure: true for TLS, or secure: false to send plaintext over the network", name, addr, ip, name)
+			}
+		}
+		var lastErr error
+		for _, ip := range ips {
+			conn, dialErr := d.DialContext(ctx, "tcp", net.JoinHostPort(ip.Unmap().String(), port))
+			if dialErr == nil {
+				return conn, nil
+			}
+			lastErr = dialErr
+		}
+		return nil, lastErr
+	}
+}
+
+// newOTELTLSConfig builds the client TLS config for a secure exporter. Every
+// configured file must load now, so a bad path or pair fails construction.
+// ProbeOTELTLS builds its handshake from the same config, so `click-dog test
+// tls` and the installer judge a receiver by exactly what export will use.
+func newOTELTLSConfig(cfg config.OTELConfig) (*tls.Config, error) {
+	// Validate mTLS configuration - both cert and key must be provided together
+	if (cfg.ClientCert != "") != (cfg.ClientKey != "") {
+		return nil, fmt.Errorf("mTLS requires both client_cert and client_key to be specified, got only one")
+	}
+
+	// MinVersion is Go's current client default, stated explicitly so the
+	// floor is a property of this config rather than of the toolchain, and
+	// so it matches internal/leader's Keeper dialer. Not a behavior change.
+	tlsConfig := &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: cfg.InsecureSkipVerify,
+	}
+
+	// Load CA certificate if provided. It is read once: crypto/tls has no
+	// client-side hook for swapping RootCAs short of disabling its
+	// verification and redoing it here, and the collector's CA changes far
+	// less often than a short-lived client certificate.
+	if cfg.CACert != "" {
+		caCert, err := os.ReadFile(cfg.CACert)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read OTEL CA certificate: %w", err)
+		}
+		caCertPool := x509.NewCertPool()
+		if !caCertPool.AppendCertsFromPEM(caCert) {
+			return nil, fmt.Errorf("failed to parse OTEL CA certificate")
+		}
+		tlsConfig.RootCAs = caCertPool
+	}
+
+	// Load client certificate for mTLS if provided. The pair must load now;
+	// later handshakes re-read it, so a renewed certificate takes effect
+	// without a restart.
+	if cfg.ClientCert != "" && cfg.ClientKey != "" {
+		reloader, err := newClientCertReloader(cfg.ClientCert, cfg.ClientKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load OTEL client certificate: %w", err)
+		}
+		tlsConfig.GetClientCertificate = reloader.GetClientCertificate
+	}
+
+	return tlsConfig, nil
 }
 
 // Conn returns the exporter-owned OTLP gRPC connection. Callers may pass it to
@@ -443,15 +596,26 @@ const grpcMaxBytes = 3_500_000
 // (well past anything that would fit in a single gRPC message anyway).
 const spanFieldOverheadBytes = 5
 
-// buildExportRequest wraps spans in an ExportTraceServiceRequest.
-func (o *OTELExporter) buildExportRequest(spans []*tracepb.Span) *collectorpb.ExportTraceServiceRequest {
+// buildExportRequest wraps spans in an ExportTraceServiceRequest using the
+// given Resource state. The state is passed in rather than loaded here so one
+// export's envelope and its size estimate are measured from the same snapshot.
+//
+// clickhouse.version describes the server click-dog reads from, not the node
+// that produced each span: under cluster queries a batch can carry rows from
+// replicas on other versions during a rolling upgrade. It is a Resource
+// attribute because it is constant for the batch.
+func (o *OTELExporter) buildExportRequest(st *resourceState, spans []*tracepb.Span) *collectorpb.ExportTraceServiceRequest {
+	attrs := []*commonpb.KeyValue{
+		StringAttr("service.name", o.serviceName),
+	}
+	if st.serverVersion != "" {
+		attrs = append(attrs, StringAttr("clickhouse.version", st.serverVersion))
+	}
 	return &collectorpb.ExportTraceServiceRequest{
 		ResourceSpans: []*tracepb.ResourceSpans{
 			{
 				Resource: &resourcepb.Resource{
-					Attributes: []*commonpb.KeyValue{
-						StringAttr("service.name", o.serviceName),
-					},
+					Attributes: attrs,
 				},
 				ScopeSpans: []*tracepb.ScopeSpans{
 					{
@@ -476,13 +640,14 @@ func (o *OTELExporter) streamChunks(ctx context.Context, count int, produce func
 	if count == 0 {
 		return nil
 	}
+	st := o.currentResource()
 	chunk := make([]*tracepb.Span, 0, 64)
-	chunkBytes := o.wrapperBytes
+	chunkBytes := st.wrapperBytes
 	for i := 0; i < count; i++ {
 		s := produce(i)
 		spanBytes := proto.Size(s) + spanFieldOverheadBytes
 		if len(chunk) > 0 && chunkBytes+spanBytes > grpcMaxBytes {
-			if err := o.sendOrSplit(ctx, chunk, chunkBytes); err != nil {
+			if err := o.sendOrSplit(ctx, st, chunk, chunkBytes); err != nil {
 				return err
 			}
 			// Drop references so the converted spans from the flushed chunk
@@ -491,12 +656,12 @@ func (o *OTELExporter) streamChunks(ctx context.Context, count int, produce func
 				chunk[j] = nil
 			}
 			chunk = chunk[:0]
-			chunkBytes = o.wrapperBytes
+			chunkBytes = st.wrapperBytes
 		}
 		chunk = append(chunk, s)
 		chunkBytes += spanBytes
 	}
-	return o.sendOrSplit(ctx, chunk, chunkBytes)
+	return o.sendOrSplit(ctx, st, chunk, chunkBytes)
 }
 
 // exportOTLPSpans sends pre-built OTLP spans via the gRPC client. Used by
@@ -508,8 +673,8 @@ func (o *OTELExporter) exportOTLPSpans(ctx context.Context, spans []*tracepb.Spa
 }
 
 // sendOrSplit attempts to send spans. On ResourceExhausted, it bisects and retries.
-func (o *OTELExporter) sendOrSplit(ctx context.Context, spans []*tracepb.Span, size int) error {
-	req := o.buildExportRequest(spans)
+func (o *OTELExporter) sendOrSplit(ctx context.Context, st *resourceState, spans []*tracepb.Span, size int) error {
+	req := o.buildExportRequest(st, spans)
 	_, err := o.grpcClient.Export(ctx, req)
 	if err == nil {
 		return nil

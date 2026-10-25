@@ -171,16 +171,16 @@ CLICKHOUSE_USER="monitoring"
 assert_eq "installer defaults ClickHouse TLS on" "true" "$CLICKHOUSE_TLS"
 assert_eq "installer leaves TLS port to init's 9440 default" "" "${CLICKHOUSE_PORT:-}"
 default_secure=$(render_click_dog_config /etc/click-dog/click-dog.yaml)
-assert_contains "default render enables ClickHouse TLS" "-ch-secure" "$default_secure"
+assert_contains "default render enables ClickHouse TLS" "--ch-secure" "$default_secure"
 assert_not_contains "default render delegates port to init's TLS default" "-ch-port" "$default_secure"
 
 CLICKHOUSE_TLS="false"
 KEEPER_HOSTS=""
 plain=$(render_click_dog_config /etc/click-dog/click-dog.yaml)
 assert_contains "init subcommand"          "init"                                   "$plain"
-assert_contains "collector flag passed"    "-collector localhost:4317"              "$plain"
-assert_contains "service flag is canonical click-dog-monitor" "-service click-dog-monitor" "$plain"
-assert_contains "ch-user threads CLICKHOUSE_USER through" "-ch-user monitoring"     "$plain"
+assert_contains "collector flag passed"    "--collector localhost:4317"              "$plain"
+assert_contains "service flag is canonical click-dog-monitor" "--service click-dog-monitor" "$plain"
+assert_contains "ch-user threads CLICKHOUSE_USER through" "--ch-user monitoring"     "$plain"
 assert_contains "output path"              "-o /etc/click-dog/click-dog.yaml"       "$plain"
 assert_contains "force overwrite"          "--force"                                "$plain"
 assert_not_contains "no ch-secure when TLS off" "-ch-secure"                        "$plain"
@@ -189,8 +189,8 @@ assert_not_contains "no ha-keeper when keeper empty" "-ha-keeper"               
 CLICKHOUSE_TLS="true"
 KEEPER_HOSTS="keeper1:9181,keeper2:9181"
 full=$(render_click_dog_config /etc/click-dog/click-dog.yaml)
-assert_contains "ch-secure added when CLICKHOUSE_TLS=true" "-ch-secure"             "$full"
-assert_contains "ha-keeper threads KEEPER_HOSTS"          "-ha-keeper keeper1:9181,keeper2:9181" "$full"
+assert_contains "ch-secure added when CLICKHOUSE_TLS=true" "--ch-secure"            "$full"
+assert_contains "ha-keeper threads KEEPER_HOSTS"          "--ha-keeper keeper1:9181,keeper2:9181" "$full"
 assert_not_contains "no ch-port when CLICKHOUSE_PORT unset" "-ch-port"              "$full"
 
 # Quickstart probe pins CLICKHOUSE_PORT to whichever port it actually
@@ -201,14 +201,1210 @@ assert_not_contains "no ch-port when CLICKHOUSE_PORT unset" "-ch-port"          
 saved_PORT="${CLICKHOUSE_PORT:-}"
 CLICKHOUSE_PORT="9000"
 pinned=$(render_click_dog_config /etc/click-dog/click-dog.yaml)
-assert_contains "ch-port pinned when CLICKHOUSE_PORT=9000" "-ch-port 9000"          "$pinned"
+assert_contains "ch-port pinned when CLICKHOUSE_PORT=9000" "--ch-port 9000"          "$pinned"
 CLICKHOUSE_PORT="$saved_PORT"
+
+# OTLP TLS: empty means automatic, and init gets no --otel-secure so it
+# renders by the loopback rule; an explicit choice is passed with '=', the
+# only spelling Go's flag package reads a false from.
+assert_eq "installer leaves the OTLP transport automatic by default" "" "$OTEL_SECURE"
+assert_not_contains "no otel-secure when OTEL_SECURE unset" "-otel-secure" "$full"
+OTEL_SECURE="true"
+otel_tls=$(render_click_dog_config /etc/click-dog/click-dog.yaml)
+assert_contains "otel-secure=true added when OTEL_SECURE=true" "--otel-secure=true" "$otel_tls"
+OTEL_SECURE="false"
+otel_plain=$(render_click_dog_config /etc/click-dog/click-dog.yaml)
+assert_contains "otel-secure=false added when OTEL_SECURE=false" "--otel-secure=false" "$otel_plain"
+assert_not_match "never a bare --otel-secure" '--otel-secure( |$)' "$otel_tls $otel_plain"
+
+# The docker path renders through `docker run ... init`; stub docker to
+# capture that argv.
+docker_render_args=""
+docker() { docker_render_args="$*"; }
+docker_render_dir=$(make_temp_dir)
+TEST_TEMP_DIRS+=("$docker_render_dir")
+OTEL_SECURE="true"
+render_click_dog_config_via_docker "$docker_render_dir/click-dog.yaml"
+assert_contains "docker render passes otel-secure=true" "--otel-secure=true" "$docker_render_args"
+OTEL_SECURE="false"
+render_click_dog_config_via_docker "$docker_render_dir/click-dog.yaml"
+assert_contains "docker render passes otel-secure=false" "--otel-secure=false" "$docker_render_args"
+OTEL_SECURE="true"
+assert_contains "docker render runs as the invoker" "run --rm --user $(id -u):$(id -g)" "$docker_render_args"
+# click-dog.yaml is 0644 so the service can read it; only .env holds the password.
+assert_not_contains "docker render never passes the password" "$CLICKHOUSE_PASSWORD" "$docker_render_args"
+assert_not_match "docker render passes no password flag" '(^| )--?ch-password( |=|$)' "$docker_render_args"
+OTEL_SECURE=""
+render_click_dog_config_via_docker "$docker_render_dir/click-dog.yaml"
+assert_not_contains "docker render leaves the transport automatic by default" "-otel-secure" "$docker_render_args"
+
+# click-dog spells long options --flag (its --help and the docs do); Go's flag
+# package accepts one dash too, so a regression would still run — pin it here.
+# Every optional flag is on for this render so all of them are checked.
+single_dash_long='(^| )-[a-z][a-z-]+'
+CLICKHOUSE_TLS="true" CLICKHOUSE_PORT="9440" KEEPER_HOSTS="keeper1:9181" OTEL_SECURE="true"
+all_flags=$(render_click_dog_config /etc/click-dog/click-dog.yaml)
+assert_not_match "render passes only --long flags" "$single_dash_long" "$all_flags"
+render_click_dog_config_via_docker "$docker_render_dir/click-dog.yaml"
+assert_not_match "docker render passes only --long flags" "$single_dash_long" \
+    "${docker_render_args#*click-dog:* }"
+CLICKHOUSE_TLS="$saved_TLS" CLICKHOUSE_PORT="${saved_PORT:-}" KEEPER_HOSTS="" OTEL_SECURE=""
+unset -f docker
 
 BINARY="$saved_BINARY"
 CLICKHOUSE_TLS="$saved_TLS"
 KEEPER_HOSTS="$saved_KEEPER"
 COLLECTOR_ADDRESS="$saved_COLLECTOR"
 CLICKHOUSE_USER="$saved_USER"
+
+echo ""
+echo "=== OTLP receiver TLS: guided default ==="
+
+# The installer keeps no copy of the loopback rule: the binary decides
+# (`click-dog init --print-otel-secure`; its Go tests cover the address
+# table). The guided answer on Enter is whatever it said.
+assert_eq "otel_tls_default is gone" "" "$(declare -F otel_tls_default || true)"
+assert_eq "ipv6_expand is gone with it" "" "$(declare -F ipv6_expand || true)"
+assert_eq "no shell loopback rule is left" "0" \
+    "$(grep -cE 'localhost\|\*\.localhost|127\.\*\)' deploy/install.sh || true)"
+
+COLLECTOR_ADDRESS="otel.example.com:4317"
+assert_eq "collector host split" "otel.example.com" "$(otel_collector_host)"
+assert_eq "collector port split" "4317" "$(otel_collector_port)"
+# No port means 443, the port grpc's dns resolver dials, so the guided
+# reachability check and the handshake look at the port export will use.
+COLLECTOR_ADDRESS="otel.example.com"
+assert_eq "collector port defaults to 443 like grpc" "443" "$(otel_collector_port)"
+# gRPC writes an IPv6 literal as [addr]:port; the host comes back bare.
+COLLECTOR_ADDRESS="[::1]:4317"
+assert_eq "IPv6 host split" "::1" "$(otel_collector_host)"
+assert_eq "IPv6 port split" "4317" "$(otel_collector_port)"
+COLLECTOR_ADDRESS="[2001:db8::5]"
+assert_eq "bracketed IPv6 without a port" "2001:db8::5" "$(otel_collector_host)"
+assert_eq "bracketed IPv6 port defaults to 443" "443" "$(otel_collector_port)"
+assert_eq "IPv6 host:port is bracketed" "[2001:db8::5]:4317" "$(otel_hostport 2001:db8::5 4317)"
+assert_eq "name host:port is not" "otel.example.com:4317" "$(otel_hostport otel.example.com 4317)"
+
+# The answer on Enter follows the binary's choice and leaves the transport
+# automatic; only an answer that differs becomes an explicit OTEL_SECURE.
+OTEL_SECURE="" OTEL_USES_TLS="false"
+prompt_otel_tls <<<"" >/dev/null
+assert_eq "Enter on a plaintext default stays automatic" "" "$OTEL_SECURE"
+assert_eq "Enter on a plaintext default is plaintext" "false" "$OTEL_USES_TLS"
+OTEL_SECURE="" OTEL_USES_TLS="true"
+prompt_otel_tls <<<"" >/dev/null
+assert_eq "Enter on a TLS default stays automatic" "" "$OTEL_SECURE"
+assert_eq "Enter on a TLS default is TLS" "true" "$OTEL_USES_TLS"
+OTEL_SECURE="" OTEL_USES_TLS="true"
+prompt_otel_tls <<<"y" >/dev/null
+assert_eq "y on a TLS default is the default, still automatic" "" "$OTEL_SECURE"
+OTEL_SECURE="" OTEL_USES_TLS="true"
+prompt_otel_tls <<<"n" >/dev/null
+assert_eq "n overrides the TLS default explicitly" "false" "$OTEL_SECURE"
+assert_eq "n makes the transport plaintext" "false" "$OTEL_USES_TLS"
+OTEL_SECURE="" OTEL_USES_TLS="false"
+prompt_otel_tls <<<"y" >/dev/null
+assert_eq "y overrides the plaintext default explicitly" "true" "$OTEL_SECURE"
+assert_eq "y makes the transport TLS" "true" "$OTEL_USES_TLS"
+OTEL_SECURE="" OTEL_USES_TLS="false"
+prompt_otel_tls <<<$'maybe\nyes' >/dev/null
+assert_eq "invalid answer re-asks" "true" "$OTEL_SECURE"
+OTEL_SECURE="" OTEL_USES_TLS=""
+
+echo ""
+echo "=== OTLP receiver TLS: handshake probe ==="
+
+# Every verdict comes from the click-dog binary (`click-dog test tls`), whose
+# Go tests drive real TLS and gRPC receivers through each one. Here a fake
+# binary replays scripted --json output and --chain-out files and records its
+# argv, so these tests cover what the shell does with a verdict. With
+# --ca-cert it replays FAKE_CD_OUT_CA when that exists, so a
+# trust-on-first-use test can script both handshakes. FAKE_CD_MODE stands in
+# for a binary that cannot run here (norun), a release without `test tls`
+# (old), and one that prints nothing (silent). Certificates for chain files
+# and CA checks are made with openssl, which only these tests need.
+REAL_OPENSSL=$(command -v openssl)
+tls_sandbox=$(make_temp_dir)
+TEST_TEMP_DIRS+=("$tls_sandbox")
+# fake_print_otel_secure ARGS... — a stand-in for `click-dog init
+# --print-otel-secure` in the fake binaries: the flags decide, and unset, a
+# loopback collector is plaintext and anything else TLS. It is only an
+# answer to replay; the rule itself is the binary's, under Go tests.
+FAKE_PRINT_OTEL_SECURE='
+fake_print_otel_secure() {
+    collector="" secure="" ca="" prev=""
+    for arg in "$@"; do
+        case "$prev" in --collector) collector="$arg" ;; --otel-ca-cert) ca="$arg" ;; esac
+        case "$arg" in --otel-secure=*) secure="${arg#--otel-secure=}" ;; esac
+        prev="$arg"
+    done
+    [ -n "${FAKE_CD_INIT_ARGS:-}" ] && printf "%s\n" "$*" >> "$FAKE_CD_INIT_ARGS"
+    [ "${FAKE_CD_PRINT:-}" = "none" ] && { echo "flag provided but not defined: -print-otel-secure" >&2; exit 2; }
+    if [ -n "$secure" ]; then echo "$secure"
+    elif [ -n "$ca" ]; then echo true
+    else
+        case "$collector" in
+            localhost:*|127.*|"[::1]"*|unix:*) echo false ;;
+            *) echo true ;;
+        esac
+    fi
+    exit 0
+}'
+cat > "$tls_sandbox/click-dog" <<FAKE
+#!/bin/sh
+$FAKE_PRINT_OTEL_SECURE
+FAKE
+cat >> "$tls_sandbox/click-dog" <<'FAKE'
+[ "${FAKE_CD_MODE:-}" = "norun" ] && exit 126
+case "$1" in
+    --version) echo "click-dog v0.0.0-test"; exit 0 ;;
+    init) [ "$2" = "--print-otel-secure" ] && { shift; fake_print_otel_secure "$@"; }; exit 1 ;;
+    test) ;;
+    *) exit 1 ;;
+esac
+if [ "$2" = "help" ]; then
+    echo "Subcommands:"
+    echo "  export     Send a synthetic span through each configured exporter"
+    [ "${FAKE_CD_MODE:-}" = "old" ] || echo "  tls        Check an OTLP receiver's TLS the way the exporter would"
+    exit 0
+fi
+if [ "$2" != "tls" ] || [ "${FAKE_CD_MODE:-}" = "old" ]; then
+    echo "click-dog test: unknown command \"$2\"" >&2
+    exit 2
+fi
+printf '%s\n' "$*" > "$FAKE_CD_ARGS"
+json="$FAKE_CD_OUT"
+case " $* " in
+    *" --ca-cert "*) [ -f "${FAKE_CD_OUT_CA:-/nonexistent}" ] && json="$FAKE_CD_OUT_CA" ;;
+esac
+chain_out="" prev=""
+for arg in "$@"; do
+    [ "$prev" = "--chain-out" ] && chain_out="$arg"
+    prev="$arg"
+done
+if [ -n "$chain_out" ]; then
+    if [ -f "${FAKE_CD_CHAIN:-/nonexistent}" ]; then cat "$FAKE_CD_CHAIN" > "$chain_out"; else : > "$chain_out"; fi
+fi
+[ "${FAKE_CD_MODE:-}" = "silent" ] || cat "$json"
+exit 1
+FAKE
+chmod +x "$tls_sandbox/click-dog"
+export FAKE_CD_ARGS="$tls_sandbox/args" FAKE_CD_OUT="$tls_sandbox/out" \
+    FAKE_CD_OUT_CA="$tls_sandbox/out-ca" FAKE_CD_CHAIN="$tls_sandbox/chain"
+saved_BINARY="${BINARY:-}"
+BINARY="$tls_sandbox/click-dog"
+
+# make_test_cert NAME CN [SAN] [ISSUER] — a throwaway EC certificate (and
+# key) in the sandbox: self-signed, or signed by the ISSUER certificate made
+# earlier. A config file rather than -addext keeps it working on older
+# openssl.
+make_test_cert() {
+    local name="$1" cn="$2" san="${3:-}" issuer="${4:-}"
+    local cnf="$tls_sandbox/$name.cnf"
+    {
+        printf '[req]\ndistinguished_name=dn\nprompt=no\n[dn]\nCN=%s\n[ext]\n' "$cn"
+        if [[ -z "$issuer" ]]; then
+            printf 'basicConstraints=critical,CA:TRUE\n'
+        else
+            printf 'basicConstraints=CA:FALSE\n'
+        fi
+        if [[ -n "$san" ]]; then
+            printf 'subjectAltName=%s\n' "$san"
+        fi
+    } > "$cnf"
+    if [[ -z "$issuer" ]]; then
+        "$REAL_OPENSSL" req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 \
+            -config "$cnf" -extensions ext -keyout "$tls_sandbox/$name.key" \
+            -out "$tls_sandbox/$name.crt" 2>/dev/null
+    else
+        "$REAL_OPENSSL" req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+            -config "$cnf" -keyout "$tls_sandbox/$name.key" -out "$tls_sandbox/$name.csr" 2>/dev/null
+        "$REAL_OPENSSL" x509 -req -in "$tls_sandbox/$name.csr" -days 2 -set_serial 2 \
+            -CA "$tls_sandbox/$issuer.crt" -CAkey "$tls_sandbox/$issuer.key" \
+            -extfile "$cnf" -extensions ext -out "$tls_sandbox/$name.crt" 2>/dev/null
+    fi
+}
+make_test_cert san   otel.example.com "DNS:otel.example.com,IP:10.0.0.5"
+make_test_cert ca    "Test Collector CA"
+make_test_cert leaf  otel.example.com "DNS:otel.example.com" ca
+
+# tls_json VERDICT [REASON [MESSAGE]] — a `click-dog test tls --json` object
+# in the shape the binary prints (TestRunTestTLS_JSONLinesInstallShReads pins
+# it), nested certificate fields included.
+tls_json() {
+    printf '{\n  "address": "otel.example.com:4317",\n  "server_name": "otel.example.com",\n'
+    printf '  "verdict": "%s",\n' "$1"
+    if [[ -n "${2:-}" ]]; then
+        printf '  "reason": "%s",\n' "$2"
+    fi
+    printf '  "message": "%s",\n' "${3:-}"
+    printf '  "client_cert_requested": false,\n  "certificates": [\n    {\n'
+    printf '      "subject": "CN=otel.example.com",\n      "sans": [\n        "DNS:otel.example.com"\n      ],\n'
+    printf '      "sha256": "AB:CD"\n    }\n  ]\n}\n'
+}
+
+# tls_chain CERT... — a --chain-out file presenting CERTs in the order sent:
+# each under the "# Label: value" lines click-dog writes, with subject,
+# issuer and fingerprint taken from the certificate itself.
+tls_chain() {
+    local i=0 c line sans
+    for c in "$@"; do
+        i=$((i + 1))
+        echo "# Certificate $i of $# sent by otel.example.com:4317"
+        line=$("$REAL_OPENSSL" x509 -in "$tls_sandbox/$c.crt" -noout -subject -nameopt RFC2253)
+        echo "# Subject:     ${line#subject=}"
+        line=$("$REAL_OPENSSL" x509 -in "$tls_sandbox/$c.crt" -noout -issuer -nameopt RFC2253)
+        echo "# Issuer:      ${line#issuer=}"
+        case "$c" in
+            san)  sans="DNS:otel.example.com, IP Address:10.0.0.5" ;;
+            leaf) sans="DNS:otel.example.com" ;;
+            *)    sans="none" ;;
+        esac
+        echo "# SANs:        $sans"
+        echo "# Not before:  2026-10-15 00:00:00 UTC"
+        echo "# Not after:   2026-10-17 00:00:00 UTC"
+        line=$("$REAL_OPENSSL" x509 -in "$tls_sandbox/$c.crt" -noout -fingerprint -sha256)
+        echo "# SHA-256:     ${line#*=}"
+        cat "$tls_sandbox/$c.crt"
+    done
+}
+# same_cert A B — compares two certificate files without printing either.
+same_cert() { if cmp -s "$1" "$2"; then echo yes; else echo no; fi; }
+OK_MESSAGE="certificate verified for otel.example.com; TLS 1.3, ALPN h2"
+SELF_SIGNED="certificate signed by unknown authority (self-signed)"
+
+tls_json ok "" "$OK_MESSAGE" > "$FAKE_CD_OUT"
+# Three fields: verdict, reason code ("-" for none), then the detail.
+assert_eq "ok passes through with its detail" "ok - $OK_MESSAGE" "$(probe_otel_tls otel.example.com 4317)"
+probe_args=$(cat "$FAKE_CD_ARGS")
+assert_eq "probe asks the binary for a JSON verdict" "test tls --collector otel.example.com:4317 --json" "$probe_args"
+assert_not_contains "system-store probe pins nothing" "--ca-cert" "$probe_args"
+
+# IPv6: the binary gets the gRPC form, bracketed.
+probe_otel_tls 2001:db8::5 4317 >/dev/null
+assert_contains "probe dials an IPv6 literal in brackets" "--collector [2001:db8::5]:4317" "$(cat "$FAKE_CD_ARGS")"
+probe_otel_tls ::1 4317 >/dev/null
+assert_contains "probe dials IPv6 loopback in brackets" "--collector [::1]:4317" "$(cat "$FAKE_CD_ARGS")"
+
+probe_otel_tls otel.example.com 4317 "$tls_sandbox/ca.crt" "$tls_sandbox/probe-chain" >/dev/null
+probe_args=$(cat "$FAKE_CD_ARGS")
+assert_contains "CA probe trusts the given file" "--ca-cert $tls_sandbox/ca.crt" "$probe_args"
+assert_contains "probe asks for the chain when told where" "--chain-out $tls_sandbox/probe-chain" "$probe_args"
+
+# Each verdict and its detail reach the callers unchanged.
+for tls_case in \
+    "plaintext|non-tls|otel.example.com:4317 answered the TLS handshake with non-TLS bytes" \
+    "plaintext|closed|otel.example.com:4317 closed the connection without a TLS answer: not a TLS port, or a TLS proxy or load balancer that does not serve otel.example.com (SNI)" \
+    "no-san||the certificate has no subjectAltName; click-dog ignores the Common Name" \
+    "untrusted|hostname-mismatch|hostname mismatch; certificate names DNS:other.example.com" \
+    "untrusted|expired|certificate has expired: not after 2026-01-02 00:00:00 UTC" \
+    "untrusted|unknown-authority|$SELF_SIGNED" \
+    "client-cert||the receiver refused the handshake without a client certificate (remote error: tls: certificate required)" \
+    "no-alpn||the receiver did not select HTTP/2 (ALPN h2)" \
+    "unknown|timeout|no TLS answer within 10s"; do
+    IFS='|' read -r tls_verdict tls_reason tls_message <<<"$tls_case"
+    tls_json "$tls_verdict" "$tls_reason" "$tls_message" > "$FAKE_CD_OUT"
+    assert_eq "$tls_verdict${tls_reason:+ ($tls_reason)} passes through" "$tls_verdict ${tls_reason:--} $tls_message" \
+        "$(probe_otel_tls otel.example.com 4317)"
+done
+
+# Only top-level fields count: a nested field never stands in for the verdict.
+printf '{\n  "certificates": [\n    {\n      "verdict": "ok"\n    }\n  ],\n  "verdict": "untrusted",\n  "message": "x"\n}\n' > "$FAKE_CD_OUT"
+assert_eq "nested fields are not read" "untrusted - x" "$(probe_otel_tls otel.example.com 4317)"
+
+# No verdict is never a guess: a binary that cannot run here (wrong
+# architecture), a release without `test tls`, or no output at all is
+# unknown, which callers treat as "not verified".
+tls_json ok "" "$OK_MESSAGE" > "$FAKE_CD_OUT"
+assert_eq "a binary that cannot run is unknown" "unknown binary the click-dog binary cannot run on this host" \
+    "$(FAKE_CD_MODE=norun probe_otel_tls otel.example.com 4317)"
+assert_eq "a release without test tls is unknown" "unknown binary this click-dog release predates 'click-dog test tls'" \
+    "$(FAKE_CD_MODE=old probe_otel_tls otel.example.com 4317)"
+assert_eq "no verdict at all is unknown" "unknown binary 'click-dog test tls' gave no verdict" \
+    "$(FAKE_CD_MODE=silent probe_otel_tls otel.example.com 4317)"
+
+# openssl no longer decides anything about OTLP TLS.
+for removed in classify_otel_tls otel_tls_handshake otel_san_matches otel_openssl_store_args otel_cert_sans otel_pem_block is_ipv4; do
+    assert_eq "$removed is gone" "" "$(declare -F "$removed" || true)"
+done
+tls_helpers=$(awk '/^(probe_otel_tls|otel_chain_block|otel_cert_[a-z_]*|offer_otel_tofu|confirm_otel_tls_choice|preflight_otel_tls|verify_installed_otel_ca)\(\)/,/^}/' deploy/install.sh)
+assert_eq "OTLP TLS helpers never run openssl" "0" \
+    "$(grep -v '^ *echo ' <<<"$tls_helpers" | grep -v '^ *#' | grep -c openssl || true)"
+
+echo ""
+echo "=== OTLP receiver TLS: chain files ==="
+
+tls_chain leaf ca > "$FAKE_CD_CHAIN"
+chain_first=$(otel_chain_block first < "$FAKE_CD_CHAIN")
+chain_last=$(otel_chain_block last < "$FAKE_CD_CHAIN")
+otel_cert_pem <<<"$chain_first" > "$tls_sandbox/first.crt"
+otel_cert_pem <<<"$chain_last" > "$tls_sandbox/last.crt"
+assert_eq "first block is the leaf" "yes" "$(same_cert "$tls_sandbox/leaf.crt" "$tls_sandbox/first.crt")"
+assert_eq "last block is the top of the chain" "yes" "$(same_cert "$tls_sandbox/ca.crt" "$tls_sandbox/last.crt")"
+assert_contains "a block keeps its summary lines" "# Issuer:      CN=Test Collector CA" "$chain_first"
+assert_not_contains "a block stops at its own certificate" "Certificate 2 of 2" "$chain_first"
+leaf_summary=$(otel_cert_summary <<<"$chain_first")
+assert_eq "summary is five labeled lines" "5" "$(wc -l <<<"$leaf_summary" | tr -d ' ')"
+assert_match "summary leads with the subject" "^Subject:     CN=otel.example.com" "$leaf_summary"
+assert_not_contains "summary leaves the fingerprint to the prompt" "SHA-256" "$leaf_summary"
+ca_fp=$("$REAL_OPENSSL" x509 -in "$tls_sandbox/ca.crt" -noout -fingerprint -sha256)
+assert_eq "fingerprint comes from the block" "${ca_fp#*=}" "$(otel_cert_fingerprint <<<"$chain_last")"
+self_issued() { if otel_cert_self_issued; then echo yes; else echo no; fi; }
+assert_eq "a root CA is self-issued" "yes" "$(self_issued <<<"$chain_last")"
+assert_eq "a CA-issued leaf is not" "no" "$(self_issued <<<"$chain_first")"
+assert_eq "an empty chain has no blocks" "" "$(otel_chain_block last </dev/null)"
+rm -f "$FAKE_CD_CHAIN"
+
+echo ""
+echo "=== OTLP receiver TLS: CA file checks ==="
+
+ca_file_check() {
+    local rc=0 out
+    out=$(validate_otel_ca_file "$1" 2>&1) || rc=$?
+    echo "$rc|$out"
+}
+cat "$tls_sandbox/leaf.crt" "$tls_sandbox/ca.crt" > "$tls_sandbox/bundle.crt"
+cat "$tls_sandbox/san.crt" "$tls_sandbox/san.key" > "$tls_sandbox/cert-and-key.crt"
+"$REAL_OPENSSL" x509 -in "$tls_sandbox/san.crt" -outform der -out "$tls_sandbox/san.der"
+"$REAL_OPENSSL" pkey -in "$tls_sandbox/san.key" -pubout -out "$tls_sandbox/san.pub" 2>/dev/null
+assert_match "a certificate is accepted" '^0\|$' "$(ca_file_check "$tls_sandbox/san.crt")"
+assert_match "a bundle is accepted" '^0\|$' "$(ca_file_check "$tls_sandbox/bundle.crt")"
+assert_match "a private key is refused" '^1\|.*PRIVATE KEY' "$(ca_file_check "$tls_sandbox/san.key")"
+assert_match "a certificate with its key is refused" '^1\|.*PRIVATE KEY' "$(ca_file_check "$tls_sandbox/cert-and-key.crt")"
+assert_match "DER is refused with the conversion" '^1\|.*not PEM.*-inform der' "$(ca_file_check "$tls_sandbox/san.der")"
+assert_match "PEM without a certificate is refused" '^1\|.*no certificate' "$(ca_file_check "$tls_sandbox/san.pub")"
+assert_match "a missing file is refused" '^1\|.*not found' "$(ca_file_check "$tls_sandbox/absent.crt")"
+
+echo ""
+echo "=== OTLP receiver TLS: unattended preflight ==="
+
+COLLECTOR_ADDRESS="otel.example.com:4317"
+OTEL_CA_CERT=""
+
+# preflight_check — run the gate, capturing its exit status and output.
+preflight_check() {
+    preflight_rc=0
+    preflight_out=$(preflight_otel_tls 2>&1) || preflight_rc=$?
+}
+
+tls_json ok "" "$OK_MESSAGE" > "$FAKE_CD_OUT"
+preflight_check
+assert_eq "trusted TLS passes the preflight" "0" "$preflight_rc"
+assert_contains "trusted TLS is reported" "TLS handshake ok, certificate trusted" "$preflight_out"
+
+tls_json plaintext non-tls "otel.example.com:4317 answered the TLS handshake with non-TLS bytes" > "$FAKE_CD_OUT"
+preflight_check
+assert_eq "plaintext receiver fails the preflight" "1" "$preflight_rc"
+assert_contains "plaintext failure names the cause" "does not speak TLS on otel.example.com:4317" "$preflight_out"
+# The transport here is automatic (no flag): TLS, because the collector is
+# not loopback. Dropping a flag is no fix then, so the fix is the explicit
+# plaintext spelling.
+assert_contains "an automatic choice says why it is TLS" \
+    "Error: TLS is the default for otel.example.com:4317, which is not loopback, but the TLS handshake with otel.example.com:4317 failed." "$preflight_out"
+assert_contains "plaintext failure on an automatic choice names --otel-secure=false" \
+    "To export in plaintext, pass --otel-secure=false." "$preflight_out"
+assert_not_contains "plaintext failure never says to drop a flag" "Drop --otel-secure" "$preflight_out"
+OTEL_SECURE="true"
+preflight_check
+assert_contains "an explicit choice names its flag" "Error: --otel-secure was given, but the TLS handshake" "$preflight_out"
+assert_contains "plaintext failure on --otel-secure names --otel-secure=false" \
+    "pass --otel-secure=false in place of --otel-secure" "$preflight_out"
+OTEL_SECURE=""
+
+# A silent close is a plaintext port or a TLS proxy without a certificate
+# for this name: both are named, and dropping TLS is not the only fix.
+CLOSED_MESSAGE="otel.example.com:4317 closed the connection without a TLS answer: not a TLS port, or a TLS proxy or load balancer that does not serve otel.example.com (SNI)"
+tls_json plaintext closed "$CLOSED_MESSAGE" > "$FAKE_CD_OUT"
+preflight_check
+assert_eq "a silent close fails the preflight" "1" "$preflight_rc"
+assert_contains "a silent close names a plaintext port" "does not speak TLS on this port" "$preflight_out"
+assert_contains "a silent close names a TLS proxy without the name" "serves no certificate for 'otel.example.com' (SNI)" "$preflight_out"
+assert_contains "a silent close gives both fixes" "if it is a TLS proxy" "$preflight_out"
+assert_contains "a silent close names --otel-secure=false for a plaintext port" \
+    "If the receiver is a plaintext port, pass --otel-secure=false;" "$preflight_out"
+assert_not_contains "a silent close does not just say plaintext" "To export in plaintext" "$preflight_out"
+
+tls_json no-alpn "" "the receiver did not select HTTP/2 (ALPN h2)" > "$FAKE_CD_OUT"
+preflight_check
+assert_eq "receiver without ALPN h2 fails the preflight" "1" "$preflight_rc"
+assert_contains "no-ALPN failure names HTTP/2" "does not select HTTP/2 (ALPN h2)" "$preflight_out"
+
+tls_json unknown handshake-ended "TLS handshake ended before a certificate (remote error: tls: protocol version not supported)" > "$FAKE_CD_OUT"
+preflight_check
+assert_eq "an early TLS alert is only a note" "0" "$preflight_rc"
+assert_not_contains "an early TLS alert never says plaintext" "does not speak TLS" "$preflight_out"
+assert_contains "the note carries the binary's reason" "not verified (TLS handshake ended before a certificate" "$preflight_out"
+
+# A CA file click-dog cannot parse is not an inconclusive check: the
+# exporter fails at startup on the same file, so the install must not go on.
+OTEL_CA_CERT="$tls_sandbox/ca.crt"
+# With --ca-cert the fake replays FAKE_CD_OUT_CA when it exists.
+rm -f "$FAKE_CD_OUT_CA"
+tls_json unknown config "failed to parse OTEL CA certificate" > "$FAKE_CD_OUT"
+assert_eq "a config verdict is its own failure, not unknown" "config config failed to parse OTEL CA certificate" \
+    "$(probe_otel_tls otel.example.com 4317 "$OTEL_CA_CERT")"
+preflight_check
+assert_eq "an unusable CA fails the preflight" "1" "$preflight_rc"
+assert_not_contains "an unusable CA is never just a note" "not verified" "$preflight_out"
+assert_contains "an unusable CA names the file and the cause" "cannot use $tls_sandbox/ca.crt as the collector's CA (failed to parse OTEL CA certificate)" "$preflight_out"
+assert_contains "an unusable CA is not called a failed handshake" "cannot use its TLS settings" "$preflight_out"
+assert_not_contains "an unusable CA claims no handshake" "TLS handshake with" "$preflight_out"
+OTEL_CA_CERT=""
+
+# A gRPC target with a scheme is split wrongly by the host:port helpers, and
+# the exporter accepts it, so the check is skipped with a note, never failed.
+for scheme_addr in "passthrough:///otel.example.com:4317" "dns:///otel.example.com:4317" "unix:///run/otel.sock"; do
+    COLLECTOR_ADDRESS="$scheme_addr"
+    : > "$FAKE_CD_ARGS"
+    assert_match "a $scheme_addr target is not checked" "^unknown target " \
+        "$(probe_otel_tls "$(otel_collector_host)" "$(otel_collector_port)")"
+    assert_eq "a $scheme_addr target never runs the binary" "" "$(cat "$FAKE_CD_ARGS")"
+    preflight_check
+    assert_eq "a $scheme_addr target passes the preflight with a note" "0" "$preflight_rc"
+    assert_contains "the note says what was skipped" "checks host:port collector addresses only" "$preflight_out"
+done
+COLLECTOR_ADDRESS="otel.example.com:4317"
+
+tls_json untrusted unknown-authority "$SELF_SIGNED" > "$FAKE_CD_OUT"
+preflight_check
+assert_eq "untrusted certificate fails the preflight" "1" "$preflight_rc"
+assert_contains "untrusted failure says so" "Certificate not trusted" "$preflight_out"
+assert_contains "untrusted failure gives the reason" "($SELF_SIGNED)" "$preflight_out"
+assert_contains "untrusted failure links the TLS docs" "integrations/generic-otlp/#tls-configuration" "$preflight_out"
+assert_contains "untrusted failure routes to --otel-ca-cert" "Pass --otel-ca-cert FILE" "$preflight_out"
+assert_contains "unattended never trusts on first use" "never trust a certificate on first use" "$preflight_out"
+assert_not_contains "unattended offers no trust prompt" "Trust this certificate" "$preflight_out"
+
+tls_json untrusted hostname-mismatch "hostname mismatch; certificate names DNS:other.example.com" > "$FAKE_CD_OUT"
+preflight_check
+assert_eq "wrong-name certificate fails the preflight" "1" "$preflight_rc"
+assert_contains "wrong-name failure names the certificate's names" "is not issued for 'otel.example.com'" "$preflight_out"
+assert_not_contains "a CA would not fix a wrong name" "Pass --otel-ca-cert" "$preflight_out"
+
+tls_json untrusted expired "certificate has expired: not after 2026-01-02 00:00:00 UTC" > "$FAKE_CD_OUT"
+preflight_check
+assert_eq "an expired certificate fails the preflight" "1" "$preflight_rc"
+assert_contains "an expired certificate is called invalid now" "is not valid now (certificate has expired" "$preflight_out"
+assert_not_contains "a CA would not fix an expired certificate" "Pass --otel-ca-cert" "$preflight_out"
+
+# Decisions follow the reason code, never the wording: an unknown CA whose
+# message happens to say "hostname mismatch" and "expired" still routes to
+# --otel-ca-cert, and a mismatch reworded without that phrase does not.
+tls_json untrusted unknown-authority "hostname mismatch? expired? neither: unknown issuer" > "$FAKE_CD_OUT"
+preflight_check
+assert_contains "an unknown CA is decided by its reason" "Pass --otel-ca-cert FILE" "$preflight_out"
+assert_contains "the reworded detail is still shown" "(hostname mismatch? expired? neither: unknown issuer)" "$preflight_out"
+tls_json untrusted hostname-mismatch "names other hosts entirely" > "$FAKE_CD_OUT"
+preflight_check
+assert_contains "a reworded mismatch is still a mismatch" "is not issued for 'otel.example.com'" "$preflight_out"
+assert_not_contains "a reworded mismatch gets no CA advice" "Pass --otel-ca-cert" "$preflight_out"
+
+tls_json no-san "" "the certificate has no subjectAltName; click-dog ignores the Common Name" > "$FAKE_CD_OUT"
+preflight_check
+assert_eq "CN-only certificate fails the preflight" "1" "$preflight_rc"
+assert_contains "CN-only failure explains Go ignores the CN" "ignores the Common Name" "$preflight_out"
+assert_contains "CN-only failure links the self-signed guide" "#self-signed-collector" "$preflight_out"
+
+tls_json client-cert "" "the receiver refused the handshake without a client certificate (remote error: tls: certificate required)" > "$FAKE_CD_OUT"
+preflight_check
+assert_eq "mTLS receiver fails the preflight" "1" "$preflight_rc"
+assert_contains "mTLS failure points to client_cert" "exporters.otel[].client_cert and client_key" "$preflight_out"
+assert_contains "mTLS failure routes to install -f" "install.sh install -f click-dog.yaml" "$preflight_out"
+
+tls_json unknown unreachable "no answer from otel.example.com:4317 (connect: connection refused)" > "$FAKE_CD_OUT"
+preflight_check
+assert_eq "unverifiable TLS does not block install" "0" "$preflight_rc"
+assert_contains "unverifiable TLS leaves a note" "not verified" "$preflight_out"
+
+FAKE_CD_MODE=norun preflight_check
+assert_eq "a binary that cannot run does not block install" "0" "$preflight_rc"
+assert_contains "it says why nothing was checked" "cannot run on this host" "$preflight_out"
+
+# --otel-ca-cert: the handshake runs against that file alone.
+OTEL_CA_CERT="$tls_sandbox/san.crt"
+tls_json ok "" "$OK_MESSAGE" > "$FAKE_CD_OUT_CA"
+preflight_check
+assert_eq "operator CA that verifies passes" "0" "$preflight_rc"
+assert_contains "operator CA is named on success" "certificate verified by $tls_sandbox/san.crt" "$preflight_out"
+assert_contains "operator CA is what the probe trusts" "--ca-cert $tls_sandbox/san.crt" "$(cat "$FAKE_CD_ARGS")"
+
+tls_json untrusted unknown-authority "certificate signed by unknown authority" > "$FAKE_CD_OUT_CA"
+preflight_check
+assert_eq "operator CA that does not verify fails" "1" "$preflight_rc"
+assert_contains "wrong CA failure names the flag" "--otel-ca-cert was given" "$preflight_out"
+assert_contains "wrong CA failure names the file" "$tls_sandbox/san.crt does not verify" "$preflight_out"
+
+tls_json no-san "" "the certificate has no subjectAltName; click-dog ignores the Common Name" > "$FAKE_CD_OUT_CA"
+preflight_check
+assert_eq "operator CA cannot rescue a CN-only certificate" "1" "$preflight_rc"
+rm -f "$FAKE_CD_OUT_CA"
+OTEL_CA_CERT=""
+
+# A CA that meets a plaintext port: the fix replaces the CA flag.
+OTEL_CA_CERT="$tls_sandbox/san.crt"
+tls_json plaintext non-tls "otel.example.com:4317 answered the TLS handshake with non-TLS bytes" > "$FAKE_CD_OUT_CA"
+preflight_check
+assert_contains "plaintext failure with a CA names --otel-secure=false in its place" \
+    "pass --otel-secure=false in place of --otel-ca-cert" "$preflight_out"
+rm -f "$FAKE_CD_OUT_CA"
+OTEL_CA_CERT=""
+
+echo ""
+echo "=== OTLP receiver TLS: transport from the binary ==="
+
+# resolve_otel_transport asks the click-dog being installed, passing the
+# address and only the flags given; the fake replays an answer.
+export FAKE_CD_INIT_ARGS="$tls_sandbox/init-args"
+transport_of() {
+    : > "$FAKE_CD_INIT_ARGS"
+    OTEL_USES_TLS=""
+    COLLECTOR_ADDRESS="$1" OTEL_SECURE="${2:-}" OTEL_CA_CERT="${3:-}"
+    resolve_otel_transport >/dev/null 2>&1 || { echo "error"; return 0; }
+    echo "$OTEL_USES_TLS"
+}
+assert_eq "a remote collector is TLS" "true" "$(transport_of otel.example.com:4317)"
+assert_eq "the binary is asked with the address alone" \
+    "--print-otel-secure --collector otel.example.com:4317" "$(cat "$FAKE_CD_INIT_ARGS")"
+assert_eq "a loopback collector is plaintext" "false" "$(transport_of localhost:4317)"
+assert_eq "--otel-secure=false makes a remote collector plaintext" "false" "$(transport_of otel.internal:4317 false)"
+assert_eq "an explicit choice reaches the binary with =" \
+    "--print-otel-secure --collector otel.internal:4317 --otel-secure=false" "$(cat "$FAKE_CD_INIT_ARGS")"
+assert_eq "--otel-secure=true makes loopback TLS" "true" "$(transport_of localhost:4317 true)"
+assert_eq "a CA makes a loopback collector TLS" "true" "$(transport_of localhost:4317 "" ca.pem)"
+assert_eq "the CA reaches the binary" \
+    "--print-otel-secure --collector localhost:4317 --otel-ca-cert ca.pem" "$(cat "$FAKE_CD_INIT_ARGS")"
+assert_eq "a release without --print-otel-secure is an error" "error" \
+    "$(FAKE_CD_PRINT=none transport_of otel.example.com:4317)"
+transport_rc=0
+transport_out=$(COLLECTOR_ADDRESS=otel.example.com:4317 FAKE_CD_PRINT=none resolve_otel_transport 2>&1) || transport_rc=$?
+assert_eq "no answer stops the run" "1" "$transport_rc"
+assert_contains "no answer names the command" "'click-dog init --print-otel-secure'" "$transport_out"
+assert_contains "no answer points at the latest release" "releases/latest" "$transport_out"
+assert_contains "no answer shows the binary's own error" "flag provided but not defined" "$transport_out"
+
+# The guided step: a flag settles the question; otherwise the binary's
+# answer is the default, and accepting it leaves the transport automatic.
+guided_transport() {
+    : > "$FAKE_CD_INIT_ARGS"
+    OTEL_USES_TLS=""
+    COLLECTOR_ADDRESS="$1" OTEL_SECURE="${2:-}" OTEL_CA_CERT="${3:-}"
+    guided_transport_out=$(guided_otel_transport <<<"${4:-}" 2>&1; echo "secure=${OTEL_SECURE} tls=${OTEL_USES_TLS}")
+}
+guided_transport otel.example.com:4317
+assert_contains "guided Enter on a remote collector keeps it automatic TLS" "secure= tls=true" "$guided_transport_out"
+assert_contains "the guided default comes from the binary" "--print-otel-secure --collector otel.example.com:4317" "$(cat "$FAKE_CD_INIT_ARGS")"
+guided_transport localhost:4317
+assert_contains "guided Enter on loopback keeps it automatic plaintext" "secure= tls=false" "$guided_transport_out"
+guided_transport otel.example.com:4317 "" "" n
+assert_contains "a guided n on a TLS default is explicit plaintext" "secure=false tls=false" "$guided_transport_out"
+guided_transport otel.example.com:4317 true "" n
+assert_contains "--otel-secure=true is not asked again" "Using TLS (from --otel-secure)" "$guided_transport_out"
+assert_contains "--otel-secure=true stays explicit" "secure=true tls=true" "$guided_transport_out"
+guided_transport localhost:4317 false "" y
+assert_contains "--otel-secure=false is not asked again" "Using plaintext (from --otel-secure=false)" "$guided_transport_out"
+assert_contains "--otel-secure=false stays explicit" "secure=false tls=false" "$guided_transport_out"
+guided_transport localhost:4317 "" "$tls_sandbox/san.crt" n
+assert_contains "a CA is not asked about" "Using TLS with CA $tls_sandbox/san.crt" "$guided_transport_out"
+assert_contains "a CA makes loopback TLS, leaving --otel-secure unset" "secure= tls=true" "$guided_transport_out"
+guided_rc=0
+( guided_transport localhost:4317 "" "$tls_sandbox/san.key" ) >/dev/null 2>&1 || guided_rc=$?
+assert_eq "the guided step refuses a key given as the CA" "1" "$guided_rc"
+
+# docker asks the image, run with the host network, for the transport and
+# the handshake: the same answers, read the same way.
+run_args_file="$tls_sandbox/docker-run-args"
+docker() {
+    printf '%s\n' "$*" >> "$run_args_file"
+    [[ "$1 $2 $3 $4" == "run --rm --network host" ]] || return 1
+    shift 5
+    "$tls_sandbox/click-dog" "$@"
+}
+: > "$run_args_file"
+# Read by run_click_dog, which arrives via eval.
+# shellcheck disable=SC2034
+CLICK_DOG_RUN_IMAGE="ghcr.io/coltconsulting/click-dog:26.04.1"
+assert_eq "the image decides the docker transport" "true" "$(transport_of otel.example.com:4317)"
+assert_eq "the image runs with the host network" \
+    "run --rm --network host ghcr.io/coltconsulting/click-dog:26.04.1 init --print-otel-secure --collector otel.example.com:4317" \
+    "$(head -1 "$run_args_file")"
+: > "$run_args_file"
+tls_json plaintext non-tls "otel.example.com:4317 answered the TLS handshake with non-TLS bytes" > "$FAKE_CD_OUT"
+COLLECTOR_ADDRESS="otel.example.com:4317" OTEL_SECURE="" OTEL_CA_CERT=""
+preflight_check
+assert_eq "a plaintext receiver stops docker" "1" "$preflight_rc"
+assert_contains "docker names --otel-secure=false as the fix" "pass --otel-secure=false" "$preflight_out"
+assert_contains "the docker handshake runs in the image with the host network" \
+    "run --rm --network host ghcr.io/coltconsulting/click-dog:26.04.1 test tls --collector otel.example.com:4317 --json" \
+    "$(cat "$run_args_file")"
+docker() { return 125; }
+preflight_check
+assert_eq "an image docker cannot run is only a note" "0" "$preflight_rc"
+assert_contains "the note names the image" "docker could not run ghcr.io/coltconsulting/click-dog:26.04.1" "$preflight_out"
+# shellcheck disable=SC2034
+CLICK_DOG_RUN_IMAGE=""
+unset -f docker transport_of guided_transport
+unset FAKE_CD_INIT_ARGS
+OTEL_SECURE="" OTEL_CA_CERT="" OTEL_USES_TLS=""
+
+echo ""
+echo "=== OTLP receiver TLS: guided mismatch handling ==="
+
+tls_json plaintext non-tls "otel.example.com:4317 answered the TLS handshake with non-TLS bytes" > "$FAKE_CD_OUT"
+OTEL_SECURE="true"
+confirm_otel_tls_choice otel.example.com 4317 <<<"p" >/dev/null
+assert_eq "[p] on a plaintext receiver switches to plaintext" "false" "$OTEL_SECURE"
+OTEL_SECURE="true"
+confirm_otel_tls_choice otel.example.com 4317 <<<"c" >/dev/null
+assert_eq "[c] keeps the TLS answer" "true" "$OTEL_SECURE"
+guided_rc=0
+guided_out=$(confirm_otel_tls_choice otel.example.com 4317 <<<"q" 2>&1) || guided_rc=$?
+assert_eq "[q] exits cleanly" "0" "$guided_rc"
+assert_contains "[q] aborts the guided install" "Aborted." "$guided_out"
+assert_contains "guided check explains the plaintext receiver" "does not speak TLS" "$guided_out"
+assert_not_contains "a non-TLS answer needs no proxy caveat" "Plaintext is right only if" "$guided_out"
+
+# A silent close does not lead with plaintext: both causes are named, the
+# prompt offers continuing with TLS first, and [p] still works.
+tls_json plaintext closed "$CLOSED_MESSAGE" > "$FAKE_CD_OUT"
+OTEL_SECURE="true"
+guided_out=$(confirm_otel_tls_choice otel.example.com 4317 <<<"c" 2>&1)
+assert_contains "guided silent close names a TLS proxy" "serves no certificate for 'otel.example.com' (SNI)" "$guided_out"
+assert_contains "guided silent close says when plaintext is right" "Plaintext is right only if this port really is plaintext" "$guided_out"
+assert_eq "[c] after a silent close keeps TLS" "true" "$OTEL_SECURE"
+confirm_otel_tls_choice otel.example.com 4317 <<<"p" >/dev/null
+assert_eq "[p] after a silent close still switches" "false" "$OTEL_SECURE"
+assert_contains "a silent close offers TLS first" '[c]ontinue with TLS, [p]laintext instead, or [q]uit?' \
+    "$(grep -F '[c]ontinue with TLS, [p]laintext instead' deploy/install.sh)"
+
+# Without a terminal there is no one to read the certificate: no trust on
+# first use, only today's message. stdin here is a pipe.
+tls_json untrusted unknown-authority "$SELF_SIGNED" > "$FAKE_CD_OUT"
+tls_json ok "" "$OK_MESSAGE" > "$FAKE_CD_OUT_CA"
+tls_chain san > "$FAKE_CD_CHAIN"
+OTEL_SECURE="true"
+guided_out=$(confirm_otel_tls_choice otel.example.com 4317 <<<"y" 2>&1)
+assert_not_contains "no trust on first use without a TTY" "Trust this certificate" "$guided_out"
+assert_contains "guided untrusted cert names the fix" "exporters.otel[].ca_cert" "$guided_out"
+assert_contains "guided untrusted cert says where to add it" "/etc/click-dog/click-dog.yaml" "$guided_out"
+assert_not_contains "plaintext is not offered for a TLS receiver" "[p]laintext" "$guided_out"
+confirm_otel_tls_choice otel.example.com 4317 <<<"y" >/dev/null
+assert_eq "continuing keeps TLS" "true" "$OTEL_SECURE"
+assert_eq "continuing pins nothing" "" "$OTEL_CA_CERT"
+
+tls_json ok "" "$OK_MESSAGE" > "$FAKE_CD_OUT"
+guided_out=$(confirm_otel_tls_choice otel.example.com 4317 </dev/null 2>&1)
+assert_contains "trusted TLS needs no answer" "ok, certificate trusted" "$guided_out"
+
+tls_json unknown timeout "no TLS answer within 10s" > "$FAKE_CD_OUT"
+guided_out=$(confirm_otel_tls_choice otel.example.com 4317 </dev/null 2>&1)
+assert_contains "an inconclusive check is skipped with its reason" "skipped (no TLS answer within 10s)" "$guided_out"
+
+echo ""
+echo "=== OTLP receiver TLS: guided trust on first use ==="
+
+# Pretend a person is at the terminal; answers still come from here-strings.
+stdin_is_tty() { return 0; }
+tofu_reset() { OTEL_SECURE="true"; OTEL_CA_CERT=""; OTEL_CA_PIN_TMP=""; }
+tofu_out="$tls_sandbox/tofu.out"
+tofu_temp_count() {
+    find "${TMPDIR:-/tmp}" -maxdepth 1 \( -name 'click-dog-otel-ca.*' -o -name 'click-dog-otel-chain.*' \) 2>/dev/null | wc -l | tr -d ' '
+}
+
+# Self-signed with a matching SAN: details, fingerprint, the check command,
+# then an explicit yes pins the certificate itself.
+tls_json untrusted unknown-authority "$SELF_SIGNED" > "$FAKE_CD_OUT"
+tls_json ok "" "$OK_MESSAGE" > "$FAKE_CD_OUT_CA"
+tls_chain san > "$FAKE_CD_CHAIN"
+san_fp=$("$REAL_OPENSSL" x509 -in "$tls_sandbox/san.crt" -noout -fingerprint -sha256)
+san_fp="${san_fp#*=}"
+tofu_reset
+confirm_otel_tls_choice otel.example.com 4317 <<<"y" > "$tofu_out" 2>&1
+tofu_text=$(cat "$tofu_out")
+assert_contains "trust prompt shows the subject" "Subject:     CN=otel.example.com" "$tofu_text"
+assert_contains "trust prompt shows the issuer" "Issuer:" "$tofu_text"
+assert_contains "trust prompt shows the SANs" "DNS:otel.example.com" "$tofu_text"
+assert_contains "trust prompt shows validity" "Not after:" "$tofu_text"
+assert_contains "trust prompt shows the SHA-256 fingerprint" "SHA-256:     $san_fp" "$tofu_text"
+assert_contains "trust prompt says how to check it" "openssl x509 -in <cert> -noout -fingerprint -sha256" "$tofu_text"
+assert_not_contains "trust prompt does not echo chain-file headers" "# Certificate" "$tofu_text"
+assert_contains "yes pins the certificate" "Will install it as /etc/click-dog/tls/ca.pem" "$tofu_text"
+assert_eq "yes sets the CA to the pin" "$OTEL_CA_PIN_TMP" "$OTEL_CA_CERT"
+assert_eq "self-signed pin is the certificate itself" "yes" "$(same_cert "$tls_sandbox/san.crt" "$OTEL_CA_CERT")"
+assert_contains "the pin is proven with a handshake trusting it alone" "--ca-cert $OTEL_CA_CERT" "$(cat "$FAKE_CD_ARGS")"
+assert_not_contains "a self-signed pin gets no renewal note" "stops verifying when it is" "$tofu_text"
+rm -f "$OTEL_CA_PIN_TMP"
+
+# A CA-issued leaf sent without its chain anchors itself, as it does for Go,
+# so it can be pinned, but renewal breaks that pin: say so before the prompt.
+tls_json untrusted unknown-authority "certificate signed by unknown authority" > "$FAKE_CD_OUT"
+tls_chain leaf > "$FAKE_CD_CHAIN"
+tofu_reset
+confirm_otel_tls_choice otel.example.com 4317 <<<"n"$'\ny' > "$tofu_out" 2>&1
+tofu_text=$(cat "$tofu_out")
+assert_contains "a leaf-only pin warns about renewal" "export stops verifying when it is" "$tofu_text"
+assert_contains "a leaf-only pin points to the issuing CA" "--otel-ca-cert FILE" "$tofu_text"
+
+# read -p shows its prompt only on a real terminal, so the [y/N] text is
+# asserted from the source; behavior: Enter declines, and so does n. Both
+# fall back to today's message and leave no temp file behind.
+assert_contains "trust prompt defaults to no" 'Trust this certificate? [y/N]' "$(grep -F 'Trust this certificate?' deploy/install.sh)"
+tls_chain san > "$FAKE_CD_CHAIN"
+tofu_tmp_before=$(tofu_temp_count)
+for tofu_answer in "" "n"; do
+    tofu_reset
+    confirm_otel_tls_choice otel.example.com 4317 <<<"${tofu_answer}"$'\ny' > "$tofu_out" 2>&1
+    assert_eq "answer '${tofu_answer:-Enter}' pins nothing" "" "$OTEL_CA_CERT"
+    assert_contains "answer '${tofu_answer:-Enter}' keeps today's message" \
+        "To finish, add those files under exporters.otel" "$(cat "$tofu_out")"
+done
+assert_eq "declined pins leave no temp file" "$tofu_tmp_before" "$(tofu_temp_count)"
+
+# A chain pins its top-most certificate, which survives leaf rotation.
+tls_chain leaf ca > "$FAKE_CD_CHAIN"
+tofu_reset
+confirm_otel_tls_choice otel.example.com 4317 <<<"y" > "$tofu_out" 2>&1
+tofu_text=$(cat "$tofu_out")
+assert_contains "chain shows the certificate to trust" "the top of the chain it sent" "$tofu_text"
+assert_contains "chain shows the top certificate's subject" "Subject:     CN=Test Collector CA" "$tofu_text"
+assert_eq "chain pin is the top certificate sent" "yes" "$(same_cert "$tls_sandbox/ca.crt" "$OTEL_CA_CERT")"
+rm -f "$OTEL_CA_PIN_TMP"
+
+# Expired or not-yet-valid: shown, never offered.
+for tofu_case in "expired|certificate has expired: not after 2026-01-02 00:00:00 UTC|has expired" \
+    "not-yet-valid|certificate is not yet valid: not before 2030-01-02 00:00:00 UTC|is not valid yet"; do
+    IFS='|' read -r tofu_reason tofu_message tofu_says <<<"$tofu_case"
+    tls_json untrusted "$tofu_reason" "$tofu_message" > "$FAKE_CD_OUT"
+    tls_json untrusted "$tofu_reason" "$tofu_message" > "$FAKE_CD_OUT_CA"
+    tls_chain san > "$FAKE_CD_CHAIN"
+    tofu_reset
+    confirm_otel_tls_choice otel.example.com 4317 <<<"y" > "$tofu_out" 2>&1
+    tofu_text=$(cat "$tofu_out")
+    assert_contains "refusal explains: it $tofu_says" "Not offering to trust it: it $tofu_says ($tofu_message)" "$tofu_text"
+    assert_not_contains "no trust prompt when it $tofu_says" "Will install it as" "$tofu_text"
+    assert_not_contains "no CA advice when it $tofu_says" "To finish, add those files" "$tofu_text"
+    assert_eq "nothing pinned when it $tofu_says" "" "$OTEL_CA_CERT"
+done
+
+# CN-only: the binary says no-san straight away, so nothing is offered —
+# pinning cannot fix a missing SAN.
+tls_json no-san "" "the certificate has no subjectAltName; click-dog ignores the Common Name" > "$FAKE_CD_OUT"
+tofu_reset
+confirm_otel_tls_choice otel.example.com 4317 <<<"y" > "$tofu_out" 2>&1
+tofu_text=$(cat "$tofu_out")
+assert_contains "CN-only certificate is explained" "has no subjectAltName" "$tofu_text"
+assert_not_contains "CN-only certificate is never offered" "Not offering to trust it" "$tofu_text"
+assert_not_contains "CN-only certificate gets no trust prompt" "Will install it as" "$tofu_text"
+assert_eq "CN-only certificate is never pinned" "" "$OTEL_CA_CERT"
+
+# A pin the binary cannot check is not offered either.
+tls_json untrusted unknown-authority "$SELF_SIGNED" > "$FAKE_CD_OUT"
+tls_json unknown config "failed to parse OTEL CA certificate" > "$FAKE_CD_OUT_CA"
+tls_chain san > "$FAKE_CD_CHAIN"
+tofu_reset
+confirm_otel_tls_choice otel.example.com 4317 <<<"y"$'\ny' > "$tofu_out" 2>&1
+tofu_text=$(cat "$tofu_out")
+assert_contains "an unproven pin is refused with a reason" "click-dog could not prove it would verify the collector (failed to parse" "$tofu_text"
+assert_eq "an unproven pin pins nothing" "" "$OTEL_CA_CERT"
+
+# A CA file click-dog cannot use ends the guided run: continuing would only
+# install a config the service cannot start with.
+# With --ca-cert the fake replays FAKE_CD_OUT_CA.
+tls_json unknown config "failed to parse OTEL CA certificate" > "$FAKE_CD_OUT_CA"
+tofu_reset
+OTEL_CA_CERT="$tls_sandbox/ca.crt"
+config_rc=0
+( confirm_otel_tls_choice otel.example.com 4317 <<<"y" ) > "$tofu_out" 2>&1 || config_rc=$?
+tofu_text=$(cat "$tofu_out")
+assert_eq "an unusable CA aborts the guided run" "1" "$config_rc"
+assert_contains "the guided run says why" "cannot use $tls_sandbox/ca.crt as the collector's CA" "$tofu_text"
+assert_not_contains "an unusable CA is not offered as continuable" "Continue with TLS?" "$tofu_text"
+OTEL_CA_CERT=""
+
+# No certificate arrived for the second look: nothing to show or pin.
+tls_json ok "" "$OK_MESSAGE" > "$FAKE_CD_OUT_CA"
+rm -f "$FAKE_CD_CHAIN"
+tofu_reset
+confirm_otel_tls_choice otel.example.com 4317 <<<"y"$'\ny' > "$tofu_out" 2>&1
+tofu_text=$(cat "$tofu_out")
+assert_not_contains "no chain, no trust prompt" "Trust this certificate" "$tofu_text"
+assert_contains "no chain keeps today's message" "To finish, add those files under exporters.otel" "$tofu_text"
+assert_eq "no chain pins nothing" "" "$OTEL_CA_CERT"
+
+# A wrong name is not a trust problem either.
+tls_json untrusted hostname-mismatch "hostname mismatch; certificate names DNS:other.example.com" > "$FAKE_CD_OUT"
+tofu_reset
+confirm_otel_tls_choice otel.example.com 4317 <<<"y" > "$tofu_out" 2>&1
+tofu_text=$(cat "$tofu_out")
+assert_contains "wrong-name certificate is explained" "is not issued for 'otel.example.com'" "$tofu_text"
+assert_not_contains "wrong-name certificate is never offered" "Will install it as" "$tofu_text"
+
+# Trust on first use follows reason codes too. Reworded details change
+# nothing: an expired pin is refused as expired, a mismatch is never
+# offered, and an unknown CA described in alarming words is still offered.
+tls_json untrusted expired "the validity window closed" > "$FAKE_CD_OUT"
+tls_json untrusted expired "the validity window closed" > "$FAKE_CD_OUT_CA"
+tls_chain san > "$FAKE_CD_CHAIN"
+tofu_reset
+confirm_otel_tls_choice otel.example.com 4317 <<<"y" > "$tofu_out" 2>&1
+assert_contains "a reworded expiry is refused as expired" "Not offering to trust it: it has expired (the validity window closed)" "$(cat "$tofu_out")"
+tls_json untrusted hostname-mismatch "names other hosts entirely" > "$FAKE_CD_OUT"
+tofu_reset
+confirm_otel_tls_choice otel.example.com 4317 <<<"y" > "$tofu_out" 2>&1
+assert_not_contains "a reworded mismatch is never offered" "The collector presented" "$(cat "$tofu_out")"
+tls_json untrusted unknown-authority "hostname mismatch, expired, not yet valid: none of these" > "$FAKE_CD_OUT"
+tls_json ok "" "$OK_MESSAGE" > "$FAKE_CD_OUT_CA"
+tofu_reset
+confirm_otel_tls_choice otel.example.com 4317 <<<"y" > "$tofu_out" 2>&1
+assert_contains "an unknown CA is offered whatever its wording" "Will install it as /etc/click-dog/tls/ca.pem" "$(cat "$tofu_out")"
+rm -f "$OTEL_CA_PIN_TMP"
+
+unset -f stdin_is_tty tofu_reset tofu_temp_count
+rm -f "$FAKE_CD_OUT_CA" "$FAKE_CD_CHAIN"
+OTEL_CA_CERT="" OTEL_CA_PIN_TMP=""
+
+# verify_installed_otel_ca re-runs the handshake against the installed file.
+(
+    OTEL_CA_CERT_PATH="$tls_sandbox/installed-ca.pem"
+    tls_json ok "" "$OK_MESSAGE" > "$FAKE_CD_OUT_CA"
+    verify_installed_otel_ca otel.example.com 4317 && echo "rc=0"
+    echo "args=$(cat "$FAKE_CD_ARGS")"
+    tls_json untrusted unknown-authority "certificate signed by unknown authority" > "$FAKE_CD_OUT_CA"
+    verify_installed_otel_ca otel.example.com 4317 || echo "rc=$?"
+    tls_json unknown unreachable "no answer from otel.example.com:4317 (connect: connection refused)" > "$FAKE_CD_OUT_CA"
+    verify_installed_otel_ca otel.example.com 4317 && echo "unknown-rc=0"
+    tls_json unknown config "failed to parse OTEL CA certificate" > "$FAKE_CD_OUT_CA"
+    verify_installed_otel_ca otel.example.com 4317 || echo "config-rc=$?"
+    rm -f "$FAKE_CD_OUT_CA"
+) > "$tls_sandbox/verify-installed.out" 2>&1
+verify_installed_out=$(cat "$tls_sandbox/verify-installed.out")
+assert_contains "the installed CA is re-checked" "args=test tls --collector otel.example.com:4317 --json --ca-cert $tls_sandbox/installed-ca.pem" "$verify_installed_out"
+assert_contains "a re-check that passes returns 0" "rc=0" "$verify_installed_out"
+assert_contains "a re-check that fails returns 1" "rc=1" "$verify_installed_out"
+assert_contains "a failed re-check explains itself" "does not verify the certificate" "$verify_installed_out"
+assert_contains "an inconclusive re-check is only a note" "unknown-rc=0" "$verify_installed_out"
+assert_contains "an unusable installed CA returns 2, reachable or not" "config-rc=2" "$verify_installed_out"
+
+echo ""
+echo "=== OTLP receiver TLS: installing the CA ==="
+
+# The guided path's EXIT handler removes every temp file it made: the
+# password-hash setup files, a pinned CA's copy, and its config temp files.
+(
+    BINARY_AUTO_DOWNLOADED="false"
+    cleanup_dir="$tls_sandbox/exit-cleanup"
+    mkdir -p "$cleanup_dir"
+    for f in setup.sql user.xml pin.pem config secret unit; do : > "$cleanup_dir/$f"; done
+    clickhouse_setup_tempfiles=("$cleanup_dir/setup.sql" "$cleanup_dir/user.xml")
+    OTEL_CA_PIN_TMP="$cleanup_dir/pin.pem"
+    CONFIG_TMPFILE="$cleanup_dir/config" SECRET_TMPFILE="$cleanup_dir/secret" UNIT_TMPFILE="$cleanup_dir/unit"
+    quickstart_exit_cleanup
+    echo "left=$(find "$cleanup_dir" -type f | wc -l | tr -d ' ')"
+    # Nothing made yet: still a clean no-op under set -u. The handler that
+    # reads these arrives via eval, so the linter sees only the writes.
+    # shellcheck disable=SC2034
+    clickhouse_setup_tempfiles=()
+    # shellcheck disable=SC2034
+    OTEL_CA_PIN_TMP="" CONFIG_TMPFILE="" SECRET_TMPFILE="" UNIT_TMPFILE=""
+    quickstart_exit_cleanup && echo "empty=ok"
+) > "$tls_sandbox/exit-cleanup.out" 2>&1
+assert_contains "guided exit removes its temp files" "left=0" "$(cat "$tls_sandbox/exit-cleanup.out")"
+assert_contains "guided exit with nothing to remove is a no-op" "empty=ok" "$(cat "$tls_sandbox/exit-cleanup.out")"
+
+# resolve_binary's trap replaces the caller's while it downloads, so it runs
+# the caller's handler too, and hands the trap back when it is done.
+(
+    _RESOLVE_BINARY_ARCHIVE_TMP="" _RESOLVE_BINARY_VERIFY_DIR="" _RESOLVE_BINARY_DOWNLOAD_DIR=""
+    outer_ran() { echo "outer ran"; }
+    # shellcheck disable=SC2034  # read by _resolve_binary_cleanup, via eval
+    OUTER_EXIT_CLEANUP=outer_ran
+    _resolve_binary_cleanup
+) > "$tls_sandbox/outer-cleanup.out"
+assert_eq "a failed download runs the caller's EXIT handler" "outer ran" "$(cat "$tls_sandbox/outer-cleanup.out")"
+resolve_body=$(awk '/^resolve_binary\(\)/,/^}/' deploy/install.sh)
+assert_contains "resolve_binary hands the trap back" 'trap "$OUTER_EXIT_CLEANUP" EXIT' "$resolve_body"
+tofu_body=$(awk '/^offer_otel_tofu\(\)/,/^}/' deploy/install.sh)
+assert_not_contains "trust on first use sets no trap of its own" "trap " "$tofu_body"
+
+# A failed guided reinstall puts back the CA the previous config names.
+(
+    OTEL_CA_CERT_PATH="$tls_sandbox/restore/ca.pem"
+    mkdir -p "${OTEL_CA_CERT_PATH%/*}"
+    echo new > "$OTEL_CA_CERT_PATH"
+    echo old > "${OTEL_CA_CERT_PATH}.bak"
+    restore_otel_ca_backup
+    echo "ca=$(cat "$OTEL_CA_CERT_PATH") bak=$([[ -e "${OTEL_CA_CERT_PATH}.bak" ]] && echo kept || echo gone)"
+    rm -f "$OTEL_CA_CERT_PATH"
+    restore_otel_ca_backup && echo "no-backup=ok"
+) > "$tls_sandbox/restore.out"
+assert_contains "restore puts the previous CA back" "ca=old bak=gone" "$(cat "$tls_sandbox/restore.out")"
+(
+    OTEL_CA_CERT_PATH="$tls_sandbox/backup/ca.pem"
+    mkdir -p "${OTEL_CA_CERT_PATH%/*}"
+    echo current > "$OTEL_CA_CERT_PATH"
+    backup_otel_ca
+    echo "bak=$(cat "${OTEL_CA_CERT_PATH}.bak")"
+    rm -f "$OTEL_CA_CERT_PATH"
+    backup_otel_ca
+    echo "stale=$([[ -e "${OTEL_CA_CERT_PATH}.bak" ]] && echo kept || echo dropped)"
+) > "$tls_sandbox/backup.out"
+assert_contains "backup keeps the current CA" "bak=current" "$(cat "$tls_sandbox/backup.out")"
+assert_contains "no current CA drops a stale backup" "stale=dropped" "$(cat "$tls_sandbox/backup.out")"
+assert_contains "restore without a backup is a no-op" "no-backup=ok" "$(cat "$tls_sandbox/restore.out")"
+
+# install_otel_ca_cert places the file the config names, for the runtime
+# user. chown needs root and a click-dog account, so it is stubbed; the
+# modes are real.
+(
+    chown() { :; }
+    OTEL_CA_CERT_PATH="$tls_sandbox/etc/tls/ca.pem"
+    OTEL_CA_CERT="$tls_sandbox/san.crt"
+    install_otel_ca_cert
+    echo "copied=$(same_cert "$OTEL_CA_CERT" "$OTEL_CA_CERT_PATH")"
+    echo "file=$(find "$OTEL_CA_CERT_PATH" -perm 0640 | wc -l | tr -d ' ')"
+    echo "dir=$(find "${OTEL_CA_CERT_PATH%/*}" -prune -perm 0750 | wc -l | tr -d ' ')"
+    # Re-running with the installed file itself must not trip cp.
+    OTEL_CA_CERT="$OTEL_CA_CERT_PATH"
+    install_otel_ca_cert && echo "same-file=ok"
+) > "$tls_sandbox/install-ca.out" 2>&1 || true
+install_ca_out=$(cat "$tls_sandbox/install-ca.out")
+assert_contains "CA is copied where the config points" "copied=yes" "$install_ca_out"
+assert_contains "CA file is 0640" "file=1" "$install_ca_out"
+assert_contains "CA directory is 0750" "dir=1" "$install_ca_out"
+assert_contains "re-installing the installed file is a no-op copy" "same-file=ok" "$install_ca_out"
+
+unset -f make_test_cert tls_json tls_chain ca_file_check same_cert self_issued preflight_check
+BINARY="$saved_BINARY"
+unset FAKE_CD_ARGS FAKE_CD_OUT FAKE_CD_OUT_CA FAKE_CD_CHAIN REAL_OPENSSL
+OTEL_SECURE=""
+COLLECTOR_ADDRESS="$saved_COLLECTOR"
+
+echo ""
+echo "=== OTLP receiver TLS: wiring and flag scope ==="
+
+install_body=$(awk '/^do_install\(\)/,/^}/' deploy/install.sh)
+line_of() { grep -nF -- "$1" <<<"$install_body" | head -1 | cut -d: -f1; }
+ca_check_line=$(line_of 'validate_otel_ca_file "$OTEL_CA_CERT" || exit 1')
+preflight_line=$(line_of 'preflight_otel_tls || exit 1')
+download_line=$(grep -n '^    resolve_binary$' <<<"$install_body" | cut -d: -f1)
+install_trap_line=$(line_of "trap 'rm -f \"\$CONFIG_TMPFILE\"")
+backup_ca_line=$(line_of '        backup_otel_ca')
+place_ca_line=$(line_of '        install_otel_ca_cert')
+validate_line=$(line_of '--validate --config /etc/click-dog/click-dog.yaml')
+in_order() {
+    local prev=0 n
+    for n in "$@"; do
+        if [[ -z "$n" || "$n" -le "$prev" ]]; then
+            echo false
+            return
+        fi
+        prev="$n"
+    done
+    echo true
+}
+# The handshake runs the resolved binary, so it follows the download; the
+# EXIT trap that removes a download is set before it can stop the install.
+assert_eq "install checks the CA file, downloads, sets its trap, asks the binary, then checks the handshake" "true" \
+    "$(in_order "$ca_check_line" "$download_line" "$install_trap_line" \
+        "$(line_of 'resolve_otel_transport || exit 1')" "$preflight_line")"
+assert_contains "install checks the handshake whenever the transport is TLS" \
+    'if [[ "$OTEL_USES_TLS" == "true" ]]; then' "$install_body"
+assert_eq "install checks the handshake before writing anything" "true" \
+    "$(in_order "$preflight_line" "$(line_of 'useradd --system')" "$backup_ca_line")"
+assert_eq "install backs up, places, then validates the CA" "true" \
+    "$(in_order "$backup_ca_line" "$place_ca_line" "$validate_line")"
+assert_contains "install restores the CA when validation fails" \
+    '[[ -n "$OTEL_CA_CERT" ]] && restore_otel_ca_backup' "$install_body"
+assert_contains "install drops the CA backup once validation passes" \
+    'rm -f "${OTEL_CA_CERT_PATH}.bak"' "$install_body"
+assert_contains "install guards the new init flag" 'require_init_flag otel-ca-cert' "$install_body"
+
+guided_body=$(awk '/^do_quickstart\(\)/,/^# ── Dispatch/' deploy/install.sh)
+guided_line_of() { grep -nF -- "$1" <<<"$guided_body" | head -1 | cut -d: -f1; }
+assert_contains "guided collector step chooses the transport" 'guided_otel_transport' "$guided_body"
+guided_transport_body=$(awk '/^guided_otel_transport\(\)/,/^}/' deploy/install.sh)
+assert_contains "guided transport step asks the binary" 'resolve_otel_transport || exit 1' "$guided_transport_body"
+assert_contains "guided transport step asks about TLS" 'prompt_otel_tls' "$guided_transport_body"
+assert_contains "guided reachability check proves a TLS answer" 'confirm_otel_tls_choice "$col_host" "$col_port"' "$guided_body"
+assert_contains "guided handshake follows the transport, not the flag" 'if [[ "$OTEL_USES_TLS" == "true" ]]; then' "$guided_body"
+assert_eq "guided install chooses the transport after fetching click-dog" "true" \
+    "$(in_order "$(guided_line_of 'Fetching click-dog')" "$(guided_line_of '    guided_otel_transport')")"
+# The binary the collector check runs is fetched once, before step 2.
+assert_eq "guided install fetches click-dog before the collector step" "true" \
+    "$(in_order "$(guided_line_of 'Fetching click-dog')" "$(guided_line_of 'Step 2/3 — OTEL collector')" \
+        "$(guided_line_of 'confirm_otel_tls_choice "$col_host" "$col_port"')")"
+assert_eq "guided install resolves the binary once outside Update" "1" \
+    "$(grep -c '^    resolve_binary$' <<<"$guided_body")"
+assert_contains "guided path checks an operator CA file" 'validate_otel_ca_file "$OTEL_CA_CERT" || exit 1' "$guided_transport_body"
+assert_contains "guided install places the CA" 'install_otel_ca_cert' "$guided_body"
+assert_contains "guided install re-runs the handshake against it" 'verify_installed_otel_ca "$col_host" "$col_port"' "$guided_body"
+# An unusable CA stops the guided install even when the collector was
+# unreachable and no pin exists: only the pin case used to stop it.
+assert_contains "guided install stops on an unusable CA, pin or not" '[[ "$verify_rc" -eq 2 ]]' "$guided_body"
+assert_contains "guided install cleans up an unused pin" '"${OTEL_CA_PIN_TMP:-}"' \
+    "$(awk '/^quickstart_exit_cleanup\(\)/,/^}/' deploy/install.sh)"
+assert_eq "guided install backs up the CA before replacing it" "true" \
+    "$(in_order "$(guided_line_of '        backup_otel_ca')" \
+        "$(guided_line_of '        install_otel_ca_cert')")"
+assert_contains "guided install sets its EXIT handler" 'trap quickstart_exit_cleanup EXIT' "$guided_body"
+assert_eq "the not-running ending keeps the setup files it names" "true" \
+    "$(in_order "$(guided_line_of 'clickhouse_setup_tempfiles=()' | tail -1)" \
+        "$(guided_line_of 'Installed, but not yet running')")"
+assert_eq "guided temp file list is reset in two places" "2" \
+    "$(grep -c '^ *clickhouse_setup_tempfiles=()$' <<<"$guided_body")"
+# The unusable-CA stop, the pin that no longer verifies, and the failed
+# config validation each restore the CA the install replaced.
+assert_eq "every guided failure exit restores the CA" "3" \
+    "$(grep -c '^ *restore_otel_ca_backup$' <<<"$guided_body")"
+assert_contains "guided success drops the CA backup" '"${OTEL_CA_CERT_PATH}.bak"' \
+    "$(grep -F 'rm -f /etc/click-dog/click-dog.yaml.bak' <<<"$guided_body")"
+
+# Render: the config names the installed path, never the source file.
+saved_BINARY="${BINARY:-}"
+BINARY="$STUB_BIN"
+OTEL_SECURE="true" OTEL_CA_CERT="/root/collector-ca.pem"
+ca_render=$(render_click_dog_config /etc/click-dog/click-dog.yaml)
+assert_contains "render names the installed CA" "--otel-ca-cert /etc/click-dog/tls/ca.pem" "$ca_render"
+assert_not_contains "render never names the source CA" "/root/collector-ca.pem" "$ca_render"
+OTEL_SECURE="" OTEL_CA_CERT=""
+BINARY="$saved_BINARY"
+
+# require_init_flag refuses a release whose init lacks the flag.
+flag_stub_dir=$(make_temp_dir)
+TEST_TEMP_DIRS+=("$flag_stub_dir")
+printf '#!/bin/sh\necho "  --otel-secure"\n' > "$flag_stub_dir/old"
+printf '#!/bin/sh\necho "  --otel-secure"\necho "  --otel-ca-cert string"\n' > "$flag_stub_dir/new"
+chmod +x "$flag_stub_dir/old" "$flag_stub_dir/new"
+flag_rc=0
+flag_out=$(BINARY="$flag_stub_dir/old"; require_init_flag otel-ca-cert 2>&1) || flag_rc=$?
+assert_eq "release without --otel-ca-cert is refused" "1" "$flag_rc"
+assert_contains "refusal names the missing flag" "predates 'click-dog init --otel-ca-cert'" "$flag_out"
+flag_rc=0
+(BINARY="$flag_stub_dir/new"; require_init_flag otel-ca-cert) >/dev/null 2>&1 || flag_rc=$?
+assert_eq "release with --otel-ca-cert is accepted" "0" "$flag_rc"
+
+# kubernetes takes --otel-secure (do_kubernetes passes it to the generator;
+# argv covered below). Run without -c so it stops before Docker either way:
+# what matters is that the option parser does not refuse it.
+flag_out=$(bash "$SCRIPT_DIR/install.sh" kubernetes --otel-secure 2>&1) || true
+assert_not_contains "kubernetes accepts --otel-secure" "Error: --otel-secure" "$flag_out"
+
+flag_rc=0
+flag_out=$(bash "$SCRIPT_DIR/install.sh" kubernetes update --otel-secure 2>&1) || flag_rc=$?
+assert_eq "kubernetes update rejects --otel-secure" "1" "$flag_rc"
+assert_contains "kubernetes update rejection names kubernetes" "install, docker, kubernetes" "$flag_out"
+
+flag_rc=0
+flag_out=$(bash "$SCRIPT_DIR/install.sh" update --otel-secure 2>&1) || flag_rc=$?
+assert_eq "update rejects --otel-secure" "1" "$flag_rc"
+assert_contains "update rejection names the valid commands" "only valid with install, docker" "$flag_out"
+
+flag_rc=0
+flag_out=$(bash "$SCRIPT_DIR/install.sh" docker update --otel-secure 2>&1) || flag_rc=$?
+assert_eq "docker update rejects --otel-secure" "1" "$flag_rc"
+
+flag_ca="$tls_sandbox/san.crt"
+flag_rc=0
+flag_out=$(bash "$SCRIPT_DIR/install.sh" docker -c otel:4317 --otel-ca-cert "$flag_ca" 2>&1) || flag_rc=$?
+assert_eq "docker rejects --otel-ca-cert" "1" "$flag_rc"
+assert_contains "docker rejection explains the mount" "mounts only click-dog.yaml" "$flag_out"
+
+flag_rc=0
+flag_out=$(bash "$SCRIPT_DIR/install.sh" kubernetes --otel-ca-cert "$flag_ca" 2>&1) || flag_rc=$?
+assert_eq "kubernetes rejects --otel-ca-cert" "1" "$flag_rc"
+assert_contains "kubernetes CA refusal points at the mounted ConfigMap" "click-dog-otel-ca" "$flag_out"
+
+flag_rc=0
+flag_out=$(bash "$SCRIPT_DIR/install.sh" update --otel-ca-cert "$flag_ca" 2>&1) || flag_rc=$?
+assert_eq "update rejects --otel-ca-cert" "1" "$flag_rc"
+
+flag_rc=0
+flag_out=$(bash "$SCRIPT_DIR/install.sh" install -c otel:4317 --otel-ca-cert 2>&1) || flag_rc=$?
+assert_eq "--otel-ca-cert without a file is refused" "1" "$flag_rc"
+assert_contains "missing file is named" "--otel-ca-cert needs a FILE" "$flag_out"
+
+byo_config="$tls_sandbox/byo.yaml"
+: > "$byo_config"
+flag_rc=0
+flag_out=$(bash "$SCRIPT_DIR/install.sh" install -f "$byo_config" --otel-secure 2>&1) || flag_rc=$?
+assert_eq "install -f rejects --otel-secure" "1" "$flag_rc"
+assert_contains "-f rejection points at the file" "$byo_config instead" "$flag_out"
+flag_rc=0
+flag_out=$(bash "$SCRIPT_DIR/install.sh" install -f "$byo_config" --otel-ca-cert "$flag_ca" 2>&1) || flag_rc=$?
+assert_eq "install -f rejects --otel-ca-cert" "1" "$flag_rc"
+assert_contains "-f rejection names ca_cert" "(and ca_cert)" "$flag_out"
+
+# --otel-secure is parsed strictly: '=true', '=false' or bare (true). A
+# separate word is refused before anything runs, because Go's flag package
+# would read `--otel-secure false` as true plus a stray word.
+for accepted in "--otel-secure" "--otel-secure=true" "--otel-secure=false"; do
+    flag_out=$(bash "$SCRIPT_DIR/install.sh" kubernetes "$accepted" 2>&1) || true
+    assert_not_contains "kubernetes accepts $accepted" "Error: --otel-secure" "$flag_out"
+    assert_not_contains "$accepted leaves nothing over" "unexpected argument" "$flag_out"
+done
+flag_rc=0
+flag_out=$(bash "$SCRIPT_DIR/install.sh" install -c otel.internal:4317 --otel-secure false 2>&1) || flag_rc=$?
+assert_eq "--otel-secure false is refused" "1" "$flag_rc"
+assert_contains "the refusal names the = form" "write --otel-secure=false" "$flag_out"
+assert_not_contains "the refusal comes before anything runs" "click-dog install:" "$flag_out"
+flag_rc=0
+flag_out=$(bash "$SCRIPT_DIR/install.sh" install -c otel.internal:4317 --otel-secure TRUE 2>&1) || flag_rc=$?
+assert_eq "--otel-secure TRUE is refused" "1" "$flag_rc"
+assert_contains "the refusal lower-cases the value" "write --otel-secure=true" "$flag_out"
+flag_rc=0
+flag_out=$(bash "$SCRIPT_DIR/install.sh" install -c otel.internal:4317 --otel-secure=yes 2>&1) || flag_rc=$?
+assert_eq "--otel-secure=yes is refused" "1" "$flag_rc"
+assert_contains "the refusal names both values" "use --otel-secure=true or --otel-secure=false" "$flag_out"
+flag_rc=0
+flag_out=$(bash "$SCRIPT_DIR/install.sh" update --otel-secure=false 2>&1) || flag_rc=$?
+assert_eq "update rejects --otel-secure=false" "1" "$flag_rc"
+assert_contains "the = form is scoped like the bare flag" "only valid with install, docker" "$flag_out"
+
+# Anything left after the options is refused: getopts stops at the first
+# word, and every option after it would be dropped silently.
+flag_rc=0
+flag_out=$(bash "$SCRIPT_DIR/install.sh" install -c otel.internal:4317 stray --systemd 2>&1) || flag_rc=$?
+assert_eq "a leftover argument is refused" "1" "$flag_rc"
+assert_contains "the refusal names it" "unexpected argument 'stray'" "$flag_out"
+flag_rc=0
+flag_out=$(bash "$SCRIPT_DIR/install.sh" install -c otel.internal:4317 false -v 26.04.1 2>&1) || flag_rc=$?
+assert_eq "a leftover false is refused" "1" "$flag_rc"
+assert_contains "a leftover false points to the = form" "e.g. --otel-secure=false" "$flag_out"
+flag_rc=0
+flag_out=$(bash "$SCRIPT_DIR/install.sh" -c localhost:4317 extra 2>&1) || flag_rc=$?
+assert_eq "the guided path refuses leftovers too" "1" "$flag_rc"
+assert_contains "the guided refusal names it" "unexpected argument 'extra'" "$flag_out"
+
+# A CA implies TLS: with an explicit false it is refused whichever comes first.
+for conflict in "--otel-secure=false --otel-ca-cert $tls_sandbox/san.crt" \
+                "--otel-ca-cert $tls_sandbox/san.crt --otel-secure=false"; do
+    flag_rc=0
+    # shellcheck disable=SC2086  # the case is two flags and their values
+    flag_out=$(bash "$SCRIPT_DIR/install.sh" install -c localhost:4317 $conflict 2>&1) || flag_rc=$?
+    assert_eq "CA with false is refused ($conflict)" "1" "$flag_rc"
+    assert_contains "the CA refusal says why ($conflict)" "--otel-ca-cert implies TLS, so it cannot combine with --otel-secure=false" "$flag_out"
+done
+# ...while a CA with an explicit true is consistent.
+flag_out=$(bash "$SCRIPT_DIR/install.sh" install -f /nonexistent --otel-ca-cert "$tls_sandbox/san.crt" --otel-secure=true 2>&1) || true
+assert_not_contains "a CA with --otel-secure=true is no conflict" "cannot combine with --otel-secure=false" "$flag_out"
+flag_rc=0
+flag_out=$(bash "$SCRIPT_DIR/install.sh" install -f "$byo_config" --otel-secure=false 2>&1) || flag_rc=$?
+assert_eq "install -f rejects --otel-secure=false" "1" "$flag_rc"
+assert_eq "the -f refusal comes first" "0" "$(grep -c 'implies TLS' <<<"$flag_out" || true)"
+
+usage_out=$(bash "$SCRIPT_DIR/install.sh" -h 2>&1) || true
+assert_contains "help documents --otel-secure" "--otel-secure" "$usage_out"
+assert_contains "help documents --otel-ca-cert" "--otel-ca-cert FILE" "$usage_out"
+
+echo ""
+echo "=== click-dog invocations use --long flags ==="
+
+# The binary's top-level flags (--version, --validate, --config) are passed
+# from many call sites; none may use the one-dash spelling. Comments are
+# skipped; the init -h help probe greps for a substring, not a flag. The
+# systemd unit's ExecStart keeps -config so installed units still match.
+one_dash_calls=$(grep -nE '(^|[ "])-(version|validate|config)( |$|")' deploy/install.sh \
+    | grep -vE '^[0-9]+:[[:space:]]*#' | grep -v ':ExecStart=' || true)
+assert_eq "no one-dash --version/--validate/--config call" "" "$one_dash_calls"
 
 echo ""
 echo "=== legacy installer uninstall delegates safely ==="
@@ -326,10 +1522,30 @@ install_sandbox=$(make_temp_dir)
 TEST_TEMP_DIRS+=("$install_sandbox")
 printf 'monitor:\n  enabled: true\n' > "$install_sandbox/input.yaml"
 printf '[Unit]\nDescription=click-dog test unit\n' > "$install_sandbox/click-dog.service"
-cat > "$install_sandbox/click-dog" <<'STUB'
+# The stub answers --print-otel-secure as the fake TLS binary above does,
+# logs each render's init argv to $HARNESS_LOG, and logs each handshake.
+cat > "$install_sandbox/click-dog" <<STUB
 #!/bin/sh
+$FAKE_PRINT_OTEL_SECURE
+STUB
+cat >> "$install_sandbox/click-dog" <<'STUB'
 case "$1" in
-    -version|-validate) exit 0 ;;
+    --version|--validate) exit 0 ;;
+    init)
+        shift
+        case "$1" in
+            --print-otel-secure) fake_print_otel_secure "$@" ;;
+            -h) echo "  --ch-user string"; echo "  --otel-ca-cert string"; exit 0 ;;
+        esac
+        echo "render $*" >> "${HARNESS_LOG:-/dev/null}"
+        exit 0
+        ;;
+    test)
+        echo "handshake $*" >> "${HARNESS_LOG:-/dev/null}"
+        printf '{\n  "verdict": "%s",\n  "reason": "%s",\n  "message": "%s",\n  "certificates": []\n}\n' \
+            "${HARNESS_TLS_VERDICT:-ok}" "${HARNESS_TLS_REASON:-}" "${HARNESS_TLS_MESSAGE:-}"
+        exit 1
+        ;;
     *) exit 1 ;;
 esac
 STUB
@@ -374,6 +1590,7 @@ sleep() { return 0; }
 
 mkdir() {
     if [[ "$*" == *"/etc/click-dog"* || "$*" == *"/usr/local/bin"* ]]; then
+        echo "mkdir $*" >> "$sandbox/system-writes"
         return 0
     fi
     command mkdir "$@"
@@ -402,6 +1619,7 @@ mktemp() {
 cp() {
     local target="${!#}"
     if [[ "$target" == /etc/* || "$target" == /usr/local/bin/* ]]; then
+        echo "cp $target" >> "$sandbox/system-writes"
         return 0
     fi
     command cp "$@"
@@ -416,6 +1634,14 @@ mv() {
 
 case "$HARNESS_ACTION" in
     install) do_install ;;
+    install-tls)
+        CONFIG_FROM_FILE=""
+        COLLECTOR_ADDRESS="${HARNESS_COLLECTOR:-otel.example.com:4317}"
+        # Unset means --otel-secure; set and empty means no flag.
+        OTEL_SECURE="${HARNESS_OTEL_SECURE-true}"
+        OTEL_CA_CERT="${HARNESS_CA:-}"
+        do_install
+        ;;
     update)  do_update ;;
     *) echo "unknown harness action: $HARNESS_ACTION" >&2; exit 1 ;;
 esac
@@ -428,6 +1654,85 @@ install_out=$(INSTALL_SCRIPT="$SCRIPT_DIR/install.sh" INSTALL_SANDBOX="$install_
 assert_eq "successful do_install exits 0" "0" "$install_status"
 assert_contains "successful do_install reaches completion" "Install complete." "$install_out"
 assert_not_contains "successful do_install has no unbound trap variable" "unbound variable" "$install_out"
+
+# --otel-secure gates the install on the handshake the resolved binary makes:
+# a refusal stops it before anything reaches /etc or /usr/local/bin.
+rm -f "$install_sandbox/system-writes"
+tls_gate_status=0
+tls_gate_out=$(INSTALL_SCRIPT="$SCRIPT_DIR/install.sh" INSTALL_SANDBOX="$install_sandbox" \
+    HARNESS_ACTION=install-tls HARNESS_TLS_VERDICT=untrusted HARNESS_TLS_REASON=unknown-authority \
+    HARNESS_TLS_MESSAGE="certificate signed by unknown authority (self-signed)" \
+    bash "$install_sandbox/run-install.sh" 2>&1) || tls_gate_status="$?"
+assert_eq "a refused handshake stops do_install" "1" "$tls_gate_status"
+assert_contains "the refusal names the flag and receiver" \
+    "Error: --otel-secure was given, but the TLS handshake with otel.example.com:4317 failed." "$tls_gate_out"
+assert_contains "the refusal carries the binary's reason" "(certificate signed by unknown authority (self-signed))" "$tls_gate_out"
+assert_contains "the refusal routes an unknown CA to --otel-ca-cert" "Pass --otel-ca-cert FILE" "$tls_gate_out"
+assert_eq "nothing is written before the gate" "no" \
+    "$([[ -s "$install_sandbox/system-writes" ]] && echo yes || echo no)"
+
+# run_tls_install VAR=VALUE... — the unattended install against a fake
+# receiver, logging renders and handshakes to $harness_log.
+harness_log="$install_sandbox/harness.log"
+run_tls_install() {
+    rm -f "$install_sandbox/system-writes"
+    : > "$harness_log"
+    tls_install_status=0
+    tls_install_out=$(env INSTALL_SCRIPT="$SCRIPT_DIR/install.sh" INSTALL_SANDBOX="$install_sandbox" \
+        HARNESS_ACTION=install-tls HARNESS_LOG="$harness_log" "$@" \
+        bash "$install_sandbox/run-install.sh" 2>&1) || tls_install_status="$?"
+    tls_install_log=$(cat "$harness_log")
+}
+
+# install -c otel.example.com:4317 with no --otel-secure: the binary says TLS,
+# the handshake runs before anything is written, and init gets no flag, so it
+# renders `secure: true` by the rule (cmd_init_test.go covers that output).
+run_tls_install HARNESS_OTEL_SECURE=
+assert_eq "an automatic TLS install completes" "0" "$tls_install_status"
+assert_contains "the automatic choice is checked by handshake" \
+    "handshake test tls --collector otel.example.com:4317 --json" "$tls_install_log"
+assert_eq "the handshake comes before the render" "true" \
+    "$(in_order "$(grep -n '^handshake' <<<"$tls_install_log" | cut -d: -f1)" "$(grep -n '^render' <<<"$tls_install_log" | cut -d: -f1)")"
+assert_not_contains "an automatic choice passes no --otel-secure to init" "-otel-secure" "$(grep '^render' <<<"$tls_install_log")"
+assert_contains "the status line names the automatic TLS choice" "(OTLP: TLS, automatic;" "$tls_install_out"
+
+# ...and a plaintext receiver fails it, naming --otel-secure=false.
+run_tls_install HARNESS_OTEL_SECURE= HARNESS_TLS_VERDICT=plaintext HARNESS_TLS_REASON=non-tls \
+    HARNESS_TLS_MESSAGE="otel.example.com:4317 answered the TLS handshake with non-TLS bytes"
+assert_eq "a plaintext receiver stops an automatic TLS install" "1" "$tls_install_status"
+assert_contains "the stop names --otel-secure=false as the fix" "pass --otel-secure=false" "$tls_install_out"
+assert_eq "nothing is written before the automatic gate" "no" \
+    "$([[ -s "$install_sandbox/system-writes" ]] && echo yes || echo no)"
+assert_not_contains "nothing is rendered before the automatic gate" "render" "$tls_install_log"
+
+# --otel-secure=false to a remote collector: rendered explicitly, no handshake.
+run_tls_install HARNESS_OTEL_SECURE=false HARNESS_COLLECTOR=otel.internal:4317
+assert_eq "an explicit plaintext install completes" "0" "$tls_install_status"
+assert_not_contains "explicit plaintext makes no handshake" "handshake" "$tls_install_log"
+assert_contains "explicit plaintext reaches init with =" "--otel-secure=false" "$(grep '^render' <<<"$tls_install_log")"
+assert_contains "the status line names the explicit choice" "(OTLP: plaintext, --otel-secure=false;" "$tls_install_out"
+
+# A loopback collector left automatic: plaintext, no handshake, no flag.
+run_tls_install HARNESS_OTEL_SECURE= HARNESS_COLLECTOR=localhost:4317
+assert_eq "an automatic loopback install completes" "0" "$tls_install_status"
+assert_not_contains "automatic loopback makes no handshake" "handshake" "$tls_install_log"
+assert_not_contains "automatic loopback passes no --otel-secure" "-otel-secure" "$(grep '^render' <<<"$tls_install_log")"
+
+# install -c localhost:4317 --otel-ca-cert ca.pem: the CA makes it TLS,
+# checked against that CA, and init renders the installed CA path.
+run_tls_install HARNESS_OTEL_SECURE= HARNESS_COLLECTOR=localhost:4317 HARNESS_CA="$tls_sandbox/san.crt"
+assert_eq "a loopback install with a CA completes" "0" "$tls_install_status"
+assert_contains "a CA makes loopback TLS, checked against it" \
+    "handshake test tls --collector localhost:4317 --json --ca-cert $tls_sandbox/san.crt" "$tls_install_log"
+assert_contains "a CA reaches init as the installed path" "--otel-ca-cert /etc/click-dog/tls/ca.pem" "$(grep '^render' <<<"$tls_install_log")"
+assert_not_contains "a CA alone passes no --otel-secure" "-otel-secure" "$(grep '^render' <<<"$tls_install_log")"
+
+# A release that cannot answer --print-otel-secure stops before writing.
+run_tls_install HARNESS_OTEL_SECURE= FAKE_CD_PRINT=none
+assert_eq "a binary without --print-otel-secure stops the install" "1" "$tls_install_status"
+assert_contains "the stop names the missing command" "'click-dog init --print-otel-secure'" "$tls_install_out"
+assert_eq "nothing is written without a transport" "no" \
+    "$([[ -s "$install_sandbox/system-writes" ]] && echo yes || echo no)"
 
 update_status=0
 update_out=$(INSTALL_SCRIPT="$SCRIPT_DIR/install.sh" INSTALL_SANDBOX="$install_sandbox" \
@@ -463,21 +1768,24 @@ old_out=$(VERSION=v25.04.1 require_unified_init_binary 2>&1) || old_status="$?"
 assert_eq "pre-unified binary refused (exit nonzero)" "1" "${old_status:-0}"
 assert_contains "diagnostic mentions the version-skew origin" "predates this install.sh" "$old_out"
 
-# Current stub: includes -ch-user in help text.
-NEW_STUB=$(make_temp_dir)/click-dog-new
-TEST_TEMP_DIRS+=("$(dirname "$NEW_STUB")")
-cat > "$NEW_STUB" <<'STUB'
+# Unified stubs: early unified releases print one-dash flags in their help,
+# current ones --flag (printFlagDefaults); both must be accepted.
+for help_dash in "-" "--"; do
+    NEW_STUB=$(make_temp_dir)/click-dog-new
+    TEST_TEMP_DIRS+=("$(dirname "$NEW_STUB")")
+    cat > "$NEW_STUB" <<STUB
 #!/bin/sh
 echo "Usage: click-dog init [flags]"
-echo "  -ch-user string"
-echo "  -ch-secure"
-echo "  -ha-keeper string"
+echo "  ${help_dash}ch-user string"
+echo "  ${help_dash}ch-secure"
+echo "  ${help_dash}ha-keeper string"
 STUB
-chmod +x "$NEW_STUB"
-BINARY="$NEW_STUB"
-new_status="0"
-require_unified_init_binary >/dev/null 2>&1 || new_status="$?"
-assert_eq "current binary accepted (exit 0)" "0" "$new_status"
+    chmod +x "$NEW_STUB"
+    BINARY="$NEW_STUB"
+    new_status="0"
+    require_unified_init_binary >/dev/null 2>&1 || new_status="$?"
+    assert_eq "unified binary with ${help_dash}ch-user help accepted (exit 0)" "0" "$new_status"
+done
 
 unset old_status new_status
 BINARY="$saved_BINARY"
@@ -486,7 +1794,8 @@ echo ""
 echo "=== generate_systemd_unit ==="
 
 unit=$(generate_systemd_unit)
-assert_contains "has ExecStart" "ExecStart=/usr/local/bin/click-dog" "$unit"
+# One dash on purpose: the guided Update diffs installed units against this.
+assert_contains "has ExecStart" "ExecStart=/usr/local/bin/click-dog -config /etc/click-dog/click-dog.yaml" "$unit"
 assert_contains "has Restart=on-failure" "Restart=on-failure" "$unit"
 assert_contains "has StartLimitBurst" "StartLimitBurst=5" "$unit"
 assert_contains "start limits live in [Unit]" $'StartLimitBurst=5\n\n[Service]' "$unit"
@@ -580,7 +1889,7 @@ assert_contains "quickstart update stages the binary before swap" \
 assert_contains "quickstart update rejects downgrades" \
     "refusing to downgrade" "$quickstart_body"
 assert_contains "quickstart update validates existing config" \
-    "-validate -config /etc/click-dog/click-dog.yaml" "$quickstart_body"
+    "--validate --config /etc/click-dog/click-dog.yaml" "$quickstart_body"
 assert_contains "quickstart update keeps a .prev rollback binary" \
     "click-dog.prev" "$quickstart_body"
 assert_contains "quickstart update cleans auto-downloaded binary" \
@@ -633,16 +1942,39 @@ echo "=== do_kubernetes (delegates to click-dog deploy kubernetes) ==="
 # than rendering bash/envsubst templates (the manifest content itself is covered
 # by cmd_deploy_generate_test.go). Stub `docker` to capture the argv it would
 # invoke — `command -v docker` finds the function and `docker run` calls it.
-k8s_docker_args=""
-docker() { k8s_docker_args="$*"; }
-
+# The stub answers the image's `init -h` with $k8s_init_help and its
+# `init --print-otel-secure` through the fake binary above (logging both to
+# $k8s_log), and records every other call as the generator run, also
+# announced on stdout so a subshell run can tell whether it happened.
 k8s_tmp=$(make_temp_dir)
 TEST_TEMP_DIRS+=("$k8s_tmp")
+k8s_log="$k8s_tmp/docker.log"
+k8s_init_help="  --print-otel-secure"
+k8s_docker_args=""
+docker() {
+    case " $* " in
+        *" init -h "*)
+            echo "help $*" >> "$k8s_log"
+            printf '%s\n' "$k8s_init_help"
+            return 0
+            ;;
+        *" init --print-otel-secure "*)
+            echo "print $*" >> "$k8s_log"
+            shift 5
+            "$tls_sandbox/click-dog" "$@"
+            return
+            ;;
+    esac
+    k8s_docker_args="$*"
+    echo "stub: generator ran"
+}
+# No terminal unless a case says so.
+stdin_is_tty() { return 1; }
 
 # do_kubernetes reads these; it comes from the eval in source_functions, so the
 # linter sees the writes and none of the reads.
 # shellcheck disable=SC2034
-OUTPUT_DIR="$k8s_tmp"
+OUTPUT_DIR="$k8s_tmp/out"
 COLLECTOR_ADDRESS="otel-collector:4317"
 CLICKHOUSE_PASSWORD="testpass123"
 CLICKHOUSE_USER="click_dog_monitor"
@@ -652,20 +1984,123 @@ CLICKHOUSE_CLUSTER="main"
 VERSION="26.04.1"
 # shellcheck disable=SC2034
 SUBCOMMAND=""
+OTEL_SECURE=""
 
+: > "$k8s_log"
 do_kubernetes > /dev/null
 
 # Must delegate to the single generator via the published image, threading the
 # ClickHouse Service host + cluster (the #199 fix) — never the old DaemonSet.
 assert_contains "runs the published image"        "ghcr.io/coltconsulting/click-dog:26.04.1"        "$k8s_docker_args"
 assert_contains "invokes deploy kubernetes"        "deploy kubernetes"                                "$k8s_docker_args"
-assert_contains "threads -ch-host Service DNS"     "-ch-host clickhouse.clickhouse.svc.cluster.local" "$k8s_docker_args"
-assert_contains "threads -cluster"                 "-cluster main"                                    "$k8s_docker_args"
+assert_contains "threads --ch-host Service DNS"    "--ch-host clickhouse.clickhouse.svc.cluster.local" "$k8s_docker_args"
+assert_contains "threads --cluster"                "--cluster main"                                   "$k8s_docker_args"
 assert_contains "writes into the mounted /work"    "-o /work"                                         "$k8s_docker_args"
 assert_contains "passes collector"                 "-c otel-collector:4317"                           "$k8s_docker_args"
 assert_contains "passes username"                  "-u click_dog_monitor"                             "$k8s_docker_args"
+assert_not_match "deploy kubernetes gets only --long flags" '(^| )-[a-z][a-z-]+' \
+    "${k8s_docker_args#*deploy kubernetes }"
 assert_contains "password via env, not argv"       "-e CLICKHOUSE_PASSWORD"                            "$k8s_docker_args"
 assert_not_contains "password not baked into argv" "testpass123"                                      "$k8s_docker_args"
+# Without the flag the generator decides (and refuses a collector off
+# loopback, below); install.sh adds nothing of its own.
+assert_not_contains "no --otel-secure unless given" "-otel-secure"                                    "$k8s_docker_args"
+assert_contains "generator runs as the invoker"    "run --rm --user $(id -u):$(id -g)"                "$k8s_docker_args"
+assert_contains "the image guard checks init for --print-otel-secure" \
+    "help run --rm ghcr.io/coltconsulting/click-dog:26.04.1 init -h" "$(cat "$k8s_log")"
+assert_not_contains "no terminal, no transport question to the image" "print " "$(cat "$k8s_log")"
+
+# --otel-secure (bare) and --otel-secure=false reach the generator with '='.
+OTEL_SECURE="true"
+do_kubernetes > /dev/null
+assert_contains "passes --otel-secure=true"        "--otel-secure=true"                               "${k8s_docker_args#*deploy kubernetes }"
+assert_not_match "secure argv keeps --long flags"  '(^| )-[a-z][a-z-]+'                               "${k8s_docker_args#*deploy kubernetes }"
+OTEL_SECURE="false"
+do_kubernetes > /dev/null
+assert_contains "passes --otel-secure=false"       "--otel-secure=false"                              "${k8s_docker_args#*deploy kubernetes }"
+
+# kubernetes -c otel-collector.monitoring:4317 with no flag and no terminal:
+# the generator's own refusal stops the run, in its words. The stub replays
+# that refusal for a generator run without --otel-secure=.
+OTEL_SECURE=""
+COLLECTOR_ADDRESS="otel-collector.monitoring:4317"
+k8s_refuse_rc=0
+k8s_refuse_out=$(
+    docker() {
+        if [[ " $* " == *" init -h "* ]]; then
+            echo "  --print-otel-secure"
+            return 0
+        fi
+        if [[ " $* " == *" --otel-secure="* ]]; then
+            echo "stub: generator ran"
+            return 0
+        fi
+        echo "Error: collector otel-collector.monitoring:4317 is not on loopback, and the generator cannot see its network to choose a transport." >&2
+        echo "  Pass --otel-secure=true for a TLS receiver, or --otel-secure=false for plaintext." >&2
+        echo "  In-cluster and Compose collectors (an OpenTelemetry Collector or Datadog Agent on 4317) usually serve plaintext" >&2
+        return 1
+    }
+    do_kubernetes 2>&1
+) || k8s_refuse_rc=$?
+assert_eq "a remote collector without a transport fails off a terminal" "1" "$k8s_refuse_rc"
+assert_contains "the error is the generator's, naming both values" \
+    "Pass --otel-secure=true for a TLS receiver, or --otel-secure=false for plaintext." "$k8s_refuse_out"
+assert_contains "the error says in-cluster collectors usually serve plaintext" "usually serve plaintext" "$k8s_refuse_out"
+assert_not_contains "nothing is reported as generated" "Kubernetes manifests generated" "$k8s_refuse_out"
+
+# On a terminal, install.sh asks instead, for a collector the image's
+# --print-otel-secure leaves to the operator (it says TLS: not loopback).
+stdin_is_tty() { return 0; }
+: > "$k8s_log"
+k8s_docker_args=""
+do_kubernetes <<<"p" > "$k8s_tmp/prompt.out"
+assert_contains "the terminal question asks for the transport" "[t]ls or [p]laintext" \
+    "$(grep -F '[t]ls or [p]laintext' deploy/install.sh)"
+assert_contains "the image decides whether to ask" \
+    "print run --rm --network host ghcr.io/coltconsulting/click-dog:26.04.1 init --print-otel-secure --collector otel-collector.monitoring:4317" \
+    "$(cat "$k8s_log")"
+assert_contains "the question says in-cluster collectors usually serve plaintext" "usually serve plaintext" "$(cat "$k8s_tmp/prompt.out")"
+assert_contains "a plaintext answer reaches the generator" "--otel-secure=false" "${k8s_docker_args#*deploy kubernetes }"
+OTEL_SECURE=""
+do_kubernetes <<<$'x\nt' > /dev/null
+assert_contains "a TLS answer reaches the generator, after a re-ask" "--otel-secure=true" "${k8s_docker_args#*deploy kubernetes }"
+# A loopback collector is settled: no question, and the generator renders
+# the rule comment for it.
+OTEL_SECURE=""
+COLLECTOR_ADDRESS="localhost:4317"
+k8s_docker_args=""
+do_kubernetes </dev/null > "$k8s_tmp/prompt.out"
+assert_not_contains "a loopback collector is not asked about" "Which transport" "$(cat "$k8s_tmp/prompt.out")"
+assert_not_contains "a loopback collector gets no --otel-secure" "-otel-secure" "$k8s_docker_args"
+# A flag settles it on a terminal too.
+OTEL_SECURE="true"
+COLLECTOR_ADDRESS="otel-collector.monitoring:4317"
+: > "$k8s_log"
+do_kubernetes </dev/null > "$k8s_tmp/prompt.out"
+assert_not_contains "a given flag is not asked about" "Which transport" "$(cat "$k8s_tmp/prompt.out")"
+assert_not_contains "a given flag needs no answer from the image" "print " "$(cat "$k8s_log")"
+stdin_is_tty() { return 1; }
+OTEL_SECURE=""
+COLLECTOR_ADDRESS="otel-collector:4317"
+
+# An image whose init predates --print-otel-secure (and so --otel-secure=
+# values) is refused before any manifest is generated, rather than failing
+# inside Go's flag parser.
+k8s_init_help="  --otel-secure"
+k8s_skew_rc=0
+k8s_skew_out=$(do_kubernetes 2>&1) || k8s_skew_rc=$?
+assert_eq "image without --print-otel-secure is refused" "1" "$k8s_skew_rc"
+assert_contains "refusal names the missing flag" "predates
+       'click-dog init --print-otel-secure'" "$k8s_skew_out"
+assert_contains "refusal points to the latest release" "https://github.com/coltconsulting/click-dog/releases/latest" "$k8s_skew_out"
+assert_not_contains "generator never ran for the old image" "stub: generator ran" "$k8s_skew_out"
+k8s_init_help="  --print-otel-secure"
+k8s_body=$(awk '/^do_kubernetes\(\)/,/^}/' deploy/install.sh)
+assert_eq "image guard runs before the password prompt" "true" \
+    "$(in_order "$(grep -nF '    require_otel_transport_image' <<<"$k8s_body" | head -1 | cut -d: -f1)" \
+        "$(grep -nF '    resolve_password' <<<"$k8s_body" | cut -d: -f1)")"
+assert_not_contains "kubernetes checks no handshake" "preflight_otel_tls" "$k8s_body"
+docker() { k8s_docker_args="$*"; }
 
 # --ch-host is required: a standalone click-dog pod can't reach ClickHouse via
 # localhost. Subshell so the function's `exit 1` doesn't kill the suite.
@@ -673,6 +2108,40 @@ k8s_noch_rc=0
 # shellcheck disable=SC2034  # read by do_kubernetes, which arrives via eval
 ( CLICKHOUSE_HOST=""; do_kubernetes >/dev/null 2>&1 ) || k8s_noch_rc=$?
 assert_eq "kubernetes without --ch-host fails" "1" "$k8s_noch_rc"
+
+# `kubernetes update` rewrites deployment.yaml and writes its .bak through the
+# same image, so it needs the same identity. Its preflight validates the
+# ConfigMap's config as the image's own user, so the copy must be readable
+# even under umask 077; the stub records the mode of the file it would mount.
+k8s_update_tmp=$(make_temp_dir)
+TEST_TEMP_DIRS+=("$k8s_update_tmp")
+: > "$k8s_update_tmp/deployment.yaml"
+cat > "$k8s_update_tmp/configmap.yaml" <<'CM'
+data:
+  click-dog.yaml: |
+    clickhouse:
+      host: ch
+CM
+k8s_validate_mode=""
+docker() {
+    local argv="$*" src
+    case " $argv " in
+        *" --validate "*)
+            src="${argv#* -v }"
+            src="${src%%:/etc/click-dog/*}"
+            k8s_validate_mode=$(ls -l "$src" | cut -c1-10) ;;
+        *) k8s_docker_args="$argv" ;;
+    esac
+}
+k8s_docker_args=""
+k8s_umask=$(umask)
+umask 077
+do_kubernetes_update "$k8s_update_tmp" > /dev/null
+umask "$k8s_umask"
+assert_eq "update validates a copy the image's user can read" "-rw-r--r--" "$k8s_validate_mode"
+assert_contains "update runs as the invoker" "run --rm --user $(id -u):$(id -g)" "$k8s_docker_args"
+assert_contains "update mounts the directory" "-v $(cd "$k8s_update_tmp" && pwd):/work " "$k8s_docker_args"
+assert_contains "update delegates the tag bump" "deploy kubernetes --update -v 26.04.1 -o /work" "$k8s_docker_args"
 
 unset -f docker
 
@@ -746,6 +2215,7 @@ pf_status=0
 pf_out=$(VERSION=26.04.1 PATH="$bad_bin:$PATH" preflight_validate_config "$pf_tmp/click-dog.yaml" "install.sh docker" 2>&1) || pf_status=$?
 assert_eq "preflight fails closed when config does not validate" "1" "$pf_status"
 assert_contains "preflight surfaces re-render hint on failure" "install.sh docker" "$pf_out"
+assert_contains "preflight explains a permission failure" "make it mode 0644" "$pf_out"
 
 # Docker absent → warn + skip (return 0) so the kubectl-only k8s workflow
 # isn't forced to install docker just to bump an image tag.
@@ -758,6 +2228,260 @@ pf_status=0
 pf_out=$(VERSION=26.04.1 PATH="$nodocker_bin" preflight_validate_config "$pf_tmp/click-dog.yaml" "install.sh docker" 2>&1) || pf_status=$?
 assert_eq "preflight skips (exit 0) when docker absent" "0" "$pf_status"
 assert_contains "preflight notes the docker-absent skip" "skipping config validation" "$pf_out"
+
+echo ""
+echo "=== docker_run_mounted ==="
+
+# Docker Engine on Linux keeps host ownership on a bind mount. The stub answers
+# `docker info` with $mount_security, or fails it when that is "fail", logs
+# each probe to $mount_probes (it runs in a command substitution), and records
+# the run argv. `id` is stubbed too, so the uid:gid and
+# 0:0 cases differ even when the suite runs as root.
+mount_security=""
+mount_probes="$(make_temp_dir)/probes"
+TEST_TEMP_DIRS+=("${mount_probes%/probes}")
+mount_args=""
+docker() {
+    if [[ "$1" == "info" ]]; then
+        echo probe >> "$mount_probes"
+        [[ "$mount_security" == "fail" ]] && return 1
+        printf '%s\n' "$mount_security"
+        return 0
+    fi
+    mount_args="$*"
+}
+id() {
+    case "$1" in
+        -u) echo 1234 ;;
+        -g) echo 5678 ;;
+        -G) echo "5678 27 999" ;;
+    esac
+}
+mounted() {
+    mount_security="$1"
+    DOCKER_SECURITY_PROBED=""
+    shift
+    docker_run_mounted "$@"
+}
+invoker="--user 1234:5678 --group-add 27 --group-add 999"
+
+mounted "[name=seccomp,profile=builtin name=cgroupns]" write -v /x:/work img init
+assert_eq "write runs as the invoker, supplementary groups included" \
+    "run --rm $invoker -v /x:/work img init" "$mount_args"
+mounted "[name=seccomp,profile=builtin name=rootless name=cgroupns]" write -v /x:/work img init
+assert_eq "rootless write runs as container root, the invoker" \
+    "run --rm --user 0:0 -v /x:/work img init" "$mount_args"
+mounted "[name=seccomp,profile=builtin name=userns]" write -v /x:/work img init
+assert_eq "userns-remap write leaves the user namespace" \
+    "run --rm $invoker --userns=host -v /x:/work img init" "$mount_args"
+mounted "[name=seccomp,profile=builtin name=selinux]" write -v /x:/work img init
+assert_eq "SELinux write lifts the label instead of relabeling" \
+    "run --rm --security-opt label=disable $invoker -v /x:/work img init" "$mount_args"
+mounted "fail" write -v /x:/work img init
+assert_eq "failed docker info falls back to uid:gid" "run --rm $invoker -v /x:/work img init" "$mount_args"
+mounted "[name=seccomp,profile=builtin name=rootless]" read -v /x:/y:ro img -h
+assert_eq "read keeps the image's own user" "run --rm -v /x:/y:ro img -h" "$mount_args"
+mounted "[name=selinux]" read -v /x:/y:ro img -h
+assert_eq "SELinux read lifts the label" "run --rm --security-opt label=disable -v /x:/y:ro img -h" "$mount_args"
+
+# Probed once per run, however many containers it starts.
+: > "$mount_probes"
+mounted "[name=rootless]" write -v /x:/work img init
+docker_run_mounted write -v /x:/work img init
+assert_eq "docker info runs once per run" "1" "$(wc -l < "$mount_probes" | tr -d ' ')"
+assert_eq "the cached answer still applies" "run --rm --user 0:0 -v /x:/work img init" "$mount_args"
+
+# The update preflight validates as the image's own user, mounting the file
+# where docker-compose.yml does, so a config the service cannot read fails.
+mount_security=""
+# Re-probed by the next docker_run_mounted, which arrives via eval.
+# shellcheck disable=SC2034
+DOCKER_SECURITY_PROBED=""
+VERSION=26.04.1 validate_config_via_docker "$pf_tmp/click-dog.yaml"
+assert_eq "config validation keeps the image's own user and mounts only the file" \
+    "run --rm -v $(cd "$pf_tmp" && pwd)/click-dog.yaml:/etc/click-dog/click-dog.yaml:ro ghcr.io/coltconsulting/click-dog:26.04.1 --validate --config /etc/click-dog/click-dog.yaml" \
+    "$mount_args"
+# ...which only holds while the compose template mounts it there.
+assert_contains "compose mounts the config where validation does" \
+    "./click-dog.yaml:/etc/click-dog/click-dog.yaml:ro" "$(cat "$SCRIPT_DIR/templates/docker/docker-compose.yml.tmpl")"
+
+# TLS files live where the deployment mounts them, never next to the config,
+# so each absolute path the config names gets an empty read-only stand-in:
+# without one, every private-CA or mTLS config would fail the update.
+tls_cfg_dir=$(make_temp_dir)
+TEST_TEMP_DIRS+=("$tls_cfg_dir")
+tls_cfg="$tls_cfg_dir/click-dog.yaml"
+cat > "$tls_cfg" <<'YAML'
+clickhouse:
+  secure: true
+  ca_cert: "/etc/click-dog/ch-ca.pem"
+exporters:
+  otel:
+    - collector_address: otel.example.com:4317
+      secure: true
+      # ca_cert: /etc/click-dog/tls/old.pem
+      ca_cert: '/etc/click-dog/tls/ca.pem'  # collector CA
+      client_cert: /etc/click-dog/tls/client.crt
+      client_key: /etc/click-dog/tls/client.key
+    - collector_address: other.example.com:4317
+      secure: true
+      ca_cert: /etc/click-dog/tls/ca.pem
+      client_cert: ${CLIENT_CERT}
+      client_key: relative/client.key
+YAML
+assert_eq "TLS paths are the absolute ones, once each" \
+    "/etc/click-dog/ch-ca.pem /etc/click-dog/tls/ca.pem /etc/click-dog/tls/client.crt /etc/click-dog/tls/client.key" \
+    "$(config_tls_file_paths "$tls_cfg" | tr '\n' ' ' | sed 's/ $//')"
+# shellcheck disable=SC2034
+DOCKER_SECURITY_PROBED=""
+VERSION=26.04.1 validate_config_via_docker "$tls_cfg"
+# The stand-in sits beside the config, which the daemon can already mount.
+tls_cfg_abs=$(cd "$tls_cfg_dir" && pwd)
+tls_stub_re="$tls_cfg_abs/\.click-dog-tls-stub\.[A-Za-z0-9]+"
+assert_match "TLS validation mounts a stand-in for each file, read-only" \
+    "^run --rm -v $tls_cfg_abs/click-dog.yaml:/etc/click-dog/click-dog.yaml:ro -v ${tls_stub_re}:/etc/click-dog/ch-ca.pem:ro -v ${tls_stub_re}:/etc/click-dog/tls/ca.pem:ro -v ${tls_stub_re}:/etc/click-dog/tls/client.crt:ro -v ${tls_stub_re}:/etc/click-dog/tls/client.key:ro ghcr.io/coltconsulting/click-dog:26.04.1 --validate --config /etc/click-dog/click-dog.yaml$" \
+    "$mount_args"
+assert_not_contains "a commented-out path gets no stand-in" "old.pem" "$mount_args"
+assert_eq "the stand-in is removed after validation" "click-dog.yaml" "$(ls -A "$tls_cfg_dir")"
+unset -f docker id mounted
+# Re-probed by the next docker_run_mounted, which arrives via eval.
+# shellcheck disable=SC2034
+DOCKER_SECURITY_PROBED=""
+
+# `init` writes click-dog.yaml 0600 and the invoker owns it, but the service
+# reads it as the image's own user. The stub writes it 0600 into the mounted
+# directory, as `init` would, and answers the image's `init -h`. A subshell
+# keeps the inputs, and any `exit`, to this case.
+docker_tmp=$(make_temp_dir)
+TEST_TEMP_DIRS+=("$docker_tmp")
+# The image also answers its `init -h` guard, `init --print-otel-secure` and
+# `test tls` (both through the fake binary above, run with the host network,
+# as do_docker must), logging each call to $docker_log. $docker_help stands in
+# for the image's init help.
+docker_log="$docker_tmp/docker.log"
+docker_help="  --ch-user string
+  --print-otel-secure"
+# docker_tls VERDICT [REASON [MESSAGE]] — the image's scripted `test tls`
+# answer (the TLS section's helpers are gone by now).
+export FAKE_CD_ARGS="$docker_tmp/tls-args" FAKE_CD_OUT="$docker_tmp/tls-out"
+docker_tls() {
+    printf '{\n  "verdict": "%s",\n  "reason": "%s",\n  "message": "%s"\n}\n' "$1" "${2:-}" "${3:-}" > "$FAKE_CD_OUT"
+}
+docker_run() {
+    local out_dir="$1"
+    shift
+    docker() {
+        local argv="$*" mount
+        echo "$argv" >> "$docker_log"
+        case " $argv " in
+            *" info "*) ;;
+            *" init -h "*) printf '%s\n' "$docker_help" ;;
+            *" --network host "*)
+                shift 5
+                "$tls_sandbox/click-dog" "$@"
+                return
+                ;;
+            *" init "*)
+                mount="${argv#* -v }"
+                mount="${mount%%:/work*}"
+                ( umask 077; : > "$mount/click-dog.yaml" ) ;;
+        esac
+    }
+    envsubst() { cat; }
+    # do_docker reads these; it arrives via the eval in source_functions.
+    # shellcheck disable=SC2034
+    OUTPUT_DIR="$out_dir" SUBCOMMAND="" VERSION="26.04.1"
+    # shellcheck disable=SC2034
+    CLICKHOUSE_USER="click_dog_monitor" CLICKHOUSE_PASSWORD="testpass123"
+    do_docker
+}
+docker_rc=0
+: > "$docker_log"
+(
+    # shellcheck disable=SC2034
+    COLLECTOR_ADDRESS="otel:4317" OTEL_SECURE=""
+    docker_tls ok "" "certificate verified for otel; TLS 1.3, ALPN h2"
+    docker_run "$docker_tmp/out" > /dev/null
+) || docker_rc=$?
+assert_eq "do_docker succeeds" "0" "$docker_rc"
+assert_eq "docker-mode config is readable by the image's user" \
+    "-rw-r--r--" "$(ls -l "$docker_tmp/out/click-dog.yaml" | cut -c1-10)"
+assert_eq ".env stays private" "-rw-------" "$(ls -l "$docker_tmp/out/.env" | cut -c1-10)"
+docker_calls=$(cat "$docker_log")
+assert_contains "docker asks the image for the transport, with the host network" \
+    "run --rm --network host ghcr.io/coltconsulting/click-dog:26.04.1 init --print-otel-secure --collector otel:4317" "$docker_calls"
+assert_contains "docker checks an automatic TLS choice in the image" \
+    "run --rm --network host ghcr.io/coltconsulting/click-dog:26.04.1 test tls --collector otel:4317 --json" "$docker_calls"
+assert_not_contains "an automatic choice reaches the image's init without a flag" "-otel-secure" \
+    "$(grep -v -- '--print-otel-secure' <<<"$docker_calls" | grep ' init ' || true)"
+
+# docker -c otel.example.com:4317 against a plaintext receiver: the image's
+# verdict stops the run, naming --otel-secure=false, before any file exists.
+docker_stop_rc=0
+: > "$docker_log"
+docker_stop_out=$(
+    # shellcheck disable=SC2034
+    COLLECTOR_ADDRESS="otel.example.com:4317" OTEL_SECURE=""
+    docker_tls plaintext non-tls "otel.example.com:4317 answered the TLS handshake with non-TLS bytes"
+    docker_run "$docker_tmp/stop" 2>&1
+) || docker_stop_rc=$?
+assert_eq "a plaintext receiver stops docker" "1" "$docker_stop_rc"
+assert_contains "the docker stop names --otel-secure=false" "pass --otel-secure=false" "$docker_stop_out"
+assert_eq "nothing is generated before the docker gate" "no" "$([[ -e "$docker_tmp/stop" ]] && echo yes || echo no)"
+
+# --otel-secure=false: the image renders it explicitly and checks nothing.
+: > "$docker_log"
+docker_plain_rc=0
+(
+    # shellcheck disable=SC2034
+    COLLECTOR_ADDRESS="otel.internal:4317" OTEL_SECURE="false"
+    docker_run "$docker_tmp/plain" > /dev/null
+) || docker_plain_rc=$?
+assert_eq "explicit plaintext docker succeeds" "0" "$docker_plain_rc"
+assert_not_contains "explicit plaintext docker makes no handshake" "test tls" "$(cat "$docker_log")"
+assert_contains "explicit plaintext reaches the image's init with =" "--otel-secure=false" \
+    "$(grep -v -- '--print-otel-secure' "$docker_log" | grep ' init ' || true)"
+
+# An image whose init predates --print-otel-secure is refused before anything.
+docker_skew_rc=0
+docker_skew_out=$(
+    # shellcheck disable=SC2034
+    COLLECTOR_ADDRESS="otel:4317" OTEL_SECURE=""
+    docker_help="  --ch-user string"
+    docker_run "$docker_tmp/skew" 2>&1
+) || docker_skew_rc=$?
+assert_eq "docker refuses an image without --print-otel-secure" "1" "$docker_skew_rc"
+assert_contains "the docker refusal points to the latest release" "releases/latest" "$docker_skew_out"
+assert_eq "nothing is generated for the old image" "no" "$([[ -e "$docker_tmp/skew" ]] && echo yes || echo no)"
+assert_not_contains "a trusted image handshake is no note" "not verified" \
+    "$(COLLECTOR_ADDRESS="otel:4317" OTEL_SECURE="" docker_run "$docker_tmp/out" 2>&1 >/dev/null || true)"
+unset -f docker_run docker_tls
+unset FAKE_CD_ARGS FAKE_CD_OUT
+
+docker_body=$(awk '/^do_docker\(\)/,/^}/' "$SCRIPT_DIR/install.sh")
+assert_eq "docker guards the image, asks it, then checks, all before the password" "true" \
+    "$(in_order "$(grep -nF '    require_otel_transport_image' <<<"$docker_body" | head -1 | cut -d: -f1)" \
+        "$(grep -nF 'resolve_otel_transport || exit 1' <<<"$docker_body" | head -1 | cut -d: -f1)" \
+        "$(grep -nF 'preflight_otel_tls || exit 1' <<<"$docker_body" | head -1 | cut -d: -f1)" \
+        "$(grep -nF '    resolve_password' <<<"$docker_body" | head -1 | cut -d: -f1)")"
+assert_eq ".env is private before the password goes in" "true" \
+    "$(in_order "$(grep -nF 'chmod 600 "$out_dir/.env"' <<<"$docker_body" | cut -d: -f1)" \
+        "$(grep -nF 'printf "CLICKHOUSE_PASSWORD=' <<<"$docker_body" | cut -d: -f1)")"
+
+# A `docker run` that bind-mounts outside docker_run_mounted would regress on
+# Linux Docker Engine, and a writable mount must use `write`.
+run_cmds=$(awk '
+    /^[[:space:]]*#/ { next }
+    /\\$/ { cmd = cmd $0 " "; next }
+    { print cmd $0; cmd = "" }
+' "$SCRIPT_DIR/install.sh")
+mount_flag='(^|[[:space:]])(-v|--volume|--mount)([[:space:]=]|$)'
+assert_eq "no bare docker run bind-mounts" "" \
+    "$(grep -E '(^|[[:space:]])docker run ' <<<"$run_cmds" | grep -E -- "$mount_flag" || true)"
+assert_eq "finds the docker_run_mounted calls" "true" \
+    "$([[ $(grep -cE '^[[:space:]]*docker_run_mounted (read|write) ' <<<"$run_cmds") -ge 4 ]] && echo true || echo false)"
+assert_eq "every read mount is read-only" "" \
+    "$(grep -E '^[[:space:]]*docker_run_mounted read ' <<<"$run_cmds" | grep -vE ':ro"' || true)"
 
 echo ""
 echo "=== --no-merge backward-compat notice ==="

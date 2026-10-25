@@ -20,13 +20,13 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/go-zookeeper/zk"
 	"github.com/google/uuid"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
 	chreader "github.com/coltconsulting/click-dog/internal/clickhouse"
 	"github.com/coltconsulting/click-dog/internal/config"
 	"github.com/coltconsulting/click-dog/internal/export"
-	"github.com/coltconsulting/click-dog/internal/leader"
 	"github.com/coltconsulting/click-dog/internal/model"
 )
 
@@ -117,29 +117,62 @@ func waitForAllClickHouse(t *testing.T, timeout time.Duration) []driver.Conn {
 	return conns
 }
 
+// waitForKeeper blocks until every Keeper node holds a session and commits a
+// write through the ensemble's quorum. zk.Connect returns before it dials
+// anything, so a successful connect proves nothing: after a flap test restarts
+// the ensemble, the next test would start against nodes still booting and
+// spend its whole deadline in the election's join backoff.
 func waitForKeeper(t *testing.T, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
-	addrs := integrationAllKeeperAddrs()
 
-	for time.Now().Before(deadline) {
-		le, err := leader.NewLeaderElection(
-			config.LeaderElectionConfig{
-				Hosts:          addrs,
-				SessionTimeout: 5,
-				BasePath:       "/click-dog/health-check",
-			},
-			func() {},
-			func() {},
-		)
-		if err == nil {
-			le.Resign()
-			return
+	for _, addr := range integrationAllKeeperAddrs() {
+		for {
+			err := probeKeeperWrite(addr)
+			if err == nil {
+				break
+			}
+			if !time.Now().Before(deadline) {
+				t.Fatalf("ClickHouse Keeper %s not ready after %v: %v", addr, timeout, err)
+			}
+			time.Sleep(500 * time.Millisecond)
 		}
-		time.Sleep(500 * time.Millisecond)
 	}
-	t.Fatalf("ClickHouse Keeper not ready after %v at %v", timeout, addrs)
 }
+
+// keeperProbeTimeout bounds one readiness probe. A node that accepts TCP
+// before it has joined the quorum can hold the handshake open far longer.
+const keeperProbeTimeout = 5 * time.Second
+
+// probeKeeperWrite opens a session pinned to addr and creates an ephemeral
+// sequential znode, which the session's close removes again. A write is
+// forwarded to the Raft leader, so success means addr is serving and the
+// ensemble has a quorum.
+func probeKeeperWrite(addr string) error {
+	conn, _, err := zk.Connect([]string{addr}, keeperProbeTimeout, zk.WithLogger(discardKeeperLogger{}))
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := conn.Create("/click-dog-readiness-probe-", nil, zk.FlagEphemeralSequential, zk.WorldACL(zk.PermAll))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(keeperProbeTimeout):
+		return fmt.Errorf("no response within %v", keeperProbeTimeout)
+	}
+}
+
+// discardKeeperLogger silences the client's per-attempt dial errors, which
+// are expected while the probe waits for a node to come up.
+type discardKeeperLogger struct{}
+
+func (discardKeeperLogger) Printf(string, ...interface{}) {}
 
 func waitForOTELCollector(t *testing.T, timeout time.Duration) {
 	t.Helper()

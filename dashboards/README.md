@@ -78,12 +78,13 @@ This dashboard is intentionally live-span focused. It filters to root query
 spans from `system.opentelemetry_span_log` using
 `resource_name:query @click_dog.source:span_log`. The dashboard is laid out so
 the first screen is an out-of-box key-metrics summary, automatic live-span
-`query_log.*` enrichment sections come next, and `log_comment.*` enhancement
-sections come last. Template variables: `env`, `app` (log_comment), `user` and
+`query_log.*` enrichment sections come next, followed by optional
+`log_comment.*` attribution. Exact Query Families is a detailed drilldown at
+the bottom, above the collapsible reference group. Template variables: `env`, `app` (log_comment), `user` and
 `client` (live-span `query_log.*` enrichment).
 
 > [!NOTE]
-> Count/volume widgets (e.g. *Exported queries (1h)*, *Exported queries per
+> Count/volume widgets (e.g. *Exported queries*, *Exported queries per
 > minute*, *Top apps by exported query volume*) reflect the **exported/qualified
 > query stream**, not total ClickHouse traffic. In scheduled mode click-dog
 > exports only traces selected by `monitor.min_trace_duration_ms` and any other
@@ -110,19 +111,37 @@ The higher-level query-family rollup API groups aggregated exact normalized-quer
 
 | Section | Widgets | Out of box? |
 |---------|---------|-------------|
-| **Key metrics** | Exported queries (1h), p95/p99 latency (with sparkline), slow query count, top user, top client | Yes: `query_log.*` enrichment + duration |
+| **Key metrics** | Exported queries, p95/p99 latency (with sparkline), slow query count, top user, top client | Yes: `query_log.*` enrichment + duration |
 | **Query overview** | Exported queries/min, p50/p95/p99 latency | Yes |
 | **Failures** | Failed query count and top failing query families | Yes: `query_log.exception_code` (blank until a query fails) |
-| **By ClickHouse user & client** | Top users by exported query volume and p95 latency, top client libraries | Yes: `query_log.user`, `query_log.client_name` |
+| **By ClickHouse user & client** | Top users by exported query volume, slowest users by p95 latency, top client libraries | Yes: `query_log.user`, `query_log.client_name` |
 | **Per-host** | Exported-query distribution across ClickHouse nodes | Yes: `hostname` |
 | **Resource usage** | Top query families by total query time, rows read and peak memory, plus tables/databases accessed | Yes: `@duration` plus numeric `query_log.read_rows` / `query_log.memory_usage`, plus `query_log.tables` and `query_log.databases` (family widgets need `query_log.normalized_query_hash`) |
+| **By application** | Top apps by exported query volume, slowest apps by p95 latency, slow query count | No: requires `log_comment.app` tagging |
+| **By named query** | Slowest named queries by p95 latency, top named queries by exported volume | No: requires `log_comment.query_name` tagging |
 | **Exact query families** | Slowest query shapes grouped deterministically by `query_log.normalized_query_hash` with `query_log.normalized_query` preview | Yes: preferred over raw SQL grouping |
-| **By application** | Top apps by exported query volume, latency, slow query count | No: requires `log_comment.app` tagging |
-| **By named query** | Top named queries by p95 latency and exported volume | No: requires `log_comment.query_name` tagging |
+
+### Reading and drilling into the dashboard
+
+Query and activity widgets follow the dashboard time picker, including the
+summary counts. The summary cards have room for their labels; contributor
+cards use a separate wider row.
+
+Query-family tables separate the normalized SQL preview, stable family hash,
+and metric. Their search bars stay visible. Click a row and choose **View query
+family traces** to open APM with the family hash, dashboard filters, and time
+range; the SQL preview is not embedded in that link. Double-click a widget
+title for full screen. Search filters the returned top 10 family rows; narrow
+the dashboard filters or use APM to investigate beyond those rows.
+
+SQL previews may already have been shortened by `max_query_length` before
+export. Expanding a widget cannot recover text that was never exported.
+Concise section headers keep the page scannable. Expand the reference group at
+the bottom for data coverage, optional tagging, and setup details.
 
 ### Out-of-box vs. `log_comment` enhancement
 
-Everything above the **By application** section works on a fresh install with no client-side changes: click-dog's `query_log` enrichment populates the user, client, host, table, rows-read, memory, total-query-time, and exception dimensions automatically. Normalized-query dimensions appear when `click_dog.normalized_query_supported` is `1`; in cluster query mode that means every replica passed the startup compatibility probe. The key-metrics row gives a single-screen "are query traces flowing, what does the current p95/p99 look like, who's the top contributor right now" answer the moment the dashboard imports.
+The main overview sections and the bottom **Exact query families** drilldown work without client-side changes: click-dog's `query_log` enrichment populates the user, client, host, table, rows-read, memory, total-query-time, and exception dimensions automatically. Normalized-query dimensions appear when `click_dog.normalized_query_supported` is `1`; in cluster mode that means every replica passed the startup compatibility probe. The key-metrics row gives a single-screen "are query traces flowing, what does the current p95/p99 look like, who's the top contributor right now" answer the moment the dashboard imports.
 
 The **By application** and **By named query** sections require the client to set
 `log_comment` (for example, `SET log_comment='{"app":"my-app","query_name":"home_dashboard"}'`).
@@ -171,7 +190,7 @@ whole dashboard.
 
 `query_log.operation` comes from ClickHouse's `system.query_log.query_kind`.
 Click-dog normalizes it to lowercase and derives `query_log.access_type` as
-`read`, `write`, `ddl`, `admin`, or `other`. In cluster query mode the operation
+`read`, `write`, `ddl`, `admin`, or `other`. In cluster mode the operation
 column is enabled only when every replica passes the startup capability probe.
 Use `click_dog.query_operation_supported` to distinguish an unsupported
 `query_kind` capability from a time range with no exported activity.
@@ -212,6 +231,10 @@ leader column without contributing to stale-export age.
 | **Last cycle** | Most recent cycle duration and exported/filtered/duplicate span counts |
 | **Lifetime counters** | Uptime, cycles total, errors total |
 | **Outcome breakdown** | Cycle results by outcome (`success`, `error`, `skipped`) |
+
+The **Setup and troubleshooting** group at the bottom contains the detailed
+health explanations and legacy scrape configuration. No data means unknown;
+blank widgets must not be read as a healthy zero.
 
 ### Legacy Datadog Agent OpenMetrics scrape config
 

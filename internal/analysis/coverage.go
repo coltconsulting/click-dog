@@ -50,7 +50,7 @@ func (a *coverageAnalyzer) Analyze(_ context.Context, input AnalysisInput) ([]Fi
 				"query_family_rollups_supported": false,
 				"lookback":                       input.Config.Lookback,
 			},
-			"Run `click-dog check` to verify normalized_query_hash support; rollups require it on every replica in cluster-query mode.",
+			"Run `click-dog check` to verify normalized_query_hash support; rollups require it on every replica in cluster mode.",
 		))
 	}
 

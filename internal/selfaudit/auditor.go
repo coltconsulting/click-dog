@@ -318,7 +318,7 @@ func (a *Auditor) step(reason string, indicated bool) {
 
 // reasonForHost decides the gauge reason label from this instance's
 // clickhouse.host: a loopback host means co-located sidecars each going
-// cluster-wide; a non-loopback host means separate centralized readers not
+// cluster-wide; a non-loopback host means separate cluster-mode readers not
 // sharing an election.
 func (a *Auditor) reasonForHost() string {
 	if isLoopbackHost(a.host) {

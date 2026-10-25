@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/coltconsulting/click-dog/internal/config"
 	deploytemplate "github.com/coltconsulting/click-dog/internal/deploy/template"
 	"github.com/coltconsulting/click-dog/internal/updater"
 )
@@ -21,7 +22,7 @@ import (
 const (
 	defaultDeployKubernetesOutDir = "./click-dog-k8s"
 	defaultDeployDockerOutDir     = "./click-dog-docker"
-	defaultDeployUsername         = "click_dog_monitor"
+	defaultDeployUsername         = defaultMonitorUser
 	// defaultDeployClickHouseHost is the Docker default (network_mode: host, so
 	// localhost reaches ClickHouse on the same host). Kubernetes rejects it —
 	// a standalone click-dog pod cannot reach the ClickHouse pod via localhost,
@@ -46,6 +47,12 @@ type deployGenerateOptions struct {
 	ClickHouseUser    string
 	ClickHousePass    string
 	PasswordFromFlag  bool
+	// OTELSecure is --otel-secure=true|false, rendered as
+	// exporters.otel[0].secure, the key `click-dog init` writes. nil (flag
+	// not given) is allowed only for a loopback collector, which gets the
+	// rule comment: the collector address resolves inside the cluster or
+	// container, so the generator cannot probe it or guess its transport.
+	OTELSecure *bool
 }
 
 type deployTemplateData struct {
@@ -56,6 +63,18 @@ type deployTemplateData struct {
 	B64Username        string
 	B64Password        string
 	ImageTag           string
+	// OTELSecureSet renders secure: OTELSecure; unset renders the rule comment.
+	OTELSecureSet bool
+	OTELSecure    bool
+}
+
+// otelSecureTemplateFields maps an optional --otel-secure onto the template's
+// set/value pair.
+func otelSecureTemplateFields(v *bool) (set, value bool) {
+	if v == nil {
+		return false, false
+	}
+	return true, *v
 }
 
 func runDeployKubernetes(args []string, out, errOut io.Writer) int {
@@ -94,11 +113,17 @@ func deployKubernetesUsage(errOut io.Writer, fs *flag.FlagSet) {
 	_, _ = fmt.Fprintf(errOut, `click-dog deploy kubernetes — generate Kubernetes manifests
 
 Usage:
-  click-dog deploy kubernetes -c COLLECTOR --ch-host CH_SERVICE [--cluster NAME] [-o DIR] [-v VERSION]
+  click-dog deploy kubernetes -c COLLECTOR --ch-host CH_SERVICE [--cluster NAME] [--otel-secure=true|false] [-o DIR] [-v VERSION]
 
-Generates a centralized click-dog Deployment that reaches ClickHouse over
+Generates a click-dog Deployment that reaches ClickHouse over
 --ch-host — the ClickHouse Service DNS (e.g. clickhouse.clickhouse.svc.cluster.local),
-not localhost. Pass --cluster <name> to read all shards via cluster() queries.
+not localhost. Pass --cluster <name> to run it in cluster mode. cluster() reads
+one replica per shard, so a replicated cluster gets partial coverage; for full
+coverage run a sidecar in every ClickHouse pod instead.
+
+--otel-secure=true|false is required unless the collector is loopback (a
+collector container in the same pod): the generator cannot see the cluster's
+network, and in-cluster collectors usually serve plaintext.
 
 Flags:
 `)
@@ -109,7 +134,10 @@ func deployDockerUsage(errOut io.Writer, fs *flag.FlagSet) {
 	_, _ = fmt.Fprintf(errOut, `click-dog deploy docker — generate Docker Compose files
 
 Usage:
-  click-dog deploy docker -c HOST [--out-dir DIR] [--update] [--version VERSION]
+  click-dog deploy docker -c HOST [--otel-secure=true|false] [--out-dir DIR] [--update] [--version VERSION]
+
+--otel-secure=true|false is required unless the collector is loopback (on the
+host's network): Compose collectors usually serve plaintext.
 
 Flags:
 `)
@@ -131,33 +159,56 @@ func parseDeployGenerateFlags(name string, args []string, opts *deployGenerateOp
 	fs.StringVar(&opts.Version, "v", "", "Version to generate (shorthand)")
 	fs.BoolVar(&opts.Update, "update", false, "Update image tag in an existing output directory")
 	fs.StringVar(&opts.ClickHouseHost, "ch-host", opts.ClickHouseHost, "ClickHouse host (kubernetes: the ClickHouse Service DNS, not localhost)")
-	fs.StringVar(&opts.ClickHouseCluster, "cluster", "", "ClickHouse cluster name; enables cluster() queries across shards (centralized kubernetes)")
+	fs.StringVar(&opts.ClickHouseCluster, "cluster", "", "ClickHouse cluster name (kubernetes only); runs the Deployment in cluster mode (cluster() reads one replica per shard)")
 	fs.StringVar(&opts.ClickHouseUser, "username", defaultDeployUsername, "ClickHouse username")
 	fs.StringVar(&opts.ClickHouseUser, "u", defaultDeployUsername, "ClickHouse username (shorthand)")
 	fs.StringVar(&opts.ClickHousePass, "password", opts.ClickHousePass, "ClickHouse password")
 	fs.StringVar(&opts.ClickHousePass, "p", opts.ClickHousePass, "ClickHouse password (shorthand)")
+	otelSecure := fs.Bool("otel-secure", false, "OTEL collector transport: --otel-secure=true for TLS (system trust store), --otel-secure=false for plaintext; required unless the collector is loopback")
 	fs.Usage = func() { usage(errOut, fs) }
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if err := rejectLeftoverArgs("click-dog "+name, fs); err != nil {
+		_, _ = fmt.Fprintln(errOut, err)
+		return err
+	}
 
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "p" || f.Name == "password" {
+		switch f.Name {
+		case "p", "password":
 			opts.PasswordFromFlag = true
+		case "otel-secure":
+			opts.OTELSecure = otelSecure
 		}
 	})
 	return nil
 }
 
+// requireDeployOTELTransport refuses a non-loopback collector without
+// --otel-secure. The generator builds files for a network it cannot reach,
+// so it does not guess; a loopback collector keeps the automatic choice.
+func requireDeployOTELTransport(opts deployGenerateOptions) error {
+	if opts.OTELSecure != nil || config.IsLoopbackOTLPTarget(opts.CollectorAddress) {
+		return nil
+	}
+	return fmt.Errorf("collector %s is not on loopback, and the generator cannot see its network to choose a transport.\n"+
+		"  Pass --otel-secure=true for a TLS receiver, or --otel-secure=false for plaintext.\n"+
+		"  In-cluster and Compose collectors (an OpenTelemetry Collector or Datadog Agent on 4317) usually serve plaintext", opts.CollectorAddress)
+}
+
 func deployKubernetes(opts deployGenerateOptions, out, errOut io.Writer) error {
 	if opts.Update {
+		if err := rejectOTELSecureOnUpdate(opts, "configmap.yaml"); err != nil {
+			return err
+		}
 		version, err := requireDeployUpdateVersion(opts.Version, "kubernetes")
 		if err != nil {
 			return err
 		}
 		// Pre-#199 output dirs hold daemonset.yaml, not deployment.yaml. The
-		// topology changed (DaemonSet -> centralized Deployment), so an in-place
+		// topology changed (DaemonSet -> Deployment), so an in-place
 		// image bump is wrong — regenerate, and delete the old workload (which
 		// `kubectl apply -k` does NOT prune, so it would keep running and
 		// double-export alongside the new Deployment).
@@ -186,7 +237,8 @@ func deployKubernetes(opts deployGenerateOptions, out, errOut io.Writer) error {
 	if strings.TrimSpace(opts.ClickHouseCluster) == "" {
 		_, _ = fmt.Fprintln(errOut, "WARNING: no --cluster given — the Deployment will read only the single ClickHouse")
 		_, _ = fmt.Fprintln(errOut, "         pod the Service routes to. Correct for single-node ClickHouse; for a")
-		_, _ = fmt.Fprintln(errOut, "         multi-shard cluster pass --cluster <name> to read all shards via cluster().")
+		_, _ = fmt.Fprintln(errOut, "         multi-node cluster run a sidecar in every ClickHouse pod, or pass")
+		_, _ = fmt.Fprintln(errOut, "         --cluster <name> for cluster mode (one replica per shard).")
 	}
 
 	if err := prepareInitialDeployOptions(&opts, out, errOut); err != nil {
@@ -205,6 +257,7 @@ func deployKubernetes(opts deployGenerateOptions, out, errOut io.Writer) error {
 		B64Password:        base64.StdEncoding.EncodeToString([]byte(opts.ClickHousePass)),
 		ImageTag:           imageTag(opts.Version),
 	}
+	data.OTELSecureSet, data.OTELSecure = otelSecureTemplateFields(opts.OTELSecure)
 	files := []struct {
 		template string
 		output   string
@@ -233,6 +286,9 @@ func deployKubernetes(opts deployGenerateOptions, out, errOut io.Writer) error {
 
 func deployDocker(opts deployGenerateOptions, out, errOut io.Writer) error {
 	if opts.Update {
+		if err := rejectOTELSecureOnUpdate(opts, "click-dog.yaml"); err != nil {
+			return err
+		}
 		version, err := requireDeployUpdateVersion(opts.Version, "docker")
 		if err != nil {
 			return err
@@ -252,6 +308,7 @@ func deployDocker(opts deployGenerateOptions, out, errOut io.Writer) error {
 		ClickHouseUsername: opts.ClickHouseUser,
 		ImageTag:           imageTag(opts.Version),
 	}
+	data.OTELSecureSet, data.OTELSecure = otelSecureTemplateFields(opts.OTELSecure)
 	files := []struct {
 		template string
 		output   string
@@ -265,6 +322,15 @@ func deployDocker(opts deployGenerateOptions, out, errOut io.Writer) error {
 	for _, f := range files {
 		if err := writeDeployTemplate(opts.OutDir, f.output, f.template, data, f.mode, f.private); err != nil {
 			return err
+		}
+	}
+	// The container reads click-dog.yaml as the image's own user, not the
+	// owner, so it must be 0644 whatever the umask or a previous file left.
+	// A symlink is the operator's own arrangement: its target is left alone.
+	cfgPath := filepath.Join(opts.OutDir, "click-dog.yaml")
+	if info, err := os.Lstat(cfgPath); err == nil && info.Mode().IsRegular() {
+		if err := os.Chmod(cfgPath, 0644); err != nil {
+			return fmt.Errorf("setting click-dog.yaml mode: %w", err)
 		}
 	}
 
@@ -282,6 +348,9 @@ func deployDocker(opts deployGenerateOptions, out, errOut io.Writer) error {
 func prepareInitialDeployOptions(opts *deployGenerateOptions, out, errOut io.Writer) error {
 	if strings.TrimSpace(opts.CollectorAddress) == "" {
 		return errors.New("-c collector address is required")
+	}
+	if err := requireDeployOTELTransport(*opts); err != nil {
+		return err
 	}
 	if strings.TrimSpace(opts.OutDir) == "" {
 		return errors.New("--out-dir cannot be empty")
@@ -336,6 +405,17 @@ func requireDeployUpdateVersion(version, mode string) (string, error) {
 		return "", err
 	}
 	return cleaned, nil
+}
+
+// rejectOTELSecureOnUpdate refuses --otel-secure with --update. The update
+// path only bumps the image tag and never rewrites the config, so accepting
+// the flag would leave the old transport while looking like the asked-for
+// one was applied.
+func rejectOTELSecureOnUpdate(opts deployGenerateOptions, configFile string) error {
+	if opts.OTELSecure == nil {
+		return nil
+	}
+	return fmt.Errorf("--otel-secure applies when generating, not with --update (which only bumps the image tag); set secure under exporters.otel in %s", configFile)
 }
 
 // isLegacyDaemonSetOutDir reports whether an output dir was generated before

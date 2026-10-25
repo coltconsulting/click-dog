@@ -6,10 +6,10 @@
 # per cycle.
 
 clickhouse:
-  host: ch.example.com
+  host: localhost              # one Click-Dog per ClickHouse node, reading its local span log
   port: 9000
   database: system
-  username: default
+  username: click_dog_monitor  # read-only monitoring user (SELECT on the span and query logs)
   password: ${CLICKHOUSE_PASSWORD}
   query_timeout_s: 5
   max_open_conns: 1           # serialize CH queries; max read-side protection
@@ -23,6 +23,7 @@ exporters:
   otel:
     - collector_address: otel.example.com:4317
       service_name: click-dog-monitor
+      secure: true
 
 monitor:
   enabled: true

@@ -71,3 +71,7 @@ ai/extended-context/
 # stale copy of the released installer at the root; ignore the path so a
 # downloaded `install.sh` cannot be committed over it again.
 /install.sh
+
+# Python bytecode from the MkDocs hook under docs/hooks/
+__pycache__/
+*.pyc

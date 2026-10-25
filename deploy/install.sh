@@ -36,8 +36,8 @@
 #   -o DIR           Output directory (kubernetes/docker modes)
 #   --ch-host HOST   ClickHouse Service DNS for kubernetes (required; e.g.
 #                    clickhouse.clickhouse.svc.cluster.local — not localhost)
-#   --cluster NAME   ClickHouse cluster name for kubernetes; enables cluster()
-#                    reads across all shards
+#   --cluster NAME   ClickHouse cluster name for kubernetes; runs the
+#                    Deployment in cluster mode (one replica per shard)
 #   --prerelease     When -v is unset, resolve the newest PUBLIC pre-release
 #                    (alpha/beta) instead of the latest GA release. When no GA
 #                    is published at all, the default channel falls back to the
@@ -45,6 +45,33 @@
 #   --dangerously-ignore-cosign
 #                    Deliberately skip cosign even when it is installed. The
 #                    archive SHA-256 is still required and verified.
+#   --otel-secure[=true|false]
+#                    OTLP transport to the receiver at -c: =true for TLS,
+#                    verified against the host's system trust store; =false
+#                    for plaintext. Bare --otel-secure means =true; the value
+#                    takes '=' (never a separate word). Unset, the choice is
+#                    automatic: plaintext only for a loopback collector
+#                    (localhost, 127.0.0.0/8, ::1, unix:), TLS otherwise, as
+#                    the click-dog being installed decides it
+#                    (`click-dog init --print-otel-secure`). Whenever the
+#                    result is TLS, install, docker and the guided quick start
+#                    check the handshake first with that click-dog (`click-dog
+#                    test tls`; docker runs the image with --network host) and
+#                    stop on a mismatch; the guided quick start asks, with the
+#                    automatic choice as its default. kubernetes passes the
+#                    value to the generator, which refuses a collector off
+#                    loopback without one (on a terminal, install.sh asks
+#                    instead), and checks nothing: -c resolves inside the
+#                    cluster. Not for -f; for mTLS, set client_cert /
+#                    client_key in your own YAML (install -f).
+#   --otel-ca-cert FILE
+#                    Verify the OTLP receiver against this PEM CA (the
+#                    collector's own certificate when self-signed) instead of
+#                    the system store. Implies TLS, so it cannot combine with
+#                    --otel-secure=false; installed as
+#                    /etc/click-dog/tls/ca.pem and checked by handshake first.
+#                    install and the guided quick start only. Unattended
+#                    installs never trust a certificate on first use.
 #   --systemd        Create + enable systemd unit (install only)
 #   --yes            Skip confirmation for uninstall automation only
 #   -h               Show this help
@@ -86,6 +113,27 @@ CLICKHOUSE_HOST=""
 CLICKHOUSE_CLUSTER=""
 BINARY=""
 COLLECTOR_ADDRESS=""
+# The operator's explicit OTLP transport: "true" or "false" from
+# --otel-secure[=true|false], or a guided answer that differs from the
+# default. Empty means automatic, and nothing is passed to `click-dog init`,
+# which then renders by the loopback rule. --otel-ca-cert does not set it: the
+# CA implies TLS on its own, and keeping the two apart is what lets an
+# explicit false be refused with a CA in either order.
+OTEL_SECURE=""
+# The transport this run's inputs give, "true" (TLS) or "false", as the
+# click-dog being installed reports it (resolve_otel_transport). It gates the
+# handshake check and is never passed on.
+OTEL_USES_TLS=""
+# For docker, the image that decides and checks the transport in place of a
+# host binary (see run_click_dog).
+CLICK_DOG_RUN_IMAGE=""
+# The collector CA the rendered config names (exporters.otel[].ca_cert): an
+# operator's --otel-ca-cert FILE, or the certificate pinned on first use in
+# the guided install, copied to OTEL_CA_CERT_PATH for the runtime user. The
+# Ansible playbook uses the same path. OTEL_CA_PIN_TMP is set only for a pin.
+OTEL_CA_CERT=""
+OTEL_CA_CERT_PATH="/etc/click-dog/tls/ca.pem"
+OTEL_CA_PIN_TMP=""
 CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-}"
 KEEPER_HOSTS=""
 CONFIG_FROM_FILE=""
@@ -102,7 +150,7 @@ OUTPUT_DIR=""
 CLICKHOUSE_TLS="true"
 # CLICKHOUSE_PORT is left unset by default so the rendered config gets
 # `click-dog init`'s built-in port defaulting (9000 plaintext, 9440 with
-# -ch-secure when no -ch-port was given). Quickstart probes localhost and
+# --ch-secure when no --ch-port was given). Quickstart probes localhost and
 # pins this to the detected port so the rendered config matches the
 # endpoint that was actually checked — see "Detect ClickHouse TLS" below.
 CLICKHOUSE_PORT=""
@@ -171,6 +219,66 @@ while [[ $# -gt 0 ]]; do
         --cluster)  CLICKHOUSE_CLUSTER="${2:-}"; shift ;;
         --prerelease) PRERELEASE="true" ;;
         --dangerously-ignore-cosign) DANGEROUSLY_IGNORE_COSIGN="true" ;;
+        --otel-secure|--otel-secure=*)
+            # Only the paths that render a config can carry it: `click-dog
+            # init` for quickstart/install/docker, `click-dog deploy
+            # kubernetes` for kubernetes. Elsewhere it would be silently
+            # dropped.
+            case "${COMMAND}${SUBCOMMAND:+ $SUBCOMMAND}" in
+                quickstart|install|docker|kubernetes) ;;
+                *)
+                    echo "Error: --otel-secure is only valid with install, docker, kubernetes, or the guided quick start" >&2
+                    exit 1
+                    ;;
+            esac
+            case "$1" in
+                --otel-secure)
+                    # Go's flag package reads `--otel-secure false` as true
+                    # plus a stray word; refuse the spelling here too.
+                    case "${2:-}" in
+                        [tT][rR][uU][eE]|[fF][aA][lL][sS][eE])
+                            echo "Error: --otel-secure takes its value with '=': write --otel-secure=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')" >&2
+                            echo "       (--otel-secure followed by a separate word is not accepted)" >&2
+                            exit 1
+                            ;;
+                    esac
+                    OTEL_SECURE="true"
+                    ;;
+                --otel-secure=true)  OTEL_SECURE="true" ;;
+                --otel-secure=false) OTEL_SECURE="false" ;;
+                *)
+                    echo "Error: ${1}: use --otel-secure=true or --otel-secure=false" >&2
+                    exit 1
+                    ;;
+            esac
+            ;;
+        --otel-ca-cert)
+            case "${COMMAND}${SUBCOMMAND:+ $SUBCOMMAND}" in
+                quickstart|install) ;;
+                docker)
+                    echo "Error: --otel-ca-cert is not supported for docker: the generated compose file" >&2
+                    echo "       mounts only click-dog.yaml, so the CA would not be visible in the" >&2
+                    echo "       container. Mount it yourself and set exporters.otel[].ca_cert." >&2
+                    exit 1
+                    ;;
+                kubernetes)
+                    echo "Error: --otel-ca-cert is not supported for kubernetes. Put the CA in the" >&2
+                    echo "       click-dog-otel-ca ConfigMap the generated Deployment mounts, then set" >&2
+                    echo "       ca_cert: /etc/click-dog/tls/ca.pem in configmap.yaml." >&2
+                    exit 1
+                    ;;
+                *)
+                    echo "Error: --otel-ca-cert is only valid with install or the guided quick start" >&2
+                    exit 1
+                    ;;
+            esac
+            if [[ -z "${2:-}" || "${2:-}" == -* ]]; then
+                echo "Error: --otel-ca-cert needs a FILE" >&2
+                exit 1
+            fi
+            OTEL_CA_CERT="$2"
+            shift
+            ;;
         *)          ARGS+=("$1") ;;
     esac
     shift
@@ -197,6 +305,26 @@ while getopts "c:u:k:b:x:v:o:C:f:h" opt; do
         *) usage ;;
     esac
 done
+shift $((OPTIND - 1))
+# getopts stops at the first word that is not an option, and every option
+# after it would be dropped without a word: refuse the run instead.
+if [[ $# -gt 0 ]]; then
+    case "$1" in
+        [tT][rR][uU][eE]|[fF][aA][lL][sS][eE])
+            echo "Error: unexpected argument '$1'. Boolean options take their value with '=', e.g. --otel-secure=false" >&2
+            ;;
+        *)
+            echo "Error: unexpected argument '$1'" >&2
+            ;;
+    esac
+    exit 1
+fi
+# A CA implies TLS. Checked once every option is read, so the order the two
+# were given in does not matter.
+if [[ "$OTEL_SECURE" == "false" && -n "$OTEL_CA_CERT" ]]; then
+    echo "Error: --otel-ca-cert implies TLS, so it cannot combine with --otel-secure=false" >&2
+    exit 1
+fi
 
 # ── Template rendering ─────────────────────────────────────────
 # Used by kubernetes and docker generators. These commands require running
@@ -289,10 +417,26 @@ resolve_target_arch() {
 # `$1` is the output path. The binary must already be available at
 # `$BINARY` (resolved by resolve_binary in each caller). Flags are built
 # conditionally because Go's flag package rejects the empty-bool form
-# `-ch-secure=`; concat-via-array lets us add or omit each flag cleanly.
+# `--ch-secure=`; concat-via-array lets us add or omit each flag cleanly.
+
+# help_lists_flag FLAG CMD... — run CMD (a -h invocation) and succeed when its
+# help names FLAG. Capture-then-grep (rather than `CMD | grep -q`) because the
+# pipeline form races under `set -euo pipefail`: grep -q exits 0 after the
+# first match, leaving the producer to SIGPIPE on subsequent writes; pipefail
+# then promotes the pipeline status to nonzero, the `if !` negates true, and
+# we falsely refuse a perfectly-good binary. Buffering via $() removes the
+# pipe entirely. "-FLAG" is a substring match on purpose: early releases print
+# `-flag` in their help, current ones `--flag`; both must pass.
+help_lists_flag() {
+    local flag="$1" help_out
+    shift
+    help_out="$("$@" 2>&1)" || true
+    grep -q -- "-$flag" <<<"$help_out"
+}
+
 # Refuse a target binary that predates this install.sh's renderer
-# unification. Pre-unified click-dog releases don't know `-ch-user` /
-# `-ch-secure` / `-ha-keeper` and exit from Go's flag parser before
+# unification. Pre-unified click-dog releases don't know `--ch-user` /
+# `--ch-secure` / `--ha-keeper` and exit from Go's flag parser before
 # writing a config — the worst possible failure mode (no diagnostic,
 # half-finished install state). Detect by probing `init -h` for one of
 # the new flags and fail-fast with a clear pointer to the version skew.
@@ -300,15 +444,7 @@ resolve_target_arch() {
 # Hand-installs at an older `-v` are still possible: the user just needs
 # to check out a matching older install.sh from the tag they're pinning.
 require_unified_init_binary() {
-    # Capture-then-grep (rather than `$BINARY init -h | grep -q`) because the
-    # pipeline form races under `set -euo pipefail`: grep -q exits 0 after
-    # the first match, leaving the producer to SIGPIPE on subsequent writes;
-    # pipefail then promotes the pipeline status to nonzero, the `if !`
-    # negates true, and we falsely refuse a perfectly-good binary. Buffering
-    # via $() removes the pipe entirely.
-    local help_out
-    help_out="$("$BINARY" init -h 2>&1)" || true
-    if ! grep -q -- "-ch-user" <<<"$help_out"; then
+    if ! help_lists_flag ch-user "$BINARY" init -h; then
         cat >&2 <<EOF
 Error: the selected click-dog binary predates this install.sh's
        unified config renderer (introduced in v26.06).
@@ -322,25 +458,40 @@ EOF
     fi
 }
 
-# Same skew check for the docker-mode path: the rendered config is
-# produced by `click-dog init` inside the image, so the image must know
-# the unified flags. This adds a `docker pull` + brief `docker run`
-# before the real rendering, but the image is cached for the subsequent
-# `compose up` so the wall-clock cost is one image pull total.
-require_unified_init_docker_image() {
-    # Same capture-then-grep pattern as require_unified_init_binary —
-    # see commentary there for why piping into grep -q races under
-    # `set -euo pipefail`.
-    local help_out
-    help_out="$(docker run --rm "ghcr.io/coltconsulting/click-dog:${VERSION}" init -h 2>&1)" || true
-    if ! grep -q -- "-ch-user" <<<"$help_out"; then
+# require_init_flag NAME — the same skew guard for an init flag added after
+# unification: a release that lacks it would fail in Go's flag parser midway
+# through the install. Run only when the flag is about to be passed.
+require_init_flag() {
+    if ! help_lists_flag "$1" "$BINARY" init -h; then
         cat >&2 <<EOF
-Error: ghcr.io/coltconsulting/click-dog:${VERSION} predates this
-       install.sh's unified config renderer (introduced in v26.06).
+Error: the selected click-dog binary predates 'click-dog init --$1'.
 
   Either:
-    - omit -v to use the latest image, or
-    - check out an install.sh that matches the target version:
+    - omit -v to install the latest release, or
+    - install without it and set the matching key by hand afterwards.
+EOF
+        exit 1
+    fi
+}
+
+# require_otel_transport_image — the skew guard for the image `install.sh
+# docker` and `install.sh kubernetes` run. Both ask the image for the OTLP
+# transport (`init --print-otel-secure`) and pass `--otel-secure=true|false`
+# to it; only images whose init lists --print-otel-secure accept those
+# values, and every such image also carries the unified renderer. An older
+# image would stop in Go's flag parser, or read `--otel-secure=false` the old
+# way, instead of generating files. Run before anything else uses the image.
+require_otel_transport_image() {
+    if ! help_lists_flag print-otel-secure docker run --rm "ghcr.io/coltconsulting/click-dog:${VERSION}" init -h; then
+        cat >&2 <<EOF
+Error: ghcr.io/coltconsulting/click-dog:${VERSION} predates
+       'click-dog init --print-otel-secure', which this install.sh uses to
+       choose the OTLP transport.
+
+  Either:
+    - omit -v to use the latest release:
+        https://github.com/coltconsulting/click-dog/releases/latest
+    - or check out an install.sh that matches the target version:
         git checkout v${VERSION} -- deploy/install.sh
 EOF
         exit 1
@@ -349,24 +500,86 @@ EOF
 
 # SECRET_FILE is the path click-dog reads the ClickHouse password from. The
 # config carries `clickhouse.password_file: $SECRET_FILE` (rendered via
-# `init -ch-password-file`), so the secret stays in this 0600 file and never
+# `init --ch-password-file`), so the secret stays in this 0600 file and never
 # enters the service environment — the systemd unit needs no EnvironmentFile.
 SECRET_FILE=/etc/click-dog/.secret
 
 render_click_dog_config() {
     local out_path="$1"
     local args=(
-        -collector "$COLLECTOR_ADDRESS"
-        -service click-dog-monitor
-        -ch-user "$CLICKHOUSE_USER"
-        -ch-password-file "$SECRET_FILE"
+        --collector "$COLLECTOR_ADDRESS"
+        --service click-dog-monitor
+        --ch-user "$CLICKHOUSE_USER"
+        --ch-password-file "$SECRET_FILE"
         -o "$out_path"
         --force
     )
-    [[ "$CLICKHOUSE_TLS" == "true" ]]     && args+=( -ch-secure )
-    [[ -n "${CLICKHOUSE_PORT:-}" ]]       && args+=( -ch-port "$CLICKHOUSE_PORT" )
-    [[ -n "$KEEPER_HOSTS" ]]              && args+=( -ha-keeper "$KEEPER_HOSTS" )
+    [[ "$CLICKHOUSE_TLS" == "true" ]]     && args+=( --ch-secure )
+    [[ -n "${CLICKHOUSE_PORT:-}" ]]       && args+=( --ch-port "$CLICKHOUSE_PORT" )
+    # Only an explicit choice: unset leaves init to apply the loopback rule.
+    [[ -n "$OTEL_SECURE" ]]               && args+=( "--otel-secure=$OTEL_SECURE" )
+    [[ -n "$OTEL_CA_CERT" ]]              && args+=( --otel-ca-cert "$OTEL_CA_CERT_PATH" )
+    [[ -n "$KEEPER_HOSTS" ]]              && args+=( --ha-keeper "$KEEPER_HOSTS" )
     "$BINARY" init "${args[@]}"
+}
+
+# The Docker daemon's security options, read once per run by
+# docker_security_options: the mount helper adapts to rootless, userns-remap
+# and SELinux daemons.
+DOCKER_SECURITY=""
+DOCKER_SECURITY_PROBED=""
+
+docker_security_options() {
+    if [[ -z "$DOCKER_SECURITY_PROBED" ]]; then
+        DOCKER_SECURITY=$(docker info --format '{{.SecurityOptions}}' 2>/dev/null) || DOCKER_SECURITY=""
+        DOCKER_SECURITY_PROBED="true"
+    fi
+}
+
+# docker_run_mounted read|write ARGS... — `docker run --rm` for a call that
+# bind-mounts a host path, with what this daemon needs for the container to
+# use it. Docker Engine on Linux keeps host ownership on a bind mount; Docker
+# Desktop maps it, which hid all of this.
+#
+# write: the image's own user can neither create files in the 0755 directory
+# `mkdir -p` just made nor replace the invoker's files, so run as the invoker,
+# supplementary groups included. The generated files are then theirs, and a
+# 0600 secret.yaml stays readable to the kubectl that applies it. Rootless
+# Docker maps the invoker to root in the container and their own uid to a
+# subordinate one, so there it runs as 0:0. userns-remap maps every container
+# uid to a subordinate one, so it also leaves the user namespace.
+#
+# read: keep the image's own user, because that is who reads the file at run
+# time, and mount just the file so the directory it sits in does not matter.
+#
+# An SELinux daemon confines the container away from the user's files. Lift
+# that for this one container instead of relabeling (`:z`) a directory that
+# `-o` may have pointed at $HOME.
+docker_run_mounted() {
+    local access="$1" gid primary
+    local -a opts=()
+    shift
+    docker_security_options
+    if [[ "$DOCKER_SECURITY" == *name=selinux* ]]; then
+        opts+=(--security-opt label=disable)
+    fi
+    if [[ "$access" == "write" ]]; then
+        if [[ "$DOCKER_SECURITY" == *name=rootless* ]]; then
+            opts+=(--user 0:0)
+        else
+            primary=$(id -g)
+            opts+=(--user "$(id -u):${primary}")
+            for gid in $(id -G); do
+                if [[ "$gid" != "$primary" ]]; then
+                    opts+=(--group-add "$gid")
+                fi
+            done
+            if [[ "$DOCKER_SECURITY" == *name=userns* ]]; then
+                opts+=(--userns=host)
+            fi
+        fi
+    fi
+    docker run --rm ${opts[@]+"${opts[@]}"} "$@"
 }
 
 # Docker-mode equivalent of render_click_dog_config. The install/quickstart
@@ -382,36 +595,68 @@ render_click_dog_config_via_docker() {
     out_dir=$(cd "$(dirname "$out_path")" && pwd)
     out_file=$(basename "$out_path")
     local args=(
-        -collector "$COLLECTOR_ADDRESS"
-        -service click-dog-monitor
-        -ch-user "$CLICKHOUSE_USER"
+        --collector "$COLLECTOR_ADDRESS"
+        --service click-dog-monitor
+        --ch-user "$CLICKHOUSE_USER"
         -o "/work/${out_file}"
         --force
     )
-    [[ "$CLICKHOUSE_TLS" == "true" ]]     && args+=( -ch-secure )
-    [[ -n "${CLICKHOUSE_PORT:-}" ]]       && args+=( -ch-port "$CLICKHOUSE_PORT" )
-    [[ -n "$KEEPER_HOSTS" ]]              && args+=( -ha-keeper "$KEEPER_HOSTS" )
-    docker run --rm \
+    [[ "$CLICKHOUSE_TLS" == "true" ]]     && args+=( --ch-secure )
+    [[ -n "${CLICKHOUSE_PORT:-}" ]]       && args+=( --ch-port "$CLICKHOUSE_PORT" )
+    # Only an explicit choice: unset leaves init to apply the loopback rule.
+    [[ -n "$OTEL_SECURE" ]]               && args+=( "--otel-secure=$OTEL_SECURE" )
+    [[ -n "$KEEPER_HOSTS" ]]              && args+=( --ha-keeper "$KEEPER_HOSTS" )
+    docker_run_mounted write \
         -v "${out_dir}:/work" \
         "ghcr.io/coltconsulting/click-dog:${VERSION}" \
         init "${args[@]}"
 }
 
 # Validate an existing on-disk click-dog.yaml against the target image,
-# mirroring do_update's pre-swap validation (the `-validate` block above
+# mirroring do_update's pre-swap validation (the `--validate` block above
 # the local binary mv). Run as a pre-flight before the k8s/docker update
 # paths rewrite any deployment file, so we never leave a manifest pointing
-# at an image the config can't start under. Mounts read-only; the image
-# entrypoint is `click-dog`, so `-validate -config` is passed directly.
+# at an image the config can't start under. Mounts the file read-only where
+# docker-compose.yml mounts it, as the image's own user, so a config the
+# service could not read fails here too. The image entrypoint is
+# `click-dog`, so `--validate --config` is passed directly.
+#
+# Validation reads every TLS file a secure connection names, but those files
+# live where the deployment mounts them (a Kubernetes Secret or ConfigMap, a
+# compose volume), not in this container. Each absolute ca_cert, client_cert,
+# and client_key path gets an empty, readable stand-in, so the check is about
+# the config and the image, as it is for a config without TLS files. Whether
+# the real files exist stays the deployment's job: click-dog refuses to start
+# without them.
 validate_config_via_docker() {
     local cfg_path="$1"
-    local cfg_dir cfg_file
+    local cfg_dir cfg_file stub="" path rc=0
+    local tls_mounts=()
     cfg_dir=$(cd "$(dirname "$cfg_path")" && pwd)
     cfg_file=$(basename "$cfg_path")
-    docker run --rm \
-        -v "${cfg_dir}:/work:ro" \
+    while IFS= read -r path; do
+        if [[ -z "$stub" ]]; then
+            # Beside the config, which the daemon can already mount: a
+            # VM-backed Docker (Colima, Rancher Desktop) may not share TMPDIR.
+            stub=$(mktemp "${cfg_dir}/.click-dog-tls-stub.XXXXXX") || return 1
+            chmod 644 "$stub"
+        fi
+        tls_mounts+=( -v "${stub}:${path}:ro" )
+    done < <(config_tls_file_paths "$cfg_path")
+    docker_run_mounted read \
+        -v "${cfg_dir}/${cfg_file}:/etc/click-dog/click-dog.yaml:ro" \
+        ${tls_mounts[@]+"${tls_mounts[@]}"} \
         "ghcr.io/coltconsulting/click-dog:${VERSION}" \
-        -validate -config "/work/${cfg_file}"
+        --validate --config /etc/click-dog/click-dog.yaml || rc=$?
+    [[ -n "$stub" ]] && rm -f "$stub"
+    return "$rc"
+}
+
+# config_tls_file_paths FILE — the absolute paths FILE names as ca_cert,
+# client_cert, or client_key, once each. Commented-out keys, relative paths,
+# and ${VAR} values are left out: validation reports those as it finds them.
+config_tls_file_paths() {
+    sed -n -E "s/^[[:space:]]*(- )?(ca_cert|client_cert|client_key):[[:space:]]*[\"']?(\/[^\"'#[:space:]]*)[\"']?[[:space:]]*(#.*)?$/\3/p" "$1" | sort -u
 }
 
 # Pre-flight wrapper shared by the k8s/docker update paths. Validation needs
@@ -432,6 +677,8 @@ preflight_validate_config() {
         echo "ERROR: existing config does not validate against image v${VERSION}" >&2
         validate_config_via_docker "$cfg_path" >&2 || true
         echo "Re-render via '${regen_hint}' or fix the config, then re-run update." >&2
+        echo "  'permission denied' means the image's own user cannot read the file, so" >&2
+        echo "  the service could not either: make it mode 0644 (it holds no password)." >&2
         return 1
     fi
 }
@@ -451,7 +698,717 @@ extract_configmap_yaml() {
     ' "$configmap"
 }
 
+# ── OTLP receiver TLS ──────────────────────────────────────────
+# `secure: true` makes click-dog dial the receiver over TLS, verified against
+# the host's system trust roots, or against `ca_cert` alone when one is set
+# (Go's RootCAs: the system store is then not consulted). The transport for
+# an address and flags is never decided here: the click-dog being installed
+# reports it (`click-dog init --print-otel-secure`, see
+# resolve_otel_transport). These helpers ask it, offer it as the guided
+# default, and prove a TLS choice with one handshake before anything is
+# installed. The handshake is made by the click-dog binary being installed
+# (`click-dog test tls`), with the exporter's own TLS code, so its verdict is
+# the one export will reach: the chain against those roots, the validity
+# dates, a subjectAltName naming the dialed host (never the Common Name), and
+# ALPN h2. A self-signed or private-CA collector can be pinned on first use in
+# the guided install; unattended installs take --otel-ca-cert instead and
+# never trust on first use. mTLS stays out of the installer.
+OTEL_TLS_DOCS="https://click-dog.com/integrations/generic-otlp/#tls-configuration"
+OTEL_SELF_SIGNED_DOCS="https://click-dog.com/integrations/generic-otlp/#self-signed-collector"
+
+# Split COLLECTOR_ADDRESS as gRPC targets are written: [v6]:port for an IPv6
+# literal, otherwise host before the first colon and port after the last;
+# 443 when there is no port, as grpc's dns resolver defaults it, so the port
+# checked is the one export dials. The host comes back without brackets, the
+# form bash's /dev/tcp takes.
+otel_collector_host() {
+    if [[ "$COLLECTOR_ADDRESS" == \[*\]* ]]; then
+        local host="${COLLECTOR_ADDRESS#\[}"
+        echo "${host%%\]*}"
+        return
+    fi
+    echo "${COLLECTOR_ADDRESS%%:*}"
+}
+otel_collector_port() {
+    local port
+    if [[ "$COLLECTOR_ADDRESS" == \[*\]* ]]; then
+        port="${COLLECTOR_ADDRESS#*\]}"
+        port="${port#:}"
+        echo "${port:-443}"
+        return
+    fi
+    port="${COLLECTOR_ADDRESS##*:}"
+    [[ "$port" == "$COLLECTOR_ADDRESS" ]] && port="443"
+    echo "$port"
+}
+
+is_ipv6() { [[ "$1" == *:* && "$1" =~ ^[0-9A-Fa-f:]+$ ]]; }
+
+# otel_hostport HOST PORT — HOST:PORT, with an IPv6 literal bracketed as gRPC
+# addresses and every message expect.
+otel_hostport() {
+    if is_ipv6 "$1"; then
+        echo "[$1]:$2"
+    else
+        echo "$1:$2"
+    fi
+}
+
+# run_click_dog ARGS... — the click-dog that decides and checks the OTLP
+# transport: the resolved binary, or for docker the image it deploys
+# (CLICK_DOG_RUN_IMAGE), run with the host network. That shares the network
+# namespace the generated Compose service uses, including on Docker Desktop,
+# where no host binary runs and the host network is the Docker VM's.
+run_click_dog() {
+    if [[ -n "$CLICK_DOG_RUN_IMAGE" ]]; then
+        docker run --rm --network host "$CLICK_DOG_RUN_IMAGE" "$@"
+    else
+        "$BINARY" "$@"
+    fi
+}
+
+# otel_print_secure_args — the `click-dog init --print-otel-secure` argv for
+# this run's inputs, in OTEL_PRINT_SECURE_ARGS: the collector, plus
+# --otel-secure and --otel-ca-cert only when given.
+otel_print_secure_args() {
+    OTEL_PRINT_SECURE_ARGS=( init --print-otel-secure --collector "$COLLECTOR_ADDRESS" )
+    [[ -n "$OTEL_SECURE" ]] && OTEL_PRINT_SECURE_ARGS+=( "--otel-secure=$OTEL_SECURE" )
+    [[ -n "$OTEL_CA_CERT" ]] && OTEL_PRINT_SECURE_ARGS+=( --otel-ca-cert "$OTEL_CA_CERT" )
+    return 0
+}
+
+# resolve_otel_transport — set OTEL_USES_TLS to the transport the click-dog
+# being installed gives this run's inputs. The installer keeps no copy of the
+# loopback rule: the binary (or image) that will export decides, so the
+# installer and the exporter cannot disagree. Returns 1, having said why,
+# when that click-dog gives no answer (an older release, or one that cannot
+# run here).
+resolve_otel_transport() {
+    local out
+    otel_print_secure_args
+    out=$(run_click_dog "${OTEL_PRINT_SECURE_ARGS[@]}" 2>/dev/null) || true
+    case "$out" in
+        true|false)
+            OTEL_USES_TLS="$out"
+            return 0
+            ;;
+    esac
+    echo "Error: could not get the OTLP transport for ${COLLECTOR_ADDRESS} from" >&2
+    echo "       'click-dog init --print-otel-secure'. Releases before it cannot be" >&2
+    echo "       installed by this install.sh: omit -v for the latest release" >&2
+    echo "       (https://github.com/coltconsulting/click-dog/releases/latest)." >&2
+    run_click_dog "${OTEL_PRINT_SECURE_ARGS[@]}" 2>&1 | sed 's/^/  /' >&2 || true
+    return 1
+}
+
+# otel_transport_label — the transport for status lines: TLS or plaintext,
+# and whether it was chosen or followed the automatic rule.
+otel_transport_label() {
+    local transport="plaintext" source="automatic"
+    [[ "$OTEL_USES_TLS" == "true" ]] && transport="TLS"
+    if [[ -n "$OTEL_CA_CERT" ]]; then
+        source="CA ${OTEL_CA_CERT}"
+    elif [[ -n "$OTEL_SECURE" ]]; then
+        source="--otel-secure=${OTEL_SECURE}"
+    fi
+    echo "${transport}, ${source}"
+}
+
+# validate_otel_ca_file FILE — reject what cannot be a collector CA before it
+# reaches the config: a missing file, a private key (the usual copy mistake),
+# DER or other non-PEM content, or PEM with no certificate in it.
+validate_otel_ca_file() {
+    local f="$1"
+    if [[ ! -f "$f" || ! -r "$f" ]]; then
+        echo "Error: --otel-ca-cert file not found or not readable: $f" >&2
+        return 1
+    fi
+    if grep -q -- 'PRIVATE KEY-----' "$f"; then
+        echo "Error: $f contains a PRIVATE KEY block. --otel-ca-cert takes the collector's" >&2
+        echo "       CA certificate (its own certificate when self-signed), never a key." >&2
+        return 1
+    fi
+    if ! grep -q -- '-----BEGIN ' "$f"; then
+        echo "Error: $f is not PEM. If it is DER, convert it first:" >&2
+        echo "       openssl x509 -inform der -in $f -out ca.pem" >&2
+        return 1
+    fi
+    if ! grep -q -- '-----BEGIN CERTIFICATE-----' "$f"; then
+        echo "Error: $f contains no certificate (no BEGIN CERTIFICATE block)." >&2
+        return 1
+    fi
+    if command -v openssl >/dev/null 2>&1 && ! openssl x509 -noout -in "$f" >/dev/null 2>&1; then
+        echo "Error: the first certificate in $f does not parse." >&2
+        return 1
+    fi
+}
+
+# otel_json_field NAME — the top-level string field NAME of the `click-dog
+# test tls --json` object on stdin. click-dog writes one top-level field per
+# line at a two-space indent and keeps verdict and message to one line with
+# no quotes or backslashes (TestRunTestTLS_JSONLinesInstallShReads pins
+# both), so no JSON parser is needed.
+otel_json_field() {
+    sed -n 's/^  "'"$1"'": "\([^"\\]*\)",\{0,1\}$/\1/p'
+}
+
+# otel_collector_has_scheme — COLLECTOR_ADDRESS is a gRPC target with a
+# scheme (dns:, passthrough:, unix:, unix-abstract:, or any scheme://), not
+# the host:port the installer's checks split it into.
+otel_collector_has_scheme() {
+    [[ "$COLLECTOR_ADDRESS" == *://* || "$COLLECTOR_ADDRESS" =~ ^(dns|passthrough|unix|unix-abstract): ]]
+}
+
+# probe_otel_tls HOST PORT [CAFILE [CHAIN]] — one handshake made by the
+# click-dog binary's own exporter TLS code (`click-dog test tls`). Prints
+# three fields: a verdict, its reason code ("-" when it has none), and a
+# detail for people. Callers decide on the verdict and reason only; the
+# detail is click-dog's wording, shown as is.
+#   ok           TLS, certificate trusted and named for HOST, ALPN h2
+#   plaintext    non-tls: the receiver answered in another protocol; closed:
+#                it closed without a word, as a plaintext port does, and as
+#                a TLS proxy that serves no certificate for HOST (SNI) does
+#   no-san       TLS, but the certificate has no subjectAltName at all
+#   untrusted    hostname-mismatch, expired, not-yet-valid,
+#                unknown-authority, or invalid
+#   client-cert  the receiver refused the handshake for want of a client
+#                certificate (mTLS)
+#   no-alpn      TLS, but the receiver does not select HTTP/2 (ALPN h2),
+#                which the gRPC exporter requires
+#   config       click-dog could not build the exporter's TLS settings (a
+#                CA file it cannot parse, an address it refuses); the
+#                exporter would fail at startup on the same input, so this
+#                is a failure, never a skipped check
+#   unknown      unreachable, timeout, handshake-ended (a TLS alert before
+#                any certificate), other, or binary (this click-dog cannot
+#                run here or gave no verdict); callers fall back to
+#                reachability only
+# With CAFILE, only that file is trusted, as for exporters.otel[].ca_cert.
+# With CHAIN, the certificates the receiver sent are written there, leaf
+# first, as PEM under "# Label: value" lines.
+probe_otel_tls() {
+    local host="$1" port="$2" ca="${3:-}" chain="${4:-}" out verdict reason message
+    # HOST and PORT come from splitting COLLECTOR_ADDRESS at its first colon,
+    # which is wrong for a gRPC target with a scheme; the exporter accepts
+    # those, so a check aimed at the wrong place must not become a failure.
+    if otel_collector_has_scheme; then
+        echo "unknown target the installer checks host:port collector addresses only; 'click-dog check' tests ${COLLECTOR_ADDRESS} after install"
+        return 0
+    fi
+    local args=( test tls --collector "$(otel_hostport "$host" "$port")" --json )
+    [[ -n "$ca" ]] && args+=( --ca-cert "$ca" )
+    [[ -n "$chain" ]] && args+=( --chain-out "$chain" )
+    # Exit 1 is any verdict but ok; the JSON names it.
+    out=$(run_click_dog "${args[@]}" 2>/dev/null) || true
+    verdict=$(otel_json_field verdict <<<"$out")
+    if [[ -z "$verdict" ]]; then
+        # No verdict is never a guess: say why the check could not run.
+        if ! run_click_dog --version >/dev/null 2>&1; then
+            if [[ -n "$CLICK_DOG_RUN_IMAGE" ]]; then
+                echo "unknown binary docker could not run ${CLICK_DOG_RUN_IMAGE} with the host network"
+            else
+                echo "unknown binary the click-dog binary cannot run on this host"
+            fi
+        elif [[ "$(run_click_dog test help 2>&1 || true)" != *"  tls  "* ]]; then
+            echo "unknown binary this click-dog release predates 'click-dog test tls'"
+        else
+            echo "unknown binary 'click-dog test tls' gave no verdict"
+        fi
+        return 0
+    fi
+    reason=$(otel_json_field reason <<<"$out")
+    message=$(otel_json_field message <<<"$out")
+    # click-dog reports these as unknown, since nothing was dialed, but they
+    # are not inconclusive: export would fail the same way.
+    if [[ "$verdict:$reason" == "unknown:config" ]]; then
+        verdict="config"
+    fi
+    echo "${verdict} ${reason:--}${message:+ $message}"
+}
+
+# otel_chain_block first|last — the first or last certificate of a
+# `click-dog test tls --chain-out` file on stdin (the leaf, or the top-most
+# certificate the receiver sent), with the "# Label: value" lines above it.
+otel_chain_block() {
+    awk -v want="$1" '
+        /^-----BEGIN CERTIFICATE-----/ { inb = 1 }
+        inb || /^# / { cur = cur $0 "\n" }
+        /^-----END CERTIFICATE-----/ && inb { inb = 0; last = cur; if (first == "") first = cur; cur = "" }
+        END { printf "%s", (want == "first" ? first : last) }
+    '
+}
+
+# otel_cert_pem — the PEM certificate alone from a chain block on stdin.
+otel_cert_pem() {
+    sed -n '/^-----BEGIN CERTIFICATE-----/,/^-----END CERTIFICATE-----/p'
+}
+
+# otel_cert_label LABEL — the value on a chain block's "# LABEL:" line.
+otel_cert_label() {
+    sed -n "s/^# $1: *//p"
+}
+
+# otel_tls_problem VERDICT REASON DETAIL HOST PORT [CAFILE] — what a failed
+# probe means and where the fix lives, chosen by verdict and reason; DETAIL
+# is only shown. Plain stdout lines; callers indent and pick the stream.
+otel_tls_problem() {
+    local verdict="$1" reason="$2" detail="$3" host="$4" port="$5" ca="${6:-}" at
+    at=$(otel_hostport "$host" "$port")
+    case "$verdict" in
+        plaintext)
+            if [[ "$reason" == "closed" ]]; then
+                echo "${at} closed the connection without answering the TLS handshake."
+                echo "Either it does not speak TLS on this port, or it is a TLS proxy or load"
+                echo "balancer that serves no certificate for '${host}' (SNI). Find out which"
+                echo "before choosing plaintext."
+            else
+                echo "The collector does not speak TLS on ${at}: it accepted the"
+                echo "connection but answered the TLS handshake without a certificate."
+            fi
+            ;;
+        no-san)
+            echo "The certificate at ${at} has no subjectAltName. click-dog"
+            echo "checks names against SANs only and ignores the Common Name, so it"
+            echo "would reject this certificate. Reissue it with a SAN for '${host}'."
+            echo "See ${OTEL_SELF_SIGNED_DOCS}"
+            ;;
+        untrusted)
+            case "$reason" in
+                hostname-mismatch)
+                    echo "The certificate at ${at} is not issued for '${host}'"
+                    echo "(${detail}). Use the name it was issued for, or reissue it."
+                    ;;
+                expired|not-yet-valid)
+                    echo "The certificate at ${at} is not valid now (${detail})."
+                    echo "Renew it, and check this host's clock."
+                    ;;
+                *)
+                    if [[ -n "$ca" ]]; then
+                        echo "Certificate not trusted: ${ca} does not verify the certificate at"
+                        echo "${at} (${detail}). Use the CA that issued it, or the"
+                        echo "collector's own certificate when it is self-signed."
+                    else
+                        echo "Certificate not trusted: ${at} speaks TLS, but this host's"
+                        echo "system trust store rejects its certificate (${detail})."
+                        echo "A self-signed or private-CA collector needs its CA as exporters.otel[].ca_cert."
+                    fi
+                    ;;
+            esac
+            echo "See ${OTEL_TLS_DOCS}"
+            ;;
+        client-cert)
+            echo "${at} requires a client certificate (mTLS): it presented a"
+            echo "trusted certificate, then refused the handshake. That needs"
+            echo "exporters.otel[].client_cert and client_key."
+            echo "See ${OTEL_TLS_DOCS}"
+            ;;
+        config)
+            if [[ -n "$ca" ]]; then
+                echo "click-dog cannot use ${ca} as the collector's CA (${detail})."
+                echo "It must be a readable PEM CA certificate; the service would fail to"
+                echo "start with it."
+            else
+                echo "click-dog cannot build TLS settings for ${at} (${detail})."
+            fi
+            echo "See ${OTEL_TLS_DOCS}"
+            ;;
+        no-alpn)
+            echo "${at} speaks TLS but does not select HTTP/2 (ALPN h2), which"
+            echo "click-dog's gRPC exporter requires. Enable HTTP/2 on the TLS listener"
+            echo "(a load balancer or proxy in front of the collector usually needs it"
+            echo "turned on), or point -c at the collector itself."
+            echo "See ${OTEL_TLS_DOCS}"
+            ;;
+    esac
+}
+
+# preflight_otel_tls — the TLS gate for install and docker, run whenever the
+# transport is TLS (automatic or explicit), once the click-dog that will
+# export can run, and before anything is written. A definitive mismatch
+# returns 1: the rendered config could not export. An inconclusive probe
+# (receiver not up yet, a binary that cannot run on this host) is a note, the
+# same best-effort stance as the ClickHouse TLS detection. Unattended
+# installs never trust on first use: an unknown CA needs --otel-ca-cert.
+preflight_otel_tls() {
+    local host port at result verdict reason detail why plain_fix
+    host=$(otel_collector_host)
+    port=$(otel_collector_port)
+    at=$(otel_hostport "$host" "$port")
+    result=$(probe_otel_tls "$host" "$port" "$OTEL_CA_CERT")
+    read -r verdict reason detail <<<"$result"
+    case "$verdict" in
+        ok)
+            if [[ -n "$OTEL_CA_CERT" ]]; then
+                echo "OTLP receiver ${at}: TLS handshake ok, certificate verified by ${OTEL_CA_CERT}"
+            else
+                echo "OTLP receiver ${at}: TLS handshake ok, certificate trusted"
+            fi
+            return 0
+            ;;
+        unknown)
+            echo "Note: TLS to ${at} not verified (${detail}); 'click-dog check' tests it after install." >&2
+            return 0
+            ;;
+    esac
+    # Why the transport is TLS, and how plaintext would be asked for instead.
+    # Dropping a flag is never the fix: unset, a collector off loopback still
+    # gets TLS.
+    if [[ -n "$OTEL_CA_CERT" ]]; then
+        why="--otel-ca-cert was given"
+        plain_fix="pass --otel-secure=false in place of --otel-ca-cert"
+    elif [[ "$OTEL_SECURE" == "true" ]]; then
+        why="--otel-secure was given"
+        plain_fix="pass --otel-secure=false in place of --otel-secure"
+    else
+        why="TLS is the default for ${COLLECTOR_ADDRESS}, which is not loopback"
+        plain_fix="pass --otel-secure=false"
+    fi
+    if [[ "$verdict" == "config" ]]; then
+        echo "Error: ${why}, but click-dog cannot use its TLS settings for ${at}." >&2
+    else
+        echo "Error: ${why}, but the TLS handshake with ${at} failed." >&2
+    fi
+    otel_tls_problem "$verdict" "$reason" "$detail" "$host" "$port" "$OTEL_CA_CERT" | sed 's/^/  /' >&2
+    case "$verdict:$reason" in
+        plaintext:closed)
+            echo "  If the receiver is a plaintext port, ${plain_fix};" >&2
+            echo "  if it is a TLS proxy or load balancer, have it serve a certificate for '${host}'." >&2
+            ;;
+        plaintext:*)
+            echo "  To export in plaintext, ${plain_fix}. Or enable TLS on the receiver." >&2
+            ;;
+        untrusted:unknown-authority)
+            if [[ -z "$OTEL_CA_CERT" ]]; then
+                echo "  Pass --otel-ca-cert FILE with that CA (the collector's own certificate" >&2
+                echo "  when self-signed). Unattended installs never trust a certificate on first use." >&2
+            fi
+            ;;
+        client-cert:*)
+            echo "  The installer does not set client certificates. Render a config with" >&2
+            echo "  'click-dog init --otel-secure=true ...', add them under exporters.otel, and" >&2
+            echo "  install it with 'install.sh install -f click-dog.yaml'." >&2
+            ;;
+    esac
+    return 1
+}
+
+# prompt_otel_tls — the guided quick start's TLS question. The answer on
+# Enter is OTEL_USES_TLS, the automatic choice the binary gave. Accepting it
+# leaves OTEL_SECURE empty, so `click-dog init` renders by the loopback rule
+# (a loopback collector gets the rule comment, not a sticky `secure: false`);
+# only a different answer becomes an explicit OTEL_SECURE.
+prompt_otel_tls() {
+    local default="$OTEL_USES_TLS" hint answer choice
+    hint="y/N"
+    [[ "$default" == "true" ]] && hint="Y/n"
+    echo "  TLS verifies the collector against this host's system trust store; a"
+    echo "  self-signed one can be trusted after a fingerprint check. A local Agent"
+    echo "  or Collector on localhost usually listens in plaintext."
+    while true; do
+        read -rp "  Use TLS for the collector connection? [${hint}] " answer
+        case "$answer" in
+            "")                choice="$default" ;;
+            [yY]|[yY][eE][sS]) choice="true" ;;
+            [nN]|[nN][oO])     choice="false" ;;
+            *)                 echo "  Please enter y or n."; continue ;;
+        esac
+        break
+    done
+    OTEL_USES_TLS="$choice"
+    if [[ "$choice" == "$default" ]]; then
+        OTEL_SECURE=""
+    else
+        OTEL_SECURE="$choice"
+    fi
+}
+
+# guided_otel_transport — step 2's transport choice. The binary fetched
+# before step 2 gives the transport for the address and any flags; a flag
+# settles the question, otherwise the operator answers with that as the
+# default.
+guided_otel_transport() {
+    if [[ -n "$OTEL_CA_CERT" ]]; then
+        validate_otel_ca_file "$OTEL_CA_CERT" || exit 1
+    fi
+    resolve_otel_transport || exit 1
+    if [[ -n "$OTEL_CA_CERT" ]]; then
+        echo "  Using TLS with CA ${OTEL_CA_CERT} (from --otel-ca-cert)"
+    elif [[ "$OTEL_SECURE" == "true" ]]; then
+        echo "  Using TLS (from --otel-secure)"
+    elif [[ "$OTEL_SECURE" == "false" ]]; then
+        echo "  Using plaintext (from --otel-secure=false)"
+    else
+        prompt_otel_tls
+    fi
+}
+
+# prompt_k8s_otel_transport — `install.sh kubernetes` on a terminal, with no
+# --otel-secure: the generator cannot see the cluster's network and refuses a
+# collector off loopback without a transport, so ask which one the in-cluster
+# collector serves. There is no default: either guess can fail after rollout.
+# Sets OTEL_SECURE.
+prompt_k8s_otel_transport() {
+    local answer
+    echo "  ${COLLECTOR_ADDRESS} is resolved inside the cluster, so this host cannot"
+    echo "  check it. In-cluster collectors (an OpenTelemetry Collector or Datadog"
+    echo "  Agent on 4317) usually serve plaintext; a TLS receiver is verified"
+    echo "  against the image's system trust store."
+    while true; do
+        read -rp "  Which transport does ${COLLECTOR_ADDRESS} serve? [t]ls or [p]laintext: " answer
+        case "$answer" in
+            [tT]|[tT][lL][sS])                      OTEL_SECURE="true"; break ;;
+            [pP]|[pP][lL][aA][iI][nN][tT][eE][xX][tT]) OTEL_SECURE="false"; break ;;
+            *) echo "  Please enter t or p." ;;
+        esac
+    done
+    echo "  → Passing --otel-secure=${OTEL_SECURE} to the generator"
+}
+
+# Trust on first use needs a person reading the certificate. A seam so tests
+# can drive the prompt from a pipe.
+stdin_is_tty() { [[ -t 0 ]]; }
+
+# otel_cert_summary — subject, issuer, SANs and validity of a chain block on
+# stdin, one labeled line each, as click-dog described the certificate.
+otel_cert_summary() {
+    grep -E '^# (Subject|Issuer|SANs|Not before|Not after):' | sed 's/^# //' || true
+}
+
+# otel_cert_self_issued — succeeds when the chain block on stdin names itself
+# as issuer: a self-signed collector certificate or a root CA.
+otel_cert_self_issued() {
+    local block subject
+    block=$(cat)
+    subject=$(otel_cert_label Subject <<<"$block")
+    [[ -n "$subject" && "$subject" == "$(otel_cert_label Issuer <<<"$block")" ]]
+}
+
+# otel_cert_fingerprint — SHA-256 fingerprint of the chain block on stdin, in
+# the colon form `openssl x509 -fingerprint -sha256` prints.
+otel_cert_fingerprint() {
+    otel_cert_label SHA-256
+}
+
+# otel_tofu_refusal VERDICT REASON DETAIL HOST — why a certificate is not
+# offered, chosen by verdict and reason.
+otel_tofu_refusal() {
+    local verdict="$1" reason="$2" detail="$3" host="$4"
+    case "$verdict:$reason" in
+        no-san:*)
+            echo "it has no subjectAltName for '${host}', and click-dog ignores the Common Name. Reissue it with a SAN: ${OTEL_SELF_SIGNED_DOCS}" ;;
+        untrusted:hostname-mismatch)
+            echo "it is not issued for '${host}' (${detail})." ;;
+        untrusted:expired)
+            echo "it has expired (${detail})." ;;
+        untrusted:not-yet-valid)
+            echo "it is not valid yet (${detail}); check this host's clock and the certificate's dates." ;;
+        client-cert:*)
+            echo "the collector also requires a client certificate (mTLS), which this installer does not set." ;;
+        no-alpn:*)
+            echo "the collector does not select HTTP/2 (ALPN h2), which the gRPC exporter requires." ;;
+        unknown:*|config:*)
+            echo "click-dog could not prove it would verify the collector (${detail})." ;;
+        *)
+            echo "trusting it would still not verify the collector (${detail:-$verdict})." ;;
+    esac
+}
+
+# offer_otel_tofu HOST PORT — trust on first use, guided and TTY only, for a
+# collector whose certificate the system store rejects. Pins the top-most
+# certificate the collector sent: the certificate itself when self-signed,
+# otherwise the highest CA in the chain, which survives leaf rotation. It is
+# offered only when a handshake trusting that pin alone passes every check
+# the exporter makes, so an expired or not-yet-valid certificate, or one
+# without a SAN for HOST, is refused rather than pinned. The answer defaults
+# to no. On yes, sets OTEL_CA_CERT (and OTEL_CA_PIN_TMP) to the pinned PEM,
+# a temp file the install step copies to OTEL_CA_CERT_PATH. Returns 1 when
+# the operator declines, 2 when the certificate is refused.
+offer_otel_tofu() {
+    local host="$1" port="$2" chain leaf top pin result verdict reason detail answer
+    chain=$(mktemp "${TMPDIR:-/tmp}/click-dog-otel-chain.XXXXXX")
+    probe_otel_tls "$host" "$port" "" "$chain" >/dev/null
+    leaf=$(otel_chain_block first < "$chain")
+    top=$(otel_chain_block last < "$chain")
+    rm -f "$chain"
+    [[ -n "$top" ]] || return 1
+    pin=$(mktemp "${TMPDIR:-/tmp}/click-dog-otel-ca.XXXXXX")
+    # The certificate alone: the summary lines are for this prompt.
+    otel_cert_pem <<<"$top" > "$pin"
+    result=$(probe_otel_tls "$host" "$port" "$pin")
+    read -r verdict reason detail <<<"$result"
+
+    echo "  The collector presented:"
+    otel_cert_summary <<<"$leaf" | sed 's/^/    /'
+    if [[ "$top" != "$leaf" ]]; then
+        echo "  Certificate to trust, the top of the chain it sent:"
+        otel_cert_summary <<<"$top" | sed 's/^/    /'
+    fi
+    echo "    SHA-256:     $(otel_cert_fingerprint <<<"$top")"
+    echo ""
+    if [[ "$verdict" != "ok" ]]; then
+        echo "  Not offering to trust it: $(otel_tofu_refusal "$verdict" "$reason" "$detail" "$host")"
+        rm -f "$pin"
+        return 2
+    fi
+    # A leaf sent without its chain verifies as its own anchor, as it does for
+    # Go, but the pin then names that one certificate: renewal breaks it.
+    if [[ "$top" == "$leaf" ]] && ! otel_cert_self_issued <<<"$leaf"; then
+        echo "  Note: the collector sent only its own certificate, issued by another CA."
+        echo "  Trusting it pins this certificate, so export stops verifying when it is"
+        echo "  renewed. To trust the issuing CA instead, answer no and rerun with"
+        echo "  --otel-ca-cert FILE."
+        echo ""
+    fi
+    echo "  Compare the SHA-256 fingerprint with the certificate on the collector"
+    echo "  (its CA certificate when it sent a chain) before answering:"
+    echo "    openssl x509 -in <cert> -noout -fingerprint -sha256"
+    read -rp "  Trust this certificate? [y/N] " answer
+    case "$answer" in
+        [yY]|[yY][eE][sS])
+            OTEL_CA_CERT="$pin"
+            # quickstart_exit_cleanup removes it if the run stops before
+            # the install step copies it into place.
+            OTEL_CA_PIN_TMP="$pin"
+            echo "  → Will install it as ${OTEL_CA_CERT_PATH} (exporters.otel[].ca_cert)"
+            return 0
+            ;;
+    esac
+    rm -f "$pin"
+    return 1
+}
+
+# confirm_otel_tls_choice HOST PORT — the guided check for a TLS answer, run
+# once the port is known to be reachable. A mismatch is explained, then the
+# operator picks: plaintext when the receiver has no TLS; trusting the
+# certificate on first use when only the CA is unknown; or carrying on (and
+# fixing the config after install) otherwise.
+confirm_otel_tls_choice() {
+    local host="$1" port="$2" result verdict reason detail choice tofu=1 prompt
+    if [[ -n "$OTEL_CA_CERT" ]]; then
+        echo -n "  Checking TLS handshake (CA ${OTEL_CA_CERT})... "
+    else
+        echo -n "  Checking TLS handshake (system trust store)... "
+    fi
+    result=$(probe_otel_tls "$host" "$port" "$OTEL_CA_CERT")
+    read -r verdict reason detail <<<"$result"
+    case "$verdict" in
+        ok)      echo "ok, certificate trusted"; return 0 ;;
+        unknown) echo "skipped (${detail})"; return 0 ;;
+    esac
+    echo "FAILED"
+    echo ""
+    otel_tls_problem "$verdict" "$reason" "$detail" "$host" "$port" "$OTEL_CA_CERT" | sed 's/^/  /'
+    echo ""
+    # Continuing would install a config the service cannot start with.
+    if [[ "$verdict" == "config" ]]; then
+        echo "Aborted."
+        exit 1
+    fi
+    if [[ "$verdict" == "plaintext" ]]; then
+        prompt="  [p]laintext instead, [c]ontinue with TLS, or [q]uit? "
+        # A silent close is as likely a TLS proxy with no certificate for
+        # this name as a plaintext port: do not lead with plaintext.
+        if [[ "$reason" == "closed" ]]; then
+            echo "  Plaintext is right only if this port really is plaintext. For a TLS"
+            echo "  proxy or load balancer, fix its certificate for '${host}' and continue."
+            prompt="  [c]ontinue with TLS, [p]laintext instead, or [q]uit? "
+        fi
+        while true; do
+            read -rp "$prompt" choice
+            case "$choice" in
+                [pP])
+                    OTEL_SECURE="false"
+                    OTEL_USES_TLS="false"
+                    OTEL_CA_CERT=""
+                    echo "  → Will configure click-dog for plaintext export (--otel-secure=false)"
+                    return 0
+                    ;;
+                [cC]) return 0 ;;
+                [qQ]) echo "Aborted."; exit 0 ;;
+                *)    echo "  Please enter p, c, or q." ;;
+            esac
+        done
+    fi
+    if [[ "$verdict" == "untrusted" && "$reason" != "hostname-mismatch" && -z "$OTEL_CA_CERT" ]] && stdin_is_tty; then
+        if offer_otel_tofu "$host" "$port"; then
+            return 0
+        else
+            tofu=$?
+        fi
+        echo ""
+    fi
+    # Only a client certificate or the collector's CA would fix these; a
+    # refused pin already said why a CA would not help.
+    if [[ "$verdict" == "client-cert" || ( "$verdict:$reason" == "untrusted:unknown-authority" && -z "$OTEL_CA_CERT" && "$tofu" != 2 ) ]]; then
+        echo "  To finish, add those files under exporters.otel in"
+        echo "  /etc/click-dog/click-dog.yaml after install, then restart click-dog."
+    fi
+    while true; do
+        read -rp "  Continue with TLS? [y/n] " choice
+        case "$choice" in
+            [yY]) return 0 ;;
+            [nN]) echo "Aborted."; exit 0 ;;
+            *)    echo "  Please enter y or n." ;;
+        esac
+    done
+}
+
+# install_otel_ca_cert — place OTEL_CA_CERT at OTEL_CA_CERT_PATH, where the
+# rendered config's ca_cert points: owned by the runtime user, directory
+# 0750, file 0640. Callers run it once the click-dog account exists.
+install_otel_ca_cert() {
+    local dir="${OTEL_CA_CERT_PATH%/*}"
+    mkdir -p "$dir"
+    chown click-dog:click-dog "$dir"
+    chmod 750 "$dir"
+    if [[ ! "$OTEL_CA_CERT" -ef "$OTEL_CA_CERT_PATH" ]]; then
+        cp "$OTEL_CA_CERT" "$OTEL_CA_CERT_PATH"
+    fi
+    chown click-dog:click-dog "$OTEL_CA_CERT_PATH"
+    chmod 640 "$OTEL_CA_CERT_PATH"
+}
+
+# backup_otel_ca — keep the CA a previous install's config names as
+# OTEL_CA_CERT_PATH.bak before install_otel_ca_cert replaces it, so a failed
+# reinstall can put it back. A stale backup from an earlier run is dropped.
+backup_otel_ca() {
+    if [[ -f "$OTEL_CA_CERT_PATH" ]]; then
+        cp -p "$OTEL_CA_CERT_PATH" "${OTEL_CA_CERT_PATH}.bak"
+    else
+        rm -f "${OTEL_CA_CERT_PATH}.bak"
+    fi
+}
+
+# restore_otel_ca_backup — put back the CA a failed reinstall replaced.
+restore_otel_ca_backup() {
+    if [[ -f "${OTEL_CA_CERT_PATH}.bak" ]]; then
+        mv "${OTEL_CA_CERT_PATH}.bak" "$OTEL_CA_CERT_PATH"
+    fi
+}
+
+# verify_installed_otel_ca HOST PORT — re-run the handshake against the file
+# the config now names, so what is installed is what was proven. Returns 1 on
+# a definitive failure, 2 when click-dog cannot use the file at all (the
+# service could not start, whether or not the receiver is reachable); an
+# unreachable receiver is only a note.
+verify_installed_otel_ca() {
+    local host="$1" port="$2" result verdict reason detail
+    echo -n "  Checking TLS handshake against ${OTEL_CA_CERT_PATH}... "
+    result=$(probe_otel_tls "$host" "$port" "$OTEL_CA_CERT_PATH")
+    read -r verdict reason detail <<<"$result"
+    case "$verdict" in
+        ok)      echo "ok"; return 0 ;;
+        unknown) echo "skipped (${detail})"; return 0 ;;
+    esac
+    echo "FAILED"
+    otel_tls_problem "$verdict" "$reason" "$detail" "$host" "$port" "$OTEL_CA_CERT_PATH" | sed 's/^/    /'
+    [[ "$verdict" == "config" ]] && return 2
+    return 1
+}
+
 # ── Generate systemd unit ──────────────────────────────────────
+# ExecStart keeps the one-dash -config: the guided Update diffs installed
+# units against this text, and any change reads as an operator customization.
 generate_systemd_unit() {
     cat <<UNIT
 [Unit]
@@ -974,6 +1931,10 @@ BINARY_AUTO_DOWNLOAD_DIR=""
 _RESOLVE_BINARY_ARCHIVE_TMP=""
 _RESOLVE_BINARY_VERIFY_DIR=""
 _RESOLVE_BINARY_DOWNLOAD_DIR=""
+# The caller's EXIT handler (a function name), which resolve_binary's own
+# trap also runs and hands the trap back to, so a failed download still
+# removes what the caller created. Empty when the caller has none.
+OUTER_EXIT_CLEANUP=""
 
 cleanup_auto_downloaded_binary() {
     if [[ "$BINARY_AUTO_DOWNLOADED" == "true" ]]; then
@@ -1010,6 +1971,9 @@ _resolve_binary_cleanup() {
     fi
     if [[ -n "$_RESOLVE_BINARY_DOWNLOAD_DIR" ]]; then
         rm -rf "$_RESOLVE_BINARY_DOWNLOAD_DIR"
+    fi
+    if [[ -n "$OUTER_EXIT_CLEANUP" ]]; then
+        "$OUTER_EXIT_CLEANUP"
     fi
 }
 
@@ -1148,10 +2112,28 @@ resolve_binary() {
     _RESOLVE_BINARY_ARCHIVE_TMP=""
     chmod 700 "$BINARY"
     _RESOLVE_BINARY_DOWNLOAD_DIR=""
-    # All transient state cleaned up; release the trap so the caller is
-    # free to install its own EXIT handler over BINARY/config tempfiles.
-    trap - EXIT
+    # All transient state cleaned up; hand the trap back to the caller's
+    # handler, if any, so it can install its own over BINARY/config tempfiles.
+    if [[ -n "$OUTER_EXIT_CLEANUP" ]]; then
+        # shellcheck disable=SC2064  # bind the handler's name now, on purpose
+        trap "$OUTER_EXIT_CLEANUP" EXIT
+    else
+        trap - EXIT
+    fi
     echo "Downloaded to $BINARY"
+}
+
+# quickstart_exit_cleanup — the guided install's EXIT handler: its config,
+# secret and unit temp files, a pinned CA's temp copy, the ClickHouse setup
+# files (which hold the monitoring user's password hash), and an
+# auto-downloaded binary. A run that ends by telling the operator to use the
+# setup files empties clickhouse_setup_tempfiles first.
+quickstart_exit_cleanup() {
+    rm -f "${CONFIG_TMPFILE:-}" "${SECRET_TMPFILE:-}" "${UNIT_TMPFILE:-}" "${OTEL_CA_PIN_TMP:-}"
+    if [[ -n "${clickhouse_setup_tempfiles[*]:-}" ]]; then
+        rm -f "${clickhouse_setup_tempfiles[@]}"
+    fi
+    cleanup_auto_downloaded_binary
 }
 
 # ── INSTALL — binary + config (+ optional systemd) ─────────────
@@ -1164,12 +2146,22 @@ do_install() {
         [[ -z "$COLLECTOR_ADDRESS" ]] && { echo "Error: -c collector address is required for install"; usage; }
     else
         [[ ! -f "$CONFIG_FROM_FILE" ]] && { echo "Error: -f file not found: $CONFIG_FROM_FILE" >&2; exit 1; }
+        if [[ -n "$OTEL_SECURE" || -n "$OTEL_CA_CERT" ]]; then
+            echo "Error: --otel-secure and --otel-ca-cert render the config, so they cannot combine" >&2
+            echo "       with -f. Set 'secure' (and ca_cert) under exporters.otel in" >&2
+            echo "       $CONFIG_FROM_FILE instead." >&2
+            exit 1
+        fi
     fi
     resolve_password
 
     if [[ "$(uname -s)" == "Darwin" ]]; then
         echo "Error: Local install is not supported on macOS. Use docker mode." >&2
         exit 1
+    fi
+
+    if [[ -n "$OTEL_CA_CERT" ]]; then
+        validate_otel_ca_file "$OTEL_CA_CERT" || exit 1
     fi
 
     resolve_binary
@@ -1184,10 +2176,22 @@ do_install() {
     # completed install into exit 1; failure paths still see the live value.
     trap 'rm -f "$CONFIG_TMPFILE" "$ENV_TMPFILE" "$UNIT_TMPFILE"; [[ -n "${install_stage:-}" ]] && rm -rf "$install_stage"; cleanup_auto_downloaded_binary' EXIT
 
+    # Before anything is written: a receiver that cannot take this TLS choice
+    # makes every later step wasted work. The binary just resolved decides
+    # the transport and makes the handshake, so both are its exporter's; the
+    # trap above removes a download when the gate stops the install.
+    if [[ -z "$CONFIG_FROM_FILE" ]]; then
+        resolve_otel_transport || exit 1
+        if [[ "$OTEL_USES_TLS" == "true" ]]; then
+            preflight_otel_tls || exit 1
+        fi
+    fi
+
     if [[ -n "$CONFIG_FROM_FILE" ]]; then
         cp "$CONFIG_FROM_FILE" "$CONFIG_TMPFILE"
     else
         require_unified_init_binary
+        [[ -n "$OTEL_CA_CERT" ]] && require_init_flag otel-ca-cert
         render_click_dog_config "$CONFIG_TMPFILE"
     fi
 
@@ -1206,7 +2210,7 @@ do_install() {
     if [[ -n "$CONFIG_FROM_FILE" ]]; then
         echo "click-dog install: local, config=$CONFIG_FROM_FILE (systemd: $SYSTEMD)"
     else
-        echo "click-dog install: local, collector=$COLLECTOR_ADDRESS (systemd: $SYSTEMD)"
+        echo "click-dog install: local, collector=$COLLECTOR_ADDRESS (OTLP: $(otel_transport_label); systemd: $SYSTEMD)"
     fi
 
     # Step 1-3: create user + config dir
@@ -1229,14 +2233,19 @@ do_install() {
     staged_binary="$install_stage/click-dog"
     cp "$BINARY" "$staged_binary"
     chmod 700 "$staged_binary"
-    if ! "$staged_binary" -version >/dev/null 2>&1; then
+    if ! "$staged_binary" --version >/dev/null 2>&1; then
         echo "ERROR: binary smoke-test failed" >&2
         rm -rf "$install_stage"
         install_stage=""
         exit 1
     fi
 
-    # Step 6: place config files
+    # Step 6: place config files (and the collector CA the config names, so
+    # validation below can read it; the CA it replaces is kept for step 7)
+    if [[ -n "$OTEL_CA_CERT" ]]; then
+        backup_otel_ca
+        install_otel_ca_cert
+    fi
     cp "$CONFIG_TMPFILE" /etc/click-dog/click-dog.yaml
     cp "$ENV_TMPFILE"    /etc/click-dog/.secret
     chown click-dog:click-dog /etc/click-dog/click-dog.yaml /etc/click-dog/.secret
@@ -1244,14 +2253,16 @@ do_install() {
     chmod 600 /etc/click-dog/.secret
 
     # Step 7: validate config against staged binary
-    if ! "$staged_binary" -validate -config /etc/click-dog/click-dog.yaml >/dev/null 2>&1; then
+    if ! "$staged_binary" --validate --config /etc/click-dog/click-dog.yaml >/dev/null 2>&1; then
         echo "ERROR: config validation failed" >&2
-        "$staged_binary" -validate -config /etc/click-dog/click-dog.yaml >&2 || true
+        "$staged_binary" --validate --config /etc/click-dog/click-dog.yaml >&2 || true
         rm -f /etc/click-dog/click-dog.yaml /etc/click-dog/.secret
+        [[ -n "$OTEL_CA_CERT" ]] && restore_otel_ca_backup
         rm -rf "$install_stage"
         install_stage=""
         exit 1
     fi
+    rm -f "${OTEL_CA_CERT_PATH}.bak"
 
     # Step 8: place binary
     mv "$staged_binary" /usr/local/bin/click-dog
@@ -1301,7 +2312,7 @@ do_update() {
     staged_binary="$update_stage/click-dog"
     cp "$BINARY" "$staged_binary"
     chmod 700 "$staged_binary"
-    if ! "$staged_binary" -version >/dev/null 2>&1; then
+    if ! "$staged_binary" --version >/dev/null 2>&1; then
         echo "ERROR: new binary failed smoke test, aborting" >&2
         rm -rf "$update_stage"
         update_stage=""
@@ -1310,8 +2321,8 @@ do_update() {
 
     # Reject downgrades. `sort -V` puts the lower version first; if that's the new one, it's a downgrade.
     local new_ver cur_ver lowest
-    new_ver=$("$staged_binary" -version 2>&1 | awk '{print $2}')
-    cur_ver=$(/usr/local/bin/click-dog -version 2>&1 | awk '{print $2}') || cur_ver=""
+    new_ver=$("$staged_binary" --version 2>&1 | awk '{print $2}')
+    cur_ver=$(/usr/local/bin/click-dog --version 2>&1 | awk '{print $2}') || cur_ver=""
     if [[ -n "$cur_ver" && -n "$new_ver" && "$cur_ver" != "dev" && "$new_ver" != "dev" && "$cur_ver" != "$new_ver" ]]; then
         lowest=$(printf '%s\n%s\n' "${cur_ver#v}" "${new_ver#v}" | sort -V | head -n1)
         if [[ "$lowest" == "${new_ver#v}" ]]; then
@@ -1325,9 +2336,9 @@ do_update() {
     # Validate existing config against staged binary before swapping.
     # Catches the case where the new binary tightens validation and the
     # on-disk config would no longer load.
-    if ! "$staged_binary" -validate -config /etc/click-dog/click-dog.yaml >/dev/null 2>&1; then
+    if ! "$staged_binary" --validate --config /etc/click-dog/click-dog.yaml >/dev/null 2>&1; then
         echo "ERROR: existing config does not validate against new binary" >&2
-        "$staged_binary" -validate -config /etc/click-dog/click-dog.yaml >&2 || true
+        "$staged_binary" --validate --config /etc/click-dog/click-dog.yaml >&2 || true
         echo "Re-render via 'click-dog init' or fix the config, then re-run update." >&2
         rm -rf "$update_stage"
         update_stage=""
@@ -1363,7 +2374,7 @@ do_status() {
     fi
     if systemctl is-active click-dog >/dev/null 2>&1; then
         local ver
-        ver=$(click-dog -version 2>/dev/null || echo "unknown")
+        ver=$(click-dog --version 2>/dev/null || echo "unknown")
         echo "running ($ver)"
     else
         echo "STOPPED"
@@ -1409,21 +2420,34 @@ do_kubernetes() {
         echo "Error: 'install.sh kubernetes' needs Docker — it runs 'click-dog deploy" >&2
         echo "       kubernetes' from the published image to generate the manifests." >&2
         echo "  Install Docker, or run the generator directly on a Linux host:" >&2
-        echo "    click-dog deploy kubernetes -c <collector> -ch-host <ch-service> [-cluster <name>]" >&2
+        echo "    click-dog deploy kubernetes -c <collector> --ch-host <ch-service> [--cluster <name>]" >&2
         exit 1
     fi
     [[ -z "$COLLECTOR_ADDRESS" ]] && { echo "Error: -c collector address is required for kubernetes"; usage; }
     if [[ -z "$CLICKHOUSE_HOST" ]]; then
         echo "Error: --ch-host is required for kubernetes — the ClickHouse Service DNS" >&2
         echo "       (e.g. clickhouse.clickhouse.svc.cluster.local). A standalone click-dog" >&2
-        echo "       pod can't reach ClickHouse via localhost. Add --cluster <name> for" >&2
-        echo "       cluster() reads across shards." >&2
+        echo "       pod can't reach ClickHouse via localhost. Add --cluster <name> to" >&2
+        echo "       run it in cluster mode." >&2
         exit 1
     fi
-    resolve_password
     # A manifest outlives this run: never switch it onto the prerelease
-    # channel implicitly. See resolve_version.
+    # channel implicitly. See resolve_version. Resolved before the password
+    # prompt so an image that cannot take --otel-secure= is refused first.
     resolve_version no-fallback
+    require_otel_transport_image
+    # No --otel-secure: the generator refuses a collector off loopback, in
+    # its own words. On a terminal, ask instead, but only when the image's
+    # automatic choice is TLS: a loopback collector (a container in the same
+    # pod) is settled, and the generator renders the rule comment for it.
+    if [[ -z "$OTEL_SECURE" ]] && stdin_is_tty; then
+        CLICK_DOG_RUN_IMAGE="ghcr.io/coltconsulting/click-dog:${VERSION}"
+        resolve_otel_transport || exit 1
+        if [[ "$OTEL_USES_TLS" == "true" ]]; then
+            prompt_k8s_otel_transport
+        fi
+    fi
+    resolve_password
 
     mkdir -p "$out_dir"
     local abs_out_dir
@@ -1431,20 +2455,31 @@ do_kubernetes() {
 
     local args=(
         -c "$COLLECTOR_ADDRESS"
-        -ch-host "$CLICKHOUSE_HOST"
+        --ch-host "$CLICKHOUSE_HOST"
         -u "$CLICKHOUSE_USER"
         -v "$VERSION"
         -o /work
     )
-    [[ -n "$CLICKHOUSE_CLUSTER" ]] && args+=( -cluster "$CLICKHOUSE_CLUSTER" )
+    [[ -n "$CLICKHOUSE_CLUSTER" ]] && args+=( --cluster "$CLICKHOUSE_CLUSTER" )
+    # No handshake check, unlike install: -c names the receiver as the
+    # cluster resolves it, which this host usually cannot reach. Passed only
+    # when given, so the generator's refusal applies otherwise.
+    [[ -n "$OTEL_SECURE" ]] && args+=( "--otel-secure=$OTEL_SECURE" )
 
     # Password flows through the env (read by `deploy kubernetes`), never argv.
+    # A refusal (a collector off loopback with no transport) is the
+    # generator's own message on stderr; stop on it explicitly, whatever the
+    # caller's errexit state.
     export CLICKHOUSE_PASSWORD
-    docker run --rm \
+    local gen_rc=0
+    docker_run_mounted write \
         -e CLICKHOUSE_PASSWORD \
         -v "${abs_out_dir}:/work" \
         "ghcr.io/coltconsulting/click-dog:${VERSION}" \
-        deploy kubernetes "${args[@]}"
+        deploy kubernetes "${args[@]}" || gen_rc=$?
+    if [[ "$gen_rc" -ne 0 ]]; then
+        exit "$gen_rc"
+    fi
 
     echo "Kubernetes manifests generated in $out_dir/"
     echo "  WARNING: secret.yaml contains credentials — do not commit to version control"
@@ -1470,6 +2505,9 @@ do_kubernetes_update() {
         local tmp_dir
         tmp_dir=$(mktemp -d)
         extract_configmap_yaml "$out_dir/configmap.yaml" > "$tmp_dir/click-dog.yaml"
+        # The image's own user validates it, as the pod reads it from a
+        # ConfigMap. Nothing in it is secret: configmap.yaml is 0644.
+        chmod 644 "$tmp_dir/click-dog.yaml"
         if ! preflight_validate_config "$tmp_dir/click-dog.yaml" "install.sh kubernetes"; then
             rm -rf "$tmp_dir"
             exit 1
@@ -1480,10 +2518,10 @@ do_kubernetes_update() {
     # Delegate the image-tag bump to the generator (backs up deployment.yaml.bak
     # and rewrites the single image line) so install.sh and `click-dog deploy
     # kubernetes` stay one implementation. --update only bumps the tag, so it
-    # needs neither -c nor -ch-host (the config in the ConfigMap is untouched).
+    # needs neither -c nor --ch-host (the config in the ConfigMap is untouched).
     local abs_out_dir
     abs_out_dir=$(cd "$out_dir" && pwd)
-    docker run --rm \
+    docker_run_mounted write \
         -v "${abs_out_dir}:/work" \
         "ghcr.io/coltconsulting/click-dog:${VERSION}" \
         deploy kubernetes --update -v "${VERSION}" -o /work
@@ -1506,10 +2544,23 @@ do_docker() {
     command -v envsubst >/dev/null || { echo "Error: envsubst (gettext) is required for docker mode" >&2; exit 1; }
 
     [[ -z "$COLLECTOR_ADDRESS" ]] && { echo "Error: -c collector address is required for docker"; usage; }
-    resolve_password
     # A manifest outlives this run: never switch it onto the prerelease
     # channel implicitly. See resolve_version.
     resolve_version no-fallback
+
+    # The image decides the transport and makes the handshake, not a host
+    # binary: none runs on Docker Desktop, and the Compose service dials from
+    # the image's network. An image that predates --print-otel-secure is
+    # refused first, so the render below never meets a flag it lacks. All of
+    # it runs before the password prompt and before anything is written.
+    require_otel_transport_image
+    CLICK_DOG_RUN_IMAGE="ghcr.io/coltconsulting/click-dog:${VERSION}"
+    resolve_otel_transport || exit 1
+    if [[ "$OTEL_USES_TLS" == "true" ]]; then
+        preflight_otel_tls || exit 1
+    fi
+    echo "click-dog docker: collector=$COLLECTOR_ADDRESS (OTLP: $(otel_transport_label))"
+    resolve_password
 
     mkdir -p "$out_dir"
 
@@ -1518,19 +2569,24 @@ do_docker() {
 
     # click-dog.yaml — rendered by `click-dog init` inside the image (see
     # render_click_dog_config_via_docker for why this path can't use a
-    # local binary). Probe the image first so a -v pointing at a
-    # pre-unified release fails with a useful error instead of a
-    # cryptic "flag provided but not defined" from inside docker run.
-    require_unified_init_docker_image
+    # local binary). require_otel_transport_image above already refused an
+    # image whose init would fail with "flag provided but not defined".
     render_click_dog_config_via_docker "$out_dir/click-dog.yaml"
+    # `init` writes 0600, but the compose service reads this file as the
+    # image's own user, not the invoker who now owns it. It holds no secret
+    # (the password comes from .env), and `click-dog deploy docker` writes it
+    # 0644 too.
+    chmod 644 "$out_dir/click-dog.yaml"
 
     # .env — Docker Compose format: escape \, $, and # per Compose v2 spec
     local safe_pw="$CLICKHOUSE_PASSWORD"
     safe_pw="${safe_pw//\\/\\\\}"
     safe_pw="${safe_pw//\$/\\\$}"
     safe_pw="${safe_pw//#/\\#}"
-    printf "CLICKHOUSE_PASSWORD=%s\n" "$safe_pw" > "$out_dir/.env"
+    # Made private before the password goes in, new or pre-existing.
+    : > "$out_dir/.env"
     chmod 600 "$out_dir/.env"
+    printf "CLICKHOUSE_PASSWORD=%s\n" "$safe_pw" > "$out_dir/.env"
 
     render_template "docker/gitignore.tmpl" > "$out_dir/.gitignore"
 
@@ -1877,7 +2933,11 @@ require_quickstart_tty() {
 }
 
 do_quickstart() {
-    local clickhouse_setup_tempfiles=()
+    # Global, not local: the EXIT handler must still see it after an exit
+    # deep in this function. Every abort from here on removes these files.
+    clickhouse_setup_tempfiles=()
+    OUTER_EXIT_CLEANUP=quickstart_exit_cleanup
+    trap quickstart_exit_cleanup EXIT
 
     # ── Pre-flight checks ───────────────────────────────────────
     echo ""
@@ -1921,7 +2981,7 @@ do_quickstart() {
     local existing_was_active="false"
     local existing_was_enabled="false"
     if [[ -f /usr/local/bin/click-dog ]]; then
-        existing_version=$(/usr/local/bin/click-dog -version 2>/dev/null | awk '{print $NF}') || true
+        existing_version=$(/usr/local/bin/click-dog --version 2>/dev/null | awk '{print $NF}') || true
         systemctl is-active click-dog >/dev/null 2>&1 && existing_was_active="true"
         systemctl is-enabled click-dog >/dev/null 2>&1 && existing_was_enabled="true"
 
@@ -1958,14 +3018,14 @@ do_quickstart() {
                     staged_binary=$(mktemp /tmp/click-dog-quickstart-update.XXXXXX)
                     cp "$BINARY" "$staged_binary"
                     chmod 755 "$staged_binary"
-                    if ! "$staged_binary" -version >/dev/null 2>&1; then
+                    if ! "$staged_binary" --version >/dev/null 2>&1; then
                         echo "  Error: binary smoke-test failed (wrong architecture?)" >&2
                         echo "  Build with: make build-amd64  (or build-arm64)" >&2
                         rm -f "$staged_binary"
                         exit 1
                     fi
                     local new_version lowest
-                    new_version=$("$staged_binary" -version 2>/dev/null | awk '{print $NF}') || true
+                    new_version=$("$staged_binary" --version 2>/dev/null | awk '{print $NF}') || true
                     if [[ -n "$existing_version" && -n "$new_version" && "$existing_version" != "dev" && "$new_version" != "dev" && "$existing_version" != "$new_version" ]]; then
                         lowest=$(printf '%s\n%s\n' "${existing_version#v}" "${new_version#v}" | sort -V | head -n1)
                         if [[ "$lowest" == "${new_version#v}" ]]; then
@@ -1974,9 +3034,9 @@ do_quickstart() {
                             exit 1
                         fi
                     fi
-                    if [[ -f /etc/click-dog/click-dog.yaml ]] && ! "$staged_binary" -validate -config /etc/click-dog/click-dog.yaml >/dev/null 2>&1; then
+                    if [[ -f /etc/click-dog/click-dog.yaml ]] && ! "$staged_binary" --validate --config /etc/click-dog/click-dog.yaml >/dev/null 2>&1; then
                         echo "  Error: existing config does not validate against new binary" >&2
-                        "$staged_binary" -validate -config /etc/click-dog/click-dog.yaml >&2 || true
+                        "$staged_binary" --validate --config /etc/click-dog/click-dog.yaml >&2 || true
                         echo "  Fix /etc/click-dog/click-dog.yaml, then re-run update." >&2
                         rm -f "$staged_binary"
                         exit 1
@@ -2059,7 +3119,8 @@ do_quickstart() {
     echo "  1. ClickHouse      — enable span logging, create a read-only user"
     echo "                       (SELECT only; you review the SQL), then verify"
     echo "                       spans are readable as that user"
-    echo "  2. OTEL collector  — confirm where to send traces"
+    echo "  2. OTEL collector  — confirm where to send traces, and whether"
+    echo "                       over TLS"
     echo "  3. Install         — download binary to /usr/local/bin/click-dog,"
     echo "                       configure in /etc/click-dog/, start systemd service"
     echo ""
@@ -2188,7 +3249,7 @@ OTELXML
     # Pin CLICKHOUSE_PORT to whichever port the probe actually checked.
     # Without this, the openssl branch confirms TLS on 9000 but the
     # rendered config silently flips to 9440 (click-dog init's
-    # -ch-secure default), pointing the monitor at an endpoint nobody
+    # --ch-secure default), pointing the monitor at an endpoint nobody
     # tested. Pin per branch so the rendered config matches the proof.
     echo ""
     echo -n "  Checking ClickHouse TLS on localhost:9000... "
@@ -2557,6 +3618,15 @@ OTELXML
     span_log_report="$(verify_span_log_via_sql)"
     echo "${span_log_report%$'\n'*}"
 
+    # The collector check below runs click-dog's own exporter TLS code, so
+    # fetch (or check) the release now. It stays in a private temp directory,
+    # removed by quickstart_exit_cleanup, until step 3 installs it.
+    if [[ -z "$BINARY" ]]; then
+        echo ""
+        echo "  Fetching click-dog now: the collector check in step 2 runs it."
+    fi
+    resolve_binary
+
     # ═══ Step 2: OTEL collector ════════════════════════════════
     echo ""
     echo "════════════════════════════════════════════════════════════"
@@ -2570,13 +3640,23 @@ OTELXML
         COLLECTOR_ADDRESS="${COLLECTOR_ADDRESS:-localhost:4317}"
     fi
 
-    local col_host="${COLLECTOR_ADDRESS%%:*}"
-    local col_port="${COLLECTOR_ADDRESS##*:}"
-    [[ "$col_port" == "$col_host" ]] && col_port="4317"
+    local col_host col_port
+    col_host=$(otel_collector_host)
+    col_port=$(otel_collector_port)
 
-    echo -n "  Checking ${col_host}:${col_port}... "
+    guided_otel_transport
+
+    echo -n "  Checking $(otel_hostport "$col_host" "$col_port")... "
     if timeout 3 bash -c "echo >/dev/tcp/${col_host}/${col_port}" 2>/dev/null; then
         echo "ok"
+        # Prove a TLS answer, automatic or explicit, with one handshake, so a
+        # wrong choice surfaces here rather than as export errors after
+        # install. A plaintext answer stays a reachability check: a
+        # ClientHello sent to a plaintext gRPC port only adds a "bogus
+        # greeting" error to the receiver's log.
+        if [[ "$OTEL_USES_TLS" == "true" ]]; then
+            confirm_otel_tls_choice "$col_host" "$col_port"
+        fi
     else
         echo "FAILED"
         echo ""
@@ -2618,14 +3698,11 @@ OTELXML
     done
     echo ""
 
-    # Download
-    echo "  [1/5] Downloading click-dog..."
-    resolve_binary
-
+    # The binary was fetched before step 2; quickstart_exit_cleanup still
+    # owns the EXIT trap and now covers these temp files too.
     CONFIG_TMPFILE=""
     SECRET_TMPFILE=""
     UNIT_TMPFILE=""
-    trap 'rm -f "$CONFIG_TMPFILE" "$SECRET_TMPFILE" "$UNIT_TMPFILE"; cleanup_auto_downloaded_binary' EXIT
 
     # System user + dirs
     local click_dog_group_existed="false"
@@ -2633,9 +3710,9 @@ OTELXML
         click_dog_group_existed="true"
     fi
     if id click-dog &>/dev/null 2>&1; then
-        echo "  [2/5] Using existing click-dog system account..."
+        echo "  [1/4] Using existing click-dog system account..."
     else
-        echo "  [2/5] Creating click-dog system account (for running the service)..."
+        echo "  [1/4] Creating click-dog system account (for running the service)..."
         useradd --system --no-create-home --shell /usr/sbin/nologin click-dog
         record_installer_created_runtime_identity "$click_dog_group_existed"
     fi
@@ -2644,13 +3721,38 @@ OTELXML
     chmod 750 /etc/click-dog /var/log/click-dog
 
     # Config + secret
-    echo "  [3/5] Writing config..."
+    echo "  [2/4] Writing config..."
     SYSTEMD="true"
     CONFIG_TMPFILE=$(mktemp)
     SECRET_TMPFILE=$(mktemp)
     UNIT_TMPFILE=$(mktemp)
 
     require_unified_init_binary
+    if [[ -n "$OTEL_CA_CERT" ]]; then
+        require_init_flag otel-ca-cert
+        # A reinstall replaces the CA the previous config names; keep it so a
+        # failure below restores a config that still verifies its collector.
+        backup_otel_ca
+        install_otel_ca_cert
+        # A pin was proven minutes ago against the same bytes, so a failure
+        # here is real; an operator's CA the check already failed, and the
+        # operator chose to keep, only gets the report.
+        local verify_rc=0
+        verify_installed_otel_ca "$col_host" "$col_port" || verify_rc=$?
+        # A CA click-dog cannot use stops the install even when the receiver
+        # was unreachable and the operator chose to go on: the service could
+        # not start with it.
+        if [[ "$verify_rc" -eq 2 ]]; then
+            echo "  Error: click-dog cannot use ${OTEL_CA_CERT_PATH}; the configuration was not written." >&2
+            restore_otel_ca_backup
+            exit 1
+        fi
+        if [[ "$verify_rc" -ne 0 && -n "$OTEL_CA_PIN_TMP" ]]; then
+            echo "  Error: the pinned certificate no longer verifies the collector." >&2
+            restore_otel_ca_backup
+            exit 1
+        fi
+    fi
     render_click_dog_config "$CONFIG_TMPFILE"
 
     # Raw password bytes (no shell quoting, no KEY= prefix) — click-dog reads
@@ -2674,9 +3776,9 @@ OTELXML
     chmod 600 /etc/click-dog/.secret
 
     # Validate — restore backups on failure
-    if ! "$BINARY" -validate -config /etc/click-dog/click-dog.yaml >/dev/null 2>&1; then
+    if ! "$BINARY" --validate --config /etc/click-dog/click-dog.yaml >/dev/null 2>&1; then
         echo "  Error: config validation failed" >&2
-        "$BINARY" -validate -config /etc/click-dog/click-dog.yaml >&2 || true
+        "$BINARY" --validate --config /etc/click-dog/click-dog.yaml >&2 || true
         # Restore previous config if we had one, otherwise clean up
         if [[ "$config_backed_up" == "true" ]]; then
             echo "  Restoring previous config..." >&2
@@ -2685,16 +3787,17 @@ OTELXML
         else
             rm -f /etc/click-dog/click-dog.yaml /etc/click-dog/.secret
         fi
+        restore_otel_ca_backup
         exit 1
     fi
 
     # Validation passed — remove backups
-    rm -f /etc/click-dog/click-dog.yaml.bak /etc/click-dog/.secret.bak
+    rm -f /etc/click-dog/click-dog.yaml.bak /etc/click-dog/.secret.bak "${OTEL_CA_CERT_PATH}.bak"
 
     # Binary + systemd
-    echo "  [4/5] Installing binary and systemd unit..."
+    echo "  [3/4] Installing binary and systemd unit..."
     chmod 755 "$BINARY"
-    if ! "$BINARY" -version >/dev/null 2>&1; then
+    if ! "$BINARY" --version >/dev/null 2>&1; then
         echo "  Error: binary smoke-test failed (wrong architecture?)" >&2
         echo "  Build with: make build-amd64  (or build-arm64)" >&2
         exit 1
@@ -2709,7 +3812,7 @@ OTELXML
     systemctl enable click-dog >/dev/null 2>&1
 
     # Start
-    echo "  [5/5] Starting click-dog..."
+    echo "  [4/4] Starting click-dog..."
     systemctl restart click-dog
     sleep 2
 
@@ -2726,7 +3829,7 @@ OTELXML
         echo ""
         local docs_url="https://click-dog.com"
         local installed_version
-        installed_version=$(/usr/local/bin/click-dog -version 2>/dev/null | awk '{print $NF}') || true
+        installed_version=$(/usr/local/bin/click-dog --version 2>/dev/null | awk '{print $NF}') || true
         local v="${installed_version:+"?v=${installed_version}"}"
         echo "  Next steps:"
         echo ""
@@ -2747,6 +3850,8 @@ OTELXML
         echo "    Full reference: ${docs_url}/configuration/${v}"
         echo "    Datadog guide: ${docs_url}/integrations/datadog/${v}"
     else
+        # The steps below point at the setup files; keep them past exit.
+        clickhouse_setup_tempfiles=()
         systemctl stop click-dog 2>/dev/null || true
         echo "  Installed, but not yet running."
         echo "════════════════════════════════════════════════════════════"

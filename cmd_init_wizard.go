@@ -23,7 +23,7 @@ import (
 // The long parameter list mirrors runInit's flag set so the wizard can seed
 // its prompts from any flag the user supplied. Empty / zero values fall
 // back to defaultWizardAnswers; non-zero values override.
-func runInitWizard(in io.Reader, out, errOut io.Writer, fs *flag.FlagSet, chHost string, chPort int, chSecure bool, chUser, chPasswordFile, collector, service string, otelSecure bool, splunkHEC, haKeeper, profile, outputPath string, force bool) int {
+func runInitWizard(in io.Reader, out, errOut io.Writer, fs *flag.FlagSet, chHost string, chPort int, chSecure bool, chUser, chPasswordFile, collector, service string, otelSecure *bool, splunkHEC, haKeeper, profile, outputPath string, force bool) int {
 	// Fail-fast on a pre-existing file before any prompts run. Without this
 	// the user answered all nine wizard questions, then learnt the output
 	// path was taken — every typed answer thrown away. Walk this check up
@@ -69,6 +69,12 @@ func runInitWizard(in io.Reader, out, errOut io.Writer, fs *flag.FlagSet, chHost
 			defaults.OTELService = service
 		case "otel-secure":
 			defaults.OTELSecure = otelSecure
+		case "otel-ca-cert":
+			// Read from the flag itself so the long positional parameter
+			// list above doesn't grow; a CA path implies TLS.
+			if ca := f.Value.String(); ca != "" {
+				defaults.OTELCACert = absCACertPath(ca)
+			}
 		case "splunk-hec-endpoint":
 			if splunkHEC != "" {
 				defaults.SplunkHECEnabled = true
@@ -98,6 +104,10 @@ func runInitWizard(in io.Reader, out, errOut io.Writer, fs *flag.FlagSet, chHost
 	// straight from the --ch-password-file flag so renderWizardYAML emits
 	// clickhouse.password_file instead of password: ${CLICKHOUSE_PASSWORD}.
 	a.CHPasswordFile = chPasswordFile
+	if msg := config.OTLPCollectorAddressError(a.OTELCollector); msg != "" {
+		_, _ = fmt.Fprintf(errOut, "Error: %s; not writing %s\n", msg, outputPath)
+		return 1
+	}
 	content := renderWizardYAML(a)
 
 	// See cmd_init.go's write: the wizard's replace path has the same contract,
@@ -128,18 +138,18 @@ func writeWizardSummary(out io.Writer, a wizardAnswers) {
 	if a.CHSecure {
 		chTLS = " (TLS)"
 	}
-	_, _ = fmt.Fprintf(out, "  ClickHouse  %s:%d%s\n", a.CHHost, a.CHPort, chTLS)
-	otelTLS := ""
-	if a.OTELSecure {
-		otelTLS = " (TLS)"
+	_, _ = fmt.Fprintf(out, "  ClickHouse  %s:%d%s as %s\n", a.CHHost, a.CHPort, chTLS, resolveCHUser(a.Profile, a.CHUser))
+	otelTransport := a.otelTransportSummary()
+	if a.OTELCACert != "" {
+		otelTransport += ", CA " + a.OTELCACert
 	}
-	_, _ = fmt.Fprintf(out, "  OTEL        %s%s — service %q\n", a.OTELCollector, otelTLS, a.OTELService)
+	_, _ = fmt.Fprintf(out, "  OTEL        %s via %s — service %q\n", a.OTELCollector, otelTransport, a.OTELService)
 	if a.SplunkHECEnabled {
 		_, _ = fmt.Fprintf(out, "  Splunk HEC  %s\n", a.SplunkEndpoint)
 	}
 	topology := "sidecar — deploy once per ClickHouse node"
 	if a.UseClusterQueries {
-		topology = fmt.Sprintf("cluster %q — whole-cluster reads, leader-gated", a.Cluster)
+		topology = fmt.Sprintf("cluster %q — one replica per shard, leader-gated", a.Cluster)
 	}
 	_, _ = fmt.Fprintf(out, "  Topology    %s\n", topology)
 	if len(a.KeeperHosts) > 0 {
@@ -171,6 +181,9 @@ func writeWizardNextSteps(out io.Writer, a wizardAnswers, outputPath string) {
 	}
 	if a.SplunkHECEnabled {
 		_, _ = fmt.Fprintln(out, "       export SPLUNK_HEC_TOKEN=...")
+	}
+	if a.OTELCACert != "" {
+		_, _ = fmt.Fprintf(out, "       place the collector CA certificate at %s\n", a.OTELCACert)
 	}
 	_, _ = fmt.Fprintln(out, "  2. Validate config and connectivity:")
 	_, _ = fmt.Fprintf(out, "       click-dog check%s\n", cfgFlag)
@@ -216,27 +229,30 @@ func writeWizardNextSteps(out io.Writer, a wizardAnswers, outputPath string) {
 // the source of truth and does not consult package globals.
 //
 // CHUser is exposed only as a `--ch-user` flag on `click-dog init`; the
-// interactive prompts (short + wizard) do not ask for it. install.sh's
-// quickstart provisions a dedicated `monitoring` ClickHouse user and passes
-// the name through so the rendered config authenticates with the matching
-// credentials. End users overwhelmingly want `default`, which is the field's
-// default.
+// interactive prompts (short + wizard) do not ask for it. Empty means "the
+// profile's default" (see resolveCHUser): the dedicated read-only monitoring
+// user that install.sh, the Ansible playbook, and `deploy` all provision,
+// except for minimal, which keeps the driver's `default` user for a quick
+// evaluation.
 type wizardAnswers struct {
-	Profile          string
-	CHHost           string
-	CHPort           int
-	CHSecure         bool
-	CHUser           string
-	OTELCollector    string
-	OTELService      string
-	OTELSecure       bool
+	Profile       string
+	CHHost        string
+	CHPort        int
+	CHSecure      bool
+	CHUser        string
+	OTELCollector string
+	OTELService   string
+	// OTELSecure is exporters.otel[0].secure as chosen; nil leaves it to the
+	// automatic rule (plaintext only for a loopback collector). The renderer
+	// still writes secure for a remote collector; see otelSecureToRender.
+	OTELSecure       *bool
 	SplunkHECEnabled bool
 	SplunkEndpoint   string
 	// KeeperHosts are the ClickHouse Keeper endpoints. Their presence is what
 	// turns on leader election — there is no separate HA toggle.
 	KeeperHosts []string
-	// UseClusterQueries selects the cluster topology: this reader covers the
-	// whole cluster via cluster(...) and is leader-gated. False is the sidecar
+	// UseClusterQueries selects cluster mode: this instance reads one replica
+	// per shard via cluster(...) and is leader-gated. False is the sidecar
 	// topology (one reader per node, the default). Cluster mode implies a
 	// Keeper-coordinated election, so it also collects KeeperHosts.
 	UseClusterQueries bool
@@ -248,6 +264,11 @@ type wizardAnswers struct {
 	// `password: ${CLICKHOUSE_PASSWORD}`. install.sh uses this so the systemd
 	// service reads the secret from a 0600 file rather than its environment.
 	CHPasswordFile string
+	// OTELCACert is the CA certificate path rendered as
+	// exporters.otel[0].ca_cert. Empty means the system trust store. A CA
+	// implies TLS, so the renderer writes secure: true beside it; install.sh
+	// uses it for a pinned or operator-supplied collector CA.
+	OTELCACert string
 }
 
 // defaultWizardAnswers returns the baseline the wizard prompts against. The
@@ -259,10 +280,26 @@ func defaultWizardAnswers() wizardAnswers {
 		Profile:       "production",
 		CHHost:        "localhost",
 		CHPort:        9000,
-		CHUser:        "default",
 		OTELCollector: "localhost:4317",
 		OTELService:   "click-dog-monitor",
 	}
+}
+
+// defaultMonitorUser is the read-only ClickHouse user every installer path
+// documents and provisions (install.sh, the Ansible playbook, `deploy`).
+const defaultMonitorUser = "click_dog_monitor"
+
+// resolveCHUser returns the explicit --ch-user value, or the profile's
+// default when none was given. Only the renderer and the wizard summary call
+// it, so the answers keep "unset" until the wizard's profile choice is final.
+func resolveCHUser(profile, user string) string {
+	if user != "" {
+		return user
+	}
+	if profile == "minimal" {
+		return "default"
+	}
+	return defaultMonitorUser
 }
 
 // wizPrompter wraps a bufio.Reader and tracks whether any read hit EOF.
@@ -323,7 +360,23 @@ func runWizard(in io.Reader, out, errOut io.Writer, a wizardAnswers) (wizardAnsw
 	a.CHPort = promptInt(w, out, errOut, "ClickHouse port", defaultPort, 1, 65535)
 	a.OTELCollector = promptString(w, out, "OTEL collector address", a.OTELCollector)
 	a.OTELService = promptString(w, out, "Service name for exported spans", a.OTELService)
-	a.OTELSecure = promptYesNo(w, out, errOut, "Use TLS for the OTEL collector connection?", a.OTELSecure)
+	// The default answer is the automatic choice for the address just
+	// entered (or a seeded --otel-secure). Accepting the automatic default
+	// keeps the transport automatic; only a different answer is pinned.
+	automatic, _ := config.ResolveOTLPTransport(a.OTELCollector, nil, a.OTELCACert != "")
+	def := automatic
+	if a.OTELSecure != nil {
+		def = *a.OTELSecure
+	}
+	useTLS := promptYesNo(w, out, errOut, "Use TLS for the OTEL collector connection?", def)
+	if a.OTELSecure != nil || useTLS != automatic {
+		a.OTELSecure = &useTLS
+	}
+	if useTLS {
+		a.OTELCACert = absCACertPath(promptOptionalString(w, out, "CA certificate file for the collector (blank = system trust store)", a.OTELCACert))
+	} else {
+		a.OTELCACert = ""
+	}
 	a.SplunkHECEnabled = promptYesNo(w, out, errOut, "Also export to Splunk HEC?", a.SplunkHECEnabled)
 	if a.SplunkHECEnabled {
 		ep := a.SplunkEndpoint
@@ -333,7 +386,7 @@ func runWizard(in io.Reader, out, errOut io.Writer, a wizardAnswers) (wizardAnsw
 		a.SplunkEndpoint = promptString(w, out, "Splunk HEC endpoint", ep)
 	}
 	// Deployment topology. sidecar (default) reads this node's local span log
-	// and is deployed once per node; cluster reads the whole cluster via
+	// and is deployed once per node; cluster reads one replica per shard via
 	// cluster(...) and is always leader-gated — so it implies a
 	// Keeper-coordinated election rather than a separate HA toggle.
 	a.UseClusterQueries = promptTopology(w, out, errOut, a.UseClusterQueries)
@@ -360,16 +413,19 @@ func runWizard(in io.Reader, out, errOut io.Writer, a wizardAnswers) (wizardAnsw
 }
 
 // promptTopology asks for the deployment topology: sidecar (one reader per node,
-// the default) or cluster (one reader covers the whole cluster via cluster(...),
-// leader-gated). Returns true for cluster. Re-prompts on an unrecognized answer;
-// bails on EOF so a truncated stdin keeps the current default.
+// the default) or cluster (one leader-gated reader via cluster(...)). The span
+// log is node-local and cluster() reads one replica per shard, so cluster mode
+// covers a replicated cluster only partially unless clickhouse.cluster names a
+// definition in which every node is its own shard; the prompt says so briefly.
+// Returns true for cluster. Re-prompts on an unrecognized answer; bails on EOF
+// so a truncated stdin keeps the current default.
 func promptTopology(w *wizPrompter, out, errOut io.Writer, current bool) bool {
 	def := "sidecar"
 	if current {
 		def = "cluster"
 	}
 	for {
-		_, _ = fmt.Fprintf(out, "Deployment topology (sidecar/cluster) [%s]: ", def)
+		_, _ = fmt.Fprintf(out, "Deployment topology (sidecar/cluster; cluster reads one replica per shard) [%s]: ", def)
 		switch strings.ToLower(w.readLine()) {
 		case "":
 			return current
@@ -430,6 +486,30 @@ func promptProfile(w *wizPrompter, out, errOut io.Writer, current string) string
 			return current
 		}
 	}
+}
+
+// absCACertPath makes a CA certificate path absolute against the current
+// directory. click-dog opens ca_cert relative to its own working directory,
+// which is / under systemd, so a relative path that validates from the
+// operator's shell would not be found by the service.
+func absCACertPath(p string) string {
+	if p == "" || filepath.IsAbs(p) {
+		return p
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return p
+}
+
+// promptOptionalString is promptString for a value whose default may be empty:
+// the brackets are dropped rather than shown as "[]".
+func promptOptionalString(w *wizPrompter, out io.Writer, label, def string) string {
+	if def == "" {
+		_, _ = fmt.Fprintf(out, "%s: ", label)
+		return w.readLine()
+	}
+	return promptString(w, out, label, def)
 }
 
 func promptString(w *wizPrompter, out io.Writer, label, def string) string {
@@ -536,8 +616,8 @@ func renderWizardYAML(a wizardAnswers) string {
 	// rendered config authenticates as the user they asked for. Without
 	// this guard, `click-dog init --profile minimal --ch-user monitoring`
 	// silently produced a config that authenticates as `default`.
-	if a.Profile != "minimal" || a.CHUser != "default" {
-		fmt.Fprintf(&b, "  username: %s\n", yamlScalar(a.CHUser))
+	if user := resolveCHUser(a.Profile, a.CHUser); a.Profile != "minimal" || user != "default" {
+		fmt.Fprintf(&b, "  username: %s\n", yamlScalar(user))
 	}
 	if a.CHPasswordFile != "" {
 		// File-based secret: keep the password out of the process environment.
@@ -571,8 +651,13 @@ func renderWizardYAML(a wizardAnswers) string {
 	b.WriteString("  otel:\n")
 	fmt.Fprintf(&b, "    - collector_address: %s\n", yamlScalar(a.OTELCollector))
 	fmt.Fprintf(&b, "      service_name: %s\n", yamlScalar(a.OTELService))
-	if a.OTELSecure {
-		b.WriteString("      secure: true\n")
+	if secure := a.otelSecureToRender(); secure != nil {
+		fmt.Fprintf(&b, "      secure: %t\n", *secure)
+		if a.OTELCACert != "" {
+			fmt.Fprintf(&b, "      ca_cert: %s\n", yamlScalar(a.OTELCACert))
+		}
+	} else {
+		b.WriteString(otelSecureRuleComment("      "))
 	}
 	if a.SplunkHECEnabled {
 		b.WriteString("  splunk_hec:\n")
@@ -823,4 +908,47 @@ filters:
 			"click-dog bug: wizard has no monitor block for profile %q; add a case here when extending the profiles registry",
 			profile))
 	}
+}
+
+// otelSecureToRender returns the exporters.otel[0].secure value a renderer
+// writes, or nil when the key is left out for the rule comment. The key is
+// written whenever the collector is not loopback (an env-expanded or remote
+// address cannot tell a reader its transport), whenever a value was chosen,
+// and as true beside a CA. It is left out only for a loopback collector left
+// to the automatic choice, so that editing the address later yields TLS
+// rather than a false written for localhost.
+func (a wizardAnswers) otelSecureToRender() *bool {
+	return otelSecureToRender(a.OTELCollector, a.OTELSecure, a.OTELCACert != "")
+}
+
+func otelSecureToRender(collector string, secure *bool, hasCA bool) *bool {
+	if hasCA {
+		v := true
+		return &v
+	}
+	if secure != nil {
+		return secure
+	}
+	if config.IsLoopbackOTLPTarget(collector) {
+		return nil
+	}
+	v := true
+	return &v
+}
+
+// otelTransportSummary names the transport the rendered exporter will use,
+// and its source as `click-dog validate` will report it for the written file:
+// a key the renderer writes is explicit, an omitted one automatic.
+func (a wizardAnswers) otelTransportSummary() string {
+	hasCA := a.OTELCACert != ""
+	secure, source := config.ResolveOTLPTransport(a.OTELCollector, otelSecureToRender(a.OTELCollector, a.OTELSecure, hasCA), hasCA)
+	return config.TransportSummary(a.OTELCollector, secure, source)
+}
+
+// otelSecureRuleComment is what every renderer writes in place of an omitted
+// exporters.otel[].secure. Keep the wording in step with the Ansible template
+// and the deploy templates, which render the same two lines.
+func otelSecureRuleComment(indent string) string {
+	return indent + "# secure omitted: plaintext while collector_address is loopback (localhost,\n" +
+		indent + "# 127.0.0.0/8, ::1, unix:), TLS for any other collector. Set it to override.\n"
 }

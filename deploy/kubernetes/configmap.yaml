@@ -35,9 +35,9 @@ data:
       max_open_conns: 2
       max_idle_conns: 1
       query_timeout_s: 30
-      # Centralized topology: one instance reads all shards via cluster()
-      # queries. Both fields are required — use_cluster_queries with an empty
-      # cluster is a no-op that reads only the single pod the Service routes to.
+      # Cluster mode: one instance reads one replica per shard via cluster()
+      # queries, so a replicated cluster gets partial coverage. Both fields are
+      # required — validation rejects use_cluster_queries without a cluster name.
       # `main` matches deploy/kubernetes/clickhouse-operator-spanlog.yaml.
       use_cluster_queries: true
       cluster: main
@@ -46,12 +46,20 @@ data:
       otel:
         - collector_address: otel-collector.monitoring:4317
           service_name: click-dog-monitor
-          # TLS — uncomment when using cert-manager or any CA-signed certificate.
-          # The DaemonSet mounts the click-dog-otel-tls secret at /etc/click-dog/tls/.
-          # secure: true
-          # ca_cert: /etc/click-dog/tls/ca.crt
-          # client_cert: /etc/click-dog/tls/tls.crt
-          # client_key: /etc/click-dog/tls/tls.key
+          # TLS, verified against the system trust roots. An in-cluster
+          # collector (an OpenTelemetry Collector or Datadog Agent on 4317)
+          # usually serves plaintext: set secure: false for one. The
+          # Deployment mounts the optional click-dog-otel-ca ConfigMap and
+          # click-dog-otel-client Secret at /etc/click-dog/tls/; uncomment a
+          # path only once its source exists, because click-dog will not
+          # start with a TLS file it cannot read.
+          # See docs/kubernetes.md#otlp-tls.
+          secure: true
+          # CA that signed the collector's certificate (click-dog-otel-ca)
+          # ca_cert: /etc/click-dog/tls/ca.pem
+          # mTLS client certificate with client auth usage (certificate.yaml)
+          # client_cert: /etc/click-dog/tls/client.crt
+          # client_key: /etc/click-dog/tls/client.key
 
     monitor:
       enabled: true

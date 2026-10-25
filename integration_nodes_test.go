@@ -177,7 +177,7 @@ func (c nodeConfig) yaml() string {
 	if c.ClusterQueries {
 		b.WriteString("  cluster: test_cluster\n  use_cluster_queries: true\n")
 	}
-	fmt.Fprintf(&b, "exporters:\n  otel:\n    - collector_address: otel-collector:4317\n      service_name: %s\n", c.serviceName())
+	fmt.Fprintf(&b, "exporters:\n  otel:\n    - collector_address: otel-collector:4317\n      service_name: %s\n      secure: false\n", c.serviceName())
 	fmt.Fprintf(&b, "monitor:\n  enabled: true\n  min_trace_duration_ms: 1000\n  check_interval_s: %d\n  max_spans_per_cycle: 1000\n  dedup_cache_size: 10000\n", check)
 	if c.AuditInterval > 0 {
 		fmt.Fprintf(&b, "  topology_audit:\n    interval_s: %d\n    debounce_count: %d\n", c.AuditInterval, c.AuditDebounce)

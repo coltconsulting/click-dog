@@ -12,6 +12,12 @@ exporters:
   otel:
     - collector_address: {{ yamlScalar .CollectorAddress }}
       service_name: click-dog-monitor
+{{- if .OTELSecureSet }}
+      secure: {{ .OTELSecure }}
+{{- else }}
+      # secure omitted: plaintext while collector_address is loopback (localhost,
+      # 127.0.0.0/8, ::1, unix:), TLS for any other collector. Set it to override.
+{{- end }}
 
 monitor:
   enabled: true

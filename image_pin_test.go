@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -75,5 +76,31 @@ func TestImageTag_BareScheme(t *testing.T) {
 	}
 	if got := imageTag("v26.05.1"); got != "26.05.1" {
 		t.Errorf("imageTag(%q) = %q; want %q", "v26.05.1", got, "26.05.1")
+	}
+}
+
+// TestDockerfile_UserMatchesKubernetesIdentity ties the image's account to the
+// pod identity the shipped manifest sets. A numeric USER lets the kubelet verify
+// runAsNonRoot without a pod runAsUser, and an account with that uid gives a pod
+// that sets only runAsUser the matching group instead of group 0.
+func TestDockerfile_UserMatchesKubernetesIdentity(t *testing.T) {
+	pod, _ := podSecurityContexts(t, shippedDeployment)
+	uid, gid := pod["runAsUser"], pod["runAsGroup"]
+	dockerfile := readFile(t, "Dockerfile")
+
+	users := regexp.MustCompile(`(?m)^USER\s+(\S+)\s*$`).FindAllStringSubmatch(dockerfile, -1)
+	if len(users) == 0 {
+		t.Fatal("Dockerfile has no USER")
+	}
+	if got, want := users[len(users)-1][1], fmt.Sprintf("%v:%v", uid, gid); got != want {
+		t.Errorf("Dockerfile USER = %s, want %s (numeric, the manifest's runAsUser:runAsGroup)", got, want)
+	}
+	for _, want := range []string{
+		fmt.Sprintf("addgroup -S -g %v clickdog", gid),
+		fmt.Sprintf("adduser -S -u %v -G clickdog clickdog", uid),
+	} {
+		if !strings.Contains(dockerfile, want) {
+			t.Errorf("Dockerfile missing %q: without an account for that uid, a pod that sets only runAsUser runs in group 0", want)
+		}
 	}
 }
