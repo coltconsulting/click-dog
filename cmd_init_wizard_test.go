@@ -28,8 +28,8 @@ func TestWizard_AcceptAllDefaults(t *testing.T) {
 	in := strings.NewReader(strings.Repeat("\n", 10))
 	var out, errOut bytes.Buffer
 
-	got, eof := runWizard(in, &out, &errOut, defaultWizardAnswers())
-	if eof {
+	got, inputErr := runWizard(in, &out, &errOut, defaultWizardAnswers())
+	if inputErr != nil {
 		t.Errorf("did not expect EOF on this input")
 	}
 
@@ -72,8 +72,8 @@ func TestWizard_FullBranchingFlow(t *testing.T) {
 	in := strings.NewReader(strings.Join(inputs, "\n") + "\n")
 	var out, errOut bytes.Buffer
 
-	got, eof := runWizard(in, &out, &errOut, defaultWizardAnswers())
-	if eof {
+	got, inputErr := runWizard(in, &out, &errOut, defaultWizardAnswers())
+	if inputErr != nil {
 		t.Errorf("did not expect EOF on this input")
 	}
 
@@ -138,8 +138,8 @@ func TestWizard_ClusterTopologyFlow(t *testing.T) {
 	in := strings.NewReader(strings.Join(inputs, "\n") + "\n")
 	var out, errOut bytes.Buffer
 
-	got, eof := runWizard(in, &out, &errOut, defaultWizardAnswers())
-	if eof {
+	got, inputErr := runWizard(in, &out, &errOut, defaultWizardAnswers())
+	if inputErr != nil {
 		t.Fatalf("did not expect EOF; errOut=%s", errOut.String())
 	}
 	if !got.UseClusterQueries {
@@ -200,8 +200,8 @@ func TestWizard_RejectsAndReprompts(t *testing.T) {
 	in := strings.NewReader(strings.Join(inputs, "\n") + "\n")
 	var out, errOut bytes.Buffer
 
-	got, eof := runWizard(in, &out, &errOut, defaultWizardAnswers())
-	if eof {
+	got, inputErr := runWizard(in, &out, &errOut, defaultWizardAnswers())
+	if inputErr != nil {
 		t.Errorf("did not expect EOF on this input")
 	}
 
@@ -321,11 +321,6 @@ func TestRenderWizardYAML_LoadsForEveryCombination(t *testing.T) {
 // wizardAnswers built below — same input, same output. If you edit the
 // examples, mirror the change in the renderer (or vice versa) so this stays
 // green.
-//
-// DeprecationWarnings is the one field excluded — both configs share the
-// same emptiness for it, but we zero it explicitly so a future example
-// change that intentionally triggers a deprecation warning doesn't fail
-// this test for an unrelated reason.
 func TestWizard_ParityWithProfileTemplates(t *testing.T) {
 	for _, profile := range []string{"production", "minimal", "paranoid"} {
 		t.Run(profile, func(t *testing.T) {
@@ -350,9 +345,6 @@ func TestWizard_ParityWithProfileTemplates(t *testing.T) {
 			if err != nil {
 				t.Fatalf("release example %s failed to load: %v", examplePath, err)
 			}
-
-			wizCfg.DeprecationWarnings = nil
-			profCfg.DeprecationWarnings = nil
 
 			if !reflect.DeepEqual(wizCfg, profCfg) {
 				t.Errorf("wizard renderer / examples/ diverge for %q:\nwizard:  %+v\nexample: %+v",
@@ -395,7 +387,6 @@ func TestWizard_ParityWithProfileTemplates(t *testing.T) {
 				if err != nil {
 					t.Fatalf("documentation example %s failed to load: %v", docsPath, err)
 				}
-				docsCfg.DeprecationWarnings = nil
 				if !reflect.DeepEqual(profCfg, docsCfg) {
 					t.Errorf("release and documentation examples diverge for %q:\nrelease: %+v\ndocs:    %+v",
 						profile, profCfg, docsCfg)
@@ -582,6 +573,56 @@ func TestRunInitWizard_RefusesWriteOnTruncatedStdin(t *testing.T) {
 	}
 }
 
+// TestRunInitWizard_RefusesOverlongLine is the `init --wizard </dev/zero`
+// case: an answer with no newline is refused after maxPromptLineBytes, the
+// wizard stops, and nothing is written. The endless input is a LimitReader so
+// a regression fails the byte count instead of exhausting memory.
+func TestRunInitWizard_RefusesOverlongLine(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		source io.Reader
+	}{
+		{"endless line", zeroReader{}},
+		{"over-long second answer", io.MultiReader(strings.NewReader("production\n"), repeatByteReader('h'))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			output := filepath.Join(t.TempDir(), "click-dog.yaml")
+			input := &countingReader{r: io.LimitReader(tc.source, 1<<20)}
+			fs := flag.NewFlagSet("init", flag.ContinueOnError)
+			var errOut bytes.Buffer
+			code := runInitWizard(input, io.Discard, &errOut, fs, "localhost", 9000, false, "default", "", "localhost:4317", "click-dog-monitor", nil, "", "", "production", output, false)
+			if code != 1 {
+				t.Fatalf("exit = %d, want 1; stderr: %s", code, errOut.String())
+			}
+			if want := "input line is longer than 4096 bytes; not writing " + output; !strings.Contains(errOut.String(), want) {
+				t.Errorf("stderr = %q, want it to contain %q", errOut.String(), want)
+			}
+			if _, err := os.Stat(output); err == nil {
+				t.Error("config file was written despite an over-long answer")
+			}
+			if input.n > 2*maxPromptLineBytes+64 {
+				t.Errorf("read %d bytes, want at most %d", input.n, 2*maxPromptLineBytes+64)
+			}
+		})
+	}
+}
+
+// TestPromptInteractive_RefusesOverlongLine covers the short init prompt.
+func TestPromptInteractive_RefusesOverlongLine(t *testing.T) {
+	chHost, collector, service, profile := "h", "c:4317", "s", "production"
+	input := &countingReader{r: io.LimitReader(zeroReader{}, 1<<20)}
+	err := promptInteractive(input, io.Discard, io.Discard, &chHost, &collector, &service, &profile)
+	if !errors.Is(err, errPromptLineTooLong) {
+		t.Fatalf("err = %v, want errPromptLineTooLong", err)
+	}
+	if chHost != "h" {
+		t.Errorf("chHost = %q, want the default kept", chHost)
+	}
+	if input.n > 2*maxPromptLineBytes {
+		t.Errorf("read %d bytes, want at most %d", input.n, 2*maxPromptLineBytes)
+	}
+}
+
 // TestRunInitWizard_ForceOverwrite confirms --force lets the wizard replace
 // an existing file and emits the same "existing file replaced" cue as runInit.
 func TestRunInitWizard_ForceOverwrite(t *testing.T) {
@@ -665,8 +706,8 @@ func TestWizard_KeeperHostsRequiredForElection(t *testing.T) {
 	in := strings.NewReader(strings.Join(inputs, "\n") + "\n")
 	var out, errOut bytes.Buffer
 
-	got, eof := runWizard(in, &out, &errOut, defaultWizardAnswers())
-	if eof {
+	got, inputErr := runWizard(in, &out, &errOut, defaultWizardAnswers())
+	if inputErr != nil {
 		t.Errorf("did not expect EOF on this input")
 	}
 
@@ -1181,8 +1222,8 @@ func TestWizard_OTELCACertPrompt(t *testing.T) {
 		)
 		in := strings.NewReader(strings.Join(inputs, "\n") + "\n")
 		var out, errOut bytes.Buffer
-		got, eof := runWizard(in, &out, &errOut, seed)
-		if eof {
+		got, inputErr := runWizard(in, &out, &errOut, seed)
+		if inputErr != nil {
 			t.Fatalf("unexpected EOF; out=%q err=%q", out.String(), errOut.String())
 		}
 		return got, out.String()

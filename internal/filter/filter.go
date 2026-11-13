@@ -2,9 +2,7 @@ package filter
 
 import (
 	"fmt"
-	"net"
 	"net/netip"
-	"net/url"
 	"regexp"
 	"strings"
 
@@ -14,10 +12,17 @@ import (
 )
 
 const (
-	rawStatementAttribute            = "db.statement"
+	rawStatementAttribute = "db.statement"
+	// remoteStatementAttribute is the statement ClickHouse sends to each shard
+	// or replica, recorded on its Connection::sendQuery span. It is SQL as
+	// written, literals included.
+	remoteStatementAttribute         = "clickhouse.query"
 	normalizedStatementAttribute     = "db.normalized_query"
 	enrichedNormalizedQueryAttribute = "query_log.normalized_query"
 )
+
+// rawStatementAttributes are the span attributes that hold SQL as written.
+var rawStatementAttributes = []string{rawStatementAttribute, remoteStatementAttribute}
 
 // redactionEntry holds a compiled regex and its replacement string.
 type redactionEntry struct {
@@ -30,8 +35,7 @@ type QueryFilter struct {
 	operationPatterns      []*regexp.Regexp
 	queryBlacklistPatterns []*regexp.Regexp
 	redactionRules         []redactionEntry
-	whitelistIPs           map[netip.Addr]bool // exact IP matches, IPv4-mapped IPv6 unmapped
-	whitelistCIDRs         []*net.IPNet        // CIDR range matches
+	clientPrefixes         []netip.Prefix // whitelist_ips entries, normalized by config.ClientPrefix
 	whitelistUsers         map[string]bool
 	blacklistUsers         map[string]bool
 	hasOperationWhitelist  bool
@@ -52,18 +56,17 @@ func NewQueryFilter(cfg config.FiltersConfig) (*QueryFilter, error) {
 	}
 	// This repeats Config.Validate deliberately: QueryFilter is also built from
 	// directly-constructed configs in tests and integrations, so the final
-	// privacy boundary must enforce its own invariants. Rules under the two
-	// stricter modes are safely inert and ignored; raw plus rules is rejected
-	// because it would look redacted while exporting the original statement.
-	if mode == config.QueryTextModeRaw && len(cfg.RedactQueries) > 0 {
-		return nil, fmt.Errorf("redact_queries rules require query_text_mode redacted")
+	// privacy boundary must enforce its own invariants. Only redacted mode
+	// consumes rules; under raw they would look redacted while exporting the
+	// original statement.
+	if mode != config.QueryTextModeRedacted && len(cfg.RedactQueries) > 0 {
+		return nil, fmt.Errorf("redact_queries rules require query_text_mode redacted (currently %s)", mode)
 	}
 
 	qf := &QueryFilter{
 		queryTextMode:          mode,
 		operationPatterns:      make([]*regexp.Regexp, 0, len(cfg.WhitelistOperations)),
 		queryBlacklistPatterns: make([]*regexp.Regexp, 0, len(cfg.BlacklistQueries)),
-		whitelistIPs:           make(map[netip.Addr]bool),
 		whitelistUsers:         make(map[string]bool, len(cfg.WhitelistUsers)),
 		blacklistUsers:         make(map[string]bool, len(cfg.BlacklistUsers)),
 		hasOperationWhitelist:  len(cfg.WhitelistOperations) > 0,
@@ -87,34 +90,33 @@ func NewQueryFilter(cfg config.FiltersConfig) (*QueryFilter, error) {
 		qf.operationPatterns = append(qf.operationPatterns, re)
 	}
 
-	// Compile regex patterns for query blacklist
+	// Compile regex patterns for query blacklist. ClickHouse's match(), which
+	// applies the same patterns on the analyze and backfill reads, lets . match
+	// a line break; (?s) gives Go the same semantics, so a multi-line statement
+	// is judged alike on every path. A pattern can still opt out with (?-s).
 	for _, pattern := range cfg.BlacklistQueries {
-		re, err := regexp.Compile(pattern)
+		re, err := regexp.Compile("(?s)" + pattern)
 		if err != nil {
 			return nil, err
 		}
 		qf.queryBlacklistPatterns = append(qf.queryBlacklistPatterns, re)
 	}
 
-	// Compile redaction rules only when the mode consumes them. Stale rules in
-	// normalized_only/none are ignored with a load-time warning rather than
-	// turning a privacy-tightening configuration edit into an outage.
-	if mode == config.QueryTextModeRedacted {
-		for i, rule := range cfg.RedactQueries {
-			pattern := strings.TrimSpace(rule.Pattern)
-			if pattern == "" {
-				return nil, fmt.Errorf("invalid redact_queries[%d] regex: pattern must not be empty", i)
-			}
-			re, err := regexp.Compile(pattern)
-			if err != nil {
-				return nil, fmt.Errorf("invalid redact_queries[%d] regex %q: %w", i, pattern, err)
-			}
-			replacement := rule.Replacement
-			if replacement == "" {
-				replacement = "[REDACTED]"
-			}
-			qf.redactionRules = append(qf.redactionRules, redactionEntry{re: re, replacement: replacement})
+	// Compile redaction rules; the check above admits them only in redacted mode.
+	for i, rule := range cfg.RedactQueries {
+		pattern := strings.TrimSpace(rule.Pattern)
+		if pattern == "" {
+			return nil, fmt.Errorf("invalid redact_queries[%d] regex: pattern must not be empty", i)
 		}
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid redact_queries[%d] regex %q: %w", i, pattern, err)
+		}
+		replacement := rule.Replacement
+		if replacement == "" {
+			replacement = "[REDACTED]"
+		}
+		qf.redactionRules = append(qf.redactionRules, redactionEntry{re: re, replacement: replacement})
 	}
 
 	// Build user whitelist / blacklist. Empty entries are rejected in config
@@ -126,29 +128,21 @@ func NewQueryFilter(cfg config.FiltersConfig) (*QueryFilter, error) {
 		qf.blacklistUsers[u] = true
 	}
 
-	// Build IP whitelist — support both exact IPs and CIDR notation
+	// Build IP whitelist — exact IPs become single-address prefixes.
 	for _, entry := range cfg.WhitelistIPs {
-		if strings.Contains(entry, "/") {
-			_, cidr, err := net.ParseCIDR(entry)
-			if err != nil {
-				return nil, fmt.Errorf("invalid CIDR in whitelist_ips %q: %w", entry, err)
-			}
-			qf.whitelistCIDRs = append(qf.whitelistCIDRs, cidr)
-		} else {
-			addr, err := netip.ParseAddr(entry)
-			if err != nil {
-				return nil, fmt.Errorf("invalid IP in whitelist_ips %q: %w", entry, err)
-			}
-			qf.whitelistIPs[addr.Unmap()] = true
+		prefix, err := config.ClientPrefix(entry)
+		if err != nil {
+			return nil, fmt.Errorf("invalid whitelist_ips entry %q: %w", entry, err)
 		}
+		qf.clientPrefixes = append(qf.clientPrefixes, prefix)
 	}
 
 	// Log active filter configuration so operators know what's armed
 	if qf.queryTextMode != config.QueryTextModeRaw || qf.hasOperationWhitelist || qf.hasIPWhitelist || qf.hasUserWhitelist || qf.hasUserBlacklist ||
 		len(qf.queryBlacklistPatterns) > 0 || len(qf.redactionRules) > 0 {
-		clicklog.Info("Filters active: query_text_mode=%s, operation_whitelist=%d, ip_whitelist=%d (exact=%d, cidr=%d), user_whitelist=%d, user_blacklist=%d, query_blacklist=%d, redaction_rules=%d",
+		clicklog.Info("Filters active: query_text_mode=%s, operation_whitelist=%d, ip_whitelist=%d, user_whitelist=%d, user_blacklist=%d, query_blacklist=%d, redaction_rules=%d",
 			qf.queryTextMode,
-			len(qf.operationPatterns), len(cfg.WhitelistIPs), len(qf.whitelistIPs), len(qf.whitelistCIDRs),
+			len(qf.operationPatterns), len(qf.clientPrefixes),
 			len(qf.whitelistUsers), len(qf.blacklistUsers),
 			len(qf.queryBlacklistPatterns), len(qf.redactionRules))
 	}
@@ -165,68 +159,11 @@ func (qf *QueryFilter) isIPWhitelisted(clientIP string) bool {
 	if err != nil {
 		return false
 	}
-	if qf.whitelistIPs[addr.Unmap()] {
-		return true
-	}
-
-	// net.IPNet.Contains unmaps an IPv4-mapped address itself.
-	ip := net.IP(addr.AsSlice())
-	for _, cidr := range qf.whitelistCIDRs {
-		if cidr.Contains(ip) {
+	addr = addr.Unmap()
+	for _, prefix := range qf.clientPrefixes {
+		if prefix.Contains(addr) {
 			return true
 		}
-	}
-	return false
-}
-
-func (qf *QueryFilter) ShouldFilter(operationName string, queryText string, clientIP string) bool {
-	// 1. Check IP whitelist first (if configured)
-	if qf.hasIPWhitelist {
-		if !qf.isIPWhitelisted(clientIP) {
-			clicklog.Debug("Filtering span from IP not in whitelist: %s", clientIP)
-			return true
-		}
-	}
-
-	// 2. Check operation whitelist (if configured)
-	if qf.hasOperationWhitelist {
-		matched := false
-		for _, pattern := range qf.operationPatterns {
-			if pattern.MatchString(operationName) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			clicklog.Debug("Filtering operation not in whitelist: %s", operationName)
-			return true
-		}
-	}
-
-	// 3. Check query blacklist patterns
-	for _, pattern := range qf.queryBlacklistPatterns {
-		if pattern.MatchString(queryText) {
-			clicklog.Debug("Filtering query matching blacklist pattern: %s", pattern.String())
-			return true
-		}
-	}
-
-	return false
-}
-
-// ShouldFilterUser reports whether the given ClickHouse user is excluded by
-// the configured whitelist/blacklist. Strict — an empty (unknown) user is
-// dropped when a whitelist is active. When both lists are set a user must
-// appear in the whitelist AND not appear in the blacklist to pass.
-// Case-sensitive exact match. See docs/filtering.md for rationale.
-func (qf *QueryFilter) ShouldFilterUser(user string) bool {
-	if qf.hasUserWhitelist && !qf.whitelistUsers[user] {
-		clicklog.Debug("Filtering span from user not in whitelist: %q", user)
-		return true
-	}
-	if qf.hasUserBlacklist && qf.blacklistUsers[user] {
-		clicklog.Debug("Filtering span from blacklisted user: %q", user)
-		return true
 	}
 	return false
 }
@@ -238,9 +175,101 @@ func (qf *QueryFilter) HasUserFilter() bool {
 }
 
 // HasUserWhitelist reports whether a user whitelist is configured. Unlike the
-// blacklist, it drops spans whose user cannot be resolved.
+// blacklist, it drops traces whose user cannot be resolved.
 func (qf *QueryFilter) HasUserWhitelist() bool {
 	return qf.hasUserWhitelist
+}
+
+// HasUserBlacklist reports whether a user blacklist is configured.
+func (qf *QueryFilter) HasUserBlacklist() bool {
+	return qf.hasUserBlacklist
+}
+
+// IsBlacklistedUser reports whether user appears in blacklist_users, ignoring
+// the whitelist. Case-sensitive exact match.
+func (qf *QueryFilter) IsBlacklistedUser(user string) bool {
+	return qf.hasUserBlacklist && qf.blacklistUsers[user]
+}
+
+// HasQueryBlacklist reports whether blacklist_queries is configured.
+func (qf *QueryFilter) HasQueryBlacklist() bool {
+	return len(qf.queryBlacklistPatterns) > 0
+}
+
+// HasTraceScopedFilter reports whether any filter is configured whose input
+// only some spans of a trace carry — a query's user, client, or statement —
+// so the live path must decide it per trace.
+func (qf *QueryFilter) HasTraceScopedFilter() bool {
+	return qf.hasIPWhitelist || qf.hasUserWhitelist || qf.hasUserBlacklist || len(qf.queryBlacklistPatterns) > 0
+}
+
+// IsBlacklistedQuery reports whether query text matches a blacklist_queries
+// pattern.
+func (qf *QueryFilter) IsBlacklistedQuery(text string) bool {
+	for _, pattern := range qf.queryBlacklistPatterns {
+		if pattern.MatchString(text) {
+			clicklog.Debug("Filtering query matching blacklist pattern: %s", pattern.String())
+			return true
+		}
+	}
+	return false
+}
+
+// AllowsOperation reports whether whitelist_operations admits an operation
+// name; with no whitelist every operation is allowed.
+func (qf *QueryFilter) AllowsOperation(operationName string) bool {
+	if !qf.hasOperationWhitelist {
+		return true
+	}
+	for _, pattern := range qf.operationPatterns {
+		if pattern.MatchString(operationName) {
+			return true
+		}
+	}
+	clicklog.Debug("Filtering operation not in whitelist: %s", operationName)
+	return false
+}
+
+// AllowsClient reports whether whitelist_ips admits a client address; with no
+// whitelist every client is allowed.
+func (qf *QueryFilter) AllowsClient(clientIP string) bool {
+	if !qf.hasIPWhitelist || qf.isIPWhitelisted(clientIP) {
+		return true
+	}
+	clicklog.Debug("Filtering span from IP not in whitelist: %s", clientIP)
+	return false
+}
+
+// AllowsQueryUsers applies both user lists to one query: the whitelist judges
+// the account of the client that started it (initialUser, or user when
+// ClickHouse left it empty), and the blacklist rejects the query when either
+// account is listed, so a blacklisted client's distributed secondary queries,
+// which run as the interserver account, are rejected too.
+func (qf *QueryFilter) AllowsQueryUsers(user, initialUser string) bool {
+	if qf.IsBlacklistedUser(user) || qf.IsBlacklistedUser(initialUser) {
+		clicklog.Debug("Filtering query from blacklisted user: %q (initial user %q)", user, initialUser)
+		return false
+	}
+	originating := initialUser
+	if originating == "" {
+		originating = user
+	}
+	if qf.hasUserWhitelist && !qf.whitelistUsers[originating] {
+		clicklog.Debug("Filtering query from user not in whitelist: %q", originating)
+		return false
+	}
+	return true
+}
+
+// ShouldFilterQueryLog applies the filters that apply to a query_log row on
+// the backfill path: blacklist_queries on its text, whitelist_ips on
+// originatingAddr, and both user lists via AllowsQueryUsers. The operation
+// filters describe native span-log operations and do not apply to query_log
+// rows.
+func (qf *QueryFilter) ShouldFilterQueryLog(query model.QueryLog, originatingAddr string) bool {
+	return qf.IsBlacklistedQuery(query.Query) ||
+		!qf.AllowsClient(originatingAddr) ||
+		!qf.AllowsQueryUsers(query.User, query.InitialUser)
 }
 
 // HasIPWhitelist reports whether an IP whitelist is configured. Callers use
@@ -291,30 +320,33 @@ func (qf *QueryFilter) ShapeSpanForExport(span model.OpenTelemetrySpan) model.Op
 
 	attrs := cloneStringMap(span.Attributes)
 	slices := cloneStringSliceMap(span.StringSliceAttributes)
-	removeRawQueryURIAttributes(attrs, slices)
+	removeURIAttributes(attrs, slices)
+	removeSettingAttributes(attrs, slices)
 	removeExceptionTextAttributes(attrs, slices)
 
 	switch qf.queryTextMode {
 	case config.QueryTextModeRedacted:
-		if raw, ok := attrs[rawStatementAttribute]; ok {
-			if redacted, matched := qf.redactQueryForExport(raw); matched {
-				attrs[rawStatementAttribute] = redacted
-			} else {
-				delete(attrs, rawStatementAttribute)
+		for _, key := range rawStatementAttributes {
+			if raw, ok := attrs[key]; ok {
+				if redacted, matched := qf.redactQueryForExport(raw); matched {
+					attrs[key] = redacted
+				} else {
+					delete(attrs, key)
+				}
 			}
+			// A string-array statement cannot be safely interpreted as SQL text.
+			delete(slices, key)
 		}
-		// A string-array statement cannot be safely interpreted as SQL text.
-		delete(slices, rawStatementAttribute)
 	case config.QueryTextModeNormalizedOnly:
-		delete(attrs, rawStatementAttribute)
-		delete(slices, rawStatementAttribute)
+		for _, key := range rawStatementAttributes {
+			delete(attrs, key)
+			delete(slices, key)
+		}
 	case config.QueryTextModeNone:
-		delete(attrs, rawStatementAttribute)
-		delete(attrs, normalizedStatementAttribute)
-		delete(attrs, enrichedNormalizedQueryAttribute)
-		delete(slices, rawStatementAttribute)
-		delete(slices, normalizedStatementAttribute)
-		delete(slices, enrichedNormalizedQueryAttribute)
+		for _, key := range append([]string{normalizedStatementAttribute, enrichedNormalizedQueryAttribute}, rawStatementAttributes...) {
+			delete(attrs, key)
+			delete(slices, key)
+		}
 	}
 
 	span.Attributes = attrs
@@ -365,37 +397,59 @@ func cloneStringSliceMap(src map[string][]string) map[string][]string {
 	return dst
 }
 
-// removeRawQueryURIAttributes drops URI-bearing pass-through attribute values
-// that carry a ClickHouse HTTP query parameter. HTTP GET requests can embed the
-// full SQL in ?query= even when db.statement is removed. Attribute names are
-// checked before their values so SQL string literals and ordinary metadata are
-// not mistaken for request URIs. Dropping the entire unsafe URI is intentionally
-// fail closed: trying to preserve and re-encode it could retain malformed or
-// ambiguously delimited SQL fragments.
-func removeRawQueryURIAttributes(attrs map[string]string, slices map[string][]string) {
-	for key, value := range attrs {
-		if isURIAttribute(key) && containsRawQueryParameter(key, value) {
+// removeURIAttributes drops every URI-bearing and referer pass-through
+// attribute. ClickHouse's HTTP interface takes the statement (query=), bound
+// values (param_<name>=), and settings whose values are SQL
+// (additional_table_filters=) as URL parameters, a Referer repeats them, and a
+// predefined HTTP handler turns parts of the path itself into bound values, so
+// no part of a request URI is safe to keep. Attribute names are checked, not
+// values, so SQL string literals and ordinary metadata are not mistaken for
+// request URIs.
+func removeURIAttributes(attrs map[string]string, slices map[string][]string) {
+	for key := range attrs {
+		if IsURIAttribute(key) {
 			delete(attrs, key)
 		}
 	}
-	for key, values := range slices {
-		if !isURIAttribute(key) {
-			continue
-		}
-		// cloneStringSliceMap allocated this backing array, so compacting it in
-		// place cannot mutate the caller's StringSliceAttributes.
-		kept := values[:0]
-		for _, value := range values {
-			if !containsRawQueryParameter(key, value) {
-				kept = append(kept, value)
-			}
-		}
-		if len(kept) == 0 {
+	for key := range slices {
+		if IsURIAttribute(key) {
 			delete(slices, key)
-			continue
 		}
-		slices[key] = kept
 	}
+}
+
+const (
+	// settingAttributePrefix is the prefix ClickHouse gives each changed
+	// setting it records on a query span.
+	settingAttributePrefix = "clickhouse.setting."
+	// logCommentSetting is operator metadata, which query-text mode does not
+	// govern.
+	logCommentSetting = "log_comment"
+)
+
+// removeSettingAttributes drops every recorded setting except log_comment.
+// ClickHouse records each setting a query changed, custom settings included,
+// and several hold SQL or bound values: additional_table_filters,
+// additional_result_filter and parallel_replicas_custom_key hold expressions
+// with their literals, and a custom setting read through getSetting() is a
+// bound value. A new setting must not reach the backend just because it is
+// not on a list.
+func removeSettingAttributes(attrs map[string]string, slices map[string][]string) {
+	for key := range attrs {
+		if isSettingAttribute(key) {
+			delete(attrs, key)
+		}
+	}
+	for key := range slices {
+		if isSettingAttribute(key) {
+			delete(slices, key)
+		}
+	}
+}
+
+func isSettingAttribute(key string) bool {
+	name, ok := strings.CutPrefix(strings.ToLower(strings.TrimSpace(key)), settingAttributePrefix)
+	return ok && name != logCommentSetting
 }
 
 // removeExceptionTextAttributes drops exception message attributes, keeping
@@ -422,10 +476,11 @@ func isExceptionTextAttribute(key string) bool {
 	return strings.Contains(key, "exception") && !strings.HasSuffix(key, "exception_code")
 }
 
-// isURIAttribute recognizes standard OpenTelemetry URL attributes and common
-// vendor-specific URL/URI names. Promoted log_comment.* metadata is excluded
+// IsURIAttribute recognizes standard OpenTelemetry URL attributes, common
+// vendor-specific URL/URI names, and referers, which repeat a page's URL with
+// its parameters. Promoted log_comment.* metadata is excluded
 // explicitly: query-text mode does not govern operator-supplied log comments.
-func isURIAttribute(key string) bool {
+func IsURIAttribute(key string) bool {
 	key = strings.ToLower(strings.TrimSpace(key))
 	if key == "log_comment" || strings.HasPrefix(key, "log_comment.") {
 		return false
@@ -445,53 +500,7 @@ func isURIAttribute(key string) bool {
 		return false
 	}
 	switch parts[len(parts)-1] {
-	case "url", "urls", "uri", "uris":
-		return true
-	default:
-		return false
-	}
-}
-
-// containsRawQueryParameter recognizes query components in full URLs and
-// request targets. Bare query strings are accepted only for attributes whose
-// contract is the query component itself (for example url.query), avoiding
-// false positives in URI attributes that merely contain "query=..." as text.
-// Parameter names are URL-decoded and matched case-insensitively so encoded
-// spellings such as %71uery cannot bypass the boundary.
-func containsRawQueryParameter(key, value string) bool {
-	query := value
-	if isURIQueryComponentAttribute(key) {
-		// The whole value is normally already the query component, and a
-		// literal '?' is valid inside a parameter value. Strip a leading '?'
-		// or misplaced request target only when the prefix cannot be a
-		// parameter, so a literal cannot truncate the component.
-		if question := strings.IndexByte(query, '?'); question >= 0 &&
-			!strings.ContainsAny(query[:question], "=&;") {
-			query = query[question+1:]
-		}
-	} else if question := strings.IndexByte(query, '?'); question >= 0 {
-		query = query[question+1:]
-	} else {
-		return false
-	}
-	if fragment := strings.IndexByte(query, '#'); fragment >= 0 {
-		query = query[:fragment]
-	}
-	for _, field := range strings.FieldsFunc(query, func(r rune) bool {
-		return r == '&' || r == ';'
-	}) {
-		name, _, _ := strings.Cut(field, "=")
-		decoded, err := url.QueryUnescape(name)
-		if err == nil && strings.EqualFold(strings.TrimSpace(decoded), "query") {
-			return true
-		}
-	}
-	return false
-}
-
-func isURIQueryComponentAttribute(key string) bool {
-	switch strings.ToLower(strings.TrimSpace(key)) {
-	case "url.query", "http.query", "http.query_string", "request.query_string":
+	case "url", "urls", "uri", "uris", "referer", "referrer":
 		return true
 	default:
 		return false

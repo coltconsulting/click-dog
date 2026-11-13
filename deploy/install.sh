@@ -19,17 +19,18 @@
 #   -c ADDRESS       OTEL collector address (required for install/kubernetes/docker)
 #   -u USER          ClickHouse username (default: click_dog_monitor).
 #                    A dedicated, namespaced name avoids colliding with an
-#                    existing "monitoring" user; setup never replaces a user
-#                    that already exists.
+#                    existing "monitoring" user. The guide changes an existing
+#                    user only when asked.
 #   -v VERSION       Version to install/generate (default: latest release)
 #   -b BINARY        Path to pre-downloaded binary (install/update only)
 #   -k HOSTS         Keeper hosts for HA, comma-separated (install only)
 #   -x PROXY         HTTPS proxy for binary download
 #   -C CMD           clickhouse-client command/path (default: clickhouse-client)
 #                    e.g. -C "clickhouse-client -u admin". A docker-exec
-#                    wrapper must add `-e CLICKHOUSE_PASSWORD` (by name, with
-#                    no value) so command-scoped credentials cross into the
-#                    container without appearing in host process arguments.
+#                    wrapper must add `-i -e CLICKHOUSE_PASSWORD` (the variable
+#                    by name, with no value): -i carries the SQL on stdin, and
+#                    the name carries passwords into the container without
+#                    putting them in host process arguments.
 #   -f PATH          Use this pre-rendered click-dog.yaml instead of having
 #                    install.sh render one (install only). Pair with the
 #                    output of `click-dog init --wizard` from a laptop.
@@ -89,16 +90,6 @@
 #
 set -euo pipefail
 
-# Templates dir is resolved when the script runs from a local checkout. When
-# fetched via curl|bash there is no on-disk script and SCRIPT_DIR is empty;
-# render_template will then refuse k8s/docker commands with a clear error.
-if [[ -f "${BASH_SOURCE[0]:-}" ]]; then
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-else
-    SCRIPT_DIR=""
-fi
-TEMPLATES_DIR="${SCRIPT_DIR}/templates"
-
 # ── Defaults ────────────────────────────────────────────────────
 COMMAND=""
 SUBCOMMAND=""
@@ -110,6 +101,9 @@ CLICKHOUSE_USER="click_dog_monitor"
 # can't reach ClickHouse via localhost, so `install.sh kubernetes` requires
 # --ch-host (see #199). --cluster enables cross-shard reads.
 CLICKHOUSE_HOST=""
+# clickhouse-client reads both from its environment, and an assignment keeps a
+# variable exported. These values are this script's own.
+export -n CLICKHOUSE_USER CLICKHOUSE_HOST
 CLICKHOUSE_CLUSTER=""
 BINARY=""
 COLLECTOR_ADDRESS=""
@@ -206,7 +200,6 @@ esac
 ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --no-merge) echo "Note: --no-merge is now a no-op; update-time config merge was removed (update is binary/image swap only)." >&2 ;;
         --systemd)  SYSTEMD="true" ;;
         --yes)
             if [[ "$COMMAND" != "uninstall" ]]; then
@@ -258,7 +251,7 @@ while [[ $# -gt 0 ]]; do
                 docker)
                     echo "Error: --otel-ca-cert is not supported for docker: the generated compose file" >&2
                     echo "       mounts only click-dog.yaml, so the CA would not be visible in the" >&2
-                    echo "       container. Mount it yourself and set exporters.otel[].ca_cert." >&2
+                    echo "       container. Mount it and set exporters.otel[].ca_cert." >&2
                     exit 1
                     ;;
                 kubernetes)
@@ -326,28 +319,6 @@ if [[ "$OTEL_SECURE" == "false" && -n "$OTEL_CA_CERT" ]]; then
     exit 1
 fi
 
-# ── Template rendering ─────────────────────────────────────────
-# Used by kubernetes and docker generators. These commands require running
-# from a local checkout (curl|bash has no templates on disk); the curl|bash
-# path only reaches install/quickstart which keep their config inline.
-render_template() {
-    # render_template <relative_path> [allowed_vars]
-    # allowed_vars is the envsubst SHELL-FORMAT arg (e.g. '$COLLECTOR_ADDRESS $VERSION').
-    # Vars not listed pass through literally, so runtime ${CLICKHOUSE_PASSWORD}
-    # references in k8s manifests survive into the output.
-    local tmpl="$TEMPLATES_DIR/$1"
-    local allowed="${2:-}"
-    if [[ -z "$SCRIPT_DIR" || ! -f "$tmpl" ]]; then
-        echo "Error: template '$1' not found; this command requires running install.sh from a local checkout." >&2
-        exit 1
-    fi
-    if [[ -n "$allowed" ]]; then
-        envsubst "$allowed" < "$tmpl"
-    else
-        cat "$tmpl"
-    fi
-}
-
 # ── Password resolution ────────────────────────────────────────
 resolve_password() {
     if [[ -n "$CLICKHOUSE_PASSWORD" ]]; then
@@ -409,10 +380,7 @@ resolve_target_arch() {
 # This is the single rendering path for every install.sh sub-command that
 # produces a /etc/click-dog/click-dog.yaml (or the docker-compose equivalent):
 # we shell out to `click-dog init` so the wizard renderer is the only place
-# YAML shape lives. Pre-unification install.sh emitted its own YAML inline
-# (now removed); that path diverged from the wizard on schema, service_name,
-# filters, and hardening (see docs/development/specs/unify-config-generators.md
-# for the catalogue).
+# YAML shape lives.
 #
 # `$1` is the output path. The binary must already be available at
 # `$BINARY` (resolved by resolve_binary in each caller). Flags are built
@@ -503,6 +471,221 @@ EOF
 # `init --ch-password-file`), so the secret stays in this 0600 file and never
 # enters the service environment — the systemd unit needs no EnvironmentFile.
 SECRET_FILE=/etc/click-dog/.secret
+CLICKHOUSE_USERS_DIR=/etc/clickhouse-server/users.d
+
+# clickhouse_server_user prints the user the clickhouse-server unit runs as, or
+# nothing when systemd cannot say. A unit can name a numeric user, and su needs the
+# name.
+clickhouse_server_user() {
+    local user
+    user=$(systemctl show -p User --value clickhouse-server 2>/dev/null) || user=""
+    if [[ "$user" =~ ^[0-9]+$ ]]; then
+        user=$(getent passwd "$user" 2>/dev/null | cut -d: -f1) || user=""
+    fi
+    echo "$user"
+}
+
+# clickhouse_server_group prints the group the clickhouse-server unit runs as, or
+# nothing when systemd cannot say or names a group this host does not have.
+clickhouse_server_group() {
+    local group unit_user
+    group=$(systemctl show -p Group --value clickhouse-server 2>/dev/null) || group=""
+    if [[ -z "$group" ]]; then
+        unit_user=$(clickhouse_server_user)
+        if [[ -n "$unit_user" ]]; then
+            group=$(id -gn "$unit_user" 2>/dev/null) || group=""
+        fi
+    fi
+    if [[ "$group" =~ ^[0-9]+$ ]]; then
+        group=$(getent group "$group" 2>/dev/null | cut -d: -f1) || group=""
+    fi
+    if [[ -n "$group" ]] && ! getent group "$group" &>/dev/null; then
+        group=""
+    fi
+    echo "$group"
+}
+
+# clickhouse_loaded_files DIR... prints each file ClickHouse loads from DIR. It goes
+# by the extension, in any case, and skips dotfiles.
+clickhouse_loaded_files() {
+    local dir file
+    for dir in "$@"; do
+        for file in "$dir"/*; do
+            case "$file" in
+                *.[xX][mM][lL]|*.[cC][oO][nN][fF]|*.[yY][aA][mM][lL]|*.[yY][mM][lL])
+                    if [[ -f "$file" ]]; then
+                        echo "$file"
+                    fi
+                    ;;
+            esac
+        done
+    done
+}
+
+# clickhouse_server_groups USER GROUP prints, comma-separated, the group IDs systemd
+# starts the server with: GROUP's, those of the groups that list USER as a member,
+# and the unit's SupplementaryGroups=. systemd adds the member groups with
+# initgroups(USER, GROUP), which getent initgroups lists, and skips that for group 0.
+# It fails when it cannot find a group. IDs keep a group name with a space whole.
+clickhouse_server_groups() {
+    local user="$1" gid g list members
+    gid=$(getent group "$2" | cut -d: -f3) || return 1
+    [[ -n "$gid" ]] || return 1
+    list="$gid"
+    if [[ "$gid" != "0" ]]; then
+        members=$(getent initgroups "$user" | awk '{ for (i = 2; i <= NF; i++) print $i }') || return 1
+        for g in $members; do
+            if [[ ",${list}," != *",${g},"* ]]; then
+                list+=",$g"
+            fi
+        done
+    fi
+    for g in $(systemctl show -p SupplementaryGroups --value clickhouse-server 2>/dev/null); do
+        if [[ ! "$g" =~ ^[0-9]+$ ]]; then
+            g=$(getent group "$g" | cut -d: -f3) || return 1
+            [[ -n "$g" ]] || return 1
+        fi
+        if [[ ",${list}," != *",${g},"* ]]; then
+            list+=",$g"
+        fi
+    done
+    echo "$list"
+}
+
+# clickhouse_unreadable_files prints each file ClickHouse loads from config.d,
+# conf.d, and users.d that its own user and groups cannot read. When it cannot test
+# as them, it says so on stderr and prints nothing.
+clickhouse_unreadable_files() {
+    local server_user group group_list file dir="${CLICKHOUSE_USERS_DIR%/*}" as_server reason=""
+    server_user=$(clickhouse_server_user)
+    group=$(clickhouse_server_group)
+    if [[ -z "$server_user" ]]; then
+        reason="systemd names no user for clickhouse-server"
+    elif [[ -z "$group" ]]; then
+        reason="the guide cannot find the group clickhouse-server runs as"
+    elif ! command -v setpriv &>/dev/null; then
+        reason="setpriv is not installed"
+    elif ! group_list=$(clickhouse_server_groups "$server_user" "$group"); then
+        reason="the guide cannot find every group clickhouse-server starts with"
+    else
+        as_server=(setpriv --reuid="$server_user" --regid="$group" --groups="$group_list")
+        if ! "${as_server[@]}" true &>/dev/null; then
+            reason="setpriv cannot run as ${server_user}"
+        fi
+    fi
+    if [[ -n "$reason" ]]; then
+        echo "" >&2
+        echo "  Note: the guide cannot check that ClickHouse can read its config files:" >&2
+        echo "  ${reason}." >&2
+        return 0
+    fi
+    while IFS= read -r file; do
+        if ! "${as_server[@]}" test -r "$file" &>/dev/null </dev/null; then
+            echo "$file"
+        fi
+    done < <(clickhouse_loaded_files "$dir/config.d" "$dir/conf.d" "$CLICKHOUSE_USERS_DIR")
+}
+
+# xml_without_comments FILE prints FILE with its <!-- --> comments removed.
+xml_without_comments() {
+    awk '{
+        rest = $0
+        out = ""
+        while (rest != "") {
+            if (in_comment) {
+                i = index(rest, "-->")
+                if (!i) { rest = ""; continue }
+                rest = substr(rest, i + 3)
+                in_comment = 0
+            } else {
+                i = index(rest, "<!--")
+                if (!i) { out = out rest; rest = ""; continue }
+                out = out substr(rest, 1, i - 1)
+                rest = substr(rest, i + 4)
+                in_comment = 1
+            }
+        }
+        print out
+    }' "$1"
+}
+
+# clickhouse_grantee_files prints each click-dog-*.xml file in users.d whose GRANT
+# names a grantee. ClickHouse does not load such a file and does not start with one.
+clickhouse_grantee_files() {
+    local file text
+    for file in "$CLICKHOUSE_USERS_DIR"/click-dog-*.xml; do
+        [[ -f "$file" ]] || continue
+        text=$(xml_without_comments "$file")
+        if grep -Eqi 'GRANT[[:space:]].*[[:space:]]TO[[:space:]]' <<<"$text"; then
+            echo "$file"
+        fi
+    done
+}
+
+# check_clickhouse_files prints the fix and returns 1 when a file stops ClickHouse
+# at its next start.
+check_clickhouse_files() {
+    local files group
+    files=$(clickhouse_grantee_files)
+    if [[ -n "$files" ]]; then
+        echo "" >&2
+        echo "  Error: ClickHouse never loaded these files and does not start with them:" >&2
+        sed 's/^/    /' <<<"$files" >&2
+        echo "" >&2
+        echo "  A GRANT in each one names a user, which ClickHouse rejects in users.d." >&2
+        echo "  Delete each file, then run the guide again:" >&2
+        echo "    rm FILE" >&2
+        return 1
+    fi
+    files=$(clickhouse_unreadable_files)
+    if [[ -n "$files" ]]; then
+        group=$(clickhouse_server_group)
+        echo "" >&2
+        echo "  Error: ClickHouse does not start while its user cannot read these files:" >&2
+        sed 's/^/    /' <<<"$files" >&2
+        echo "" >&2
+        echo "  Fix each file, then run the guide again:" >&2
+        if [[ -n "$group" ]]; then
+            echo "    chown root:${group} FILE && chmod 640 FILE" >&2
+        else
+            echo "    chmod 644 FILE" >&2
+        fi
+        return 1
+    fi
+}
+
+# clickhouse_file_install_cmd prints the command that puts a file into ClickHouse's
+# config.d or users.d. ClickHouse reads them as its own user, and it refuses to
+# start, or to reload users, while one of them is unreadable. The guide's temp
+# files are 0600, so a plain cp as root carries that over. With no group to give
+# the file to, it has to be world-readable.
+clickhouse_file_install_cmd() {
+    local group
+    group=$(clickhouse_server_group)
+    if [[ -z "$group" ]] && getent group clickhouse &>/dev/null; then
+        group="clickhouse"
+    fi
+    if [[ -n "$group" ]]; then
+        echo "install -m 640 -o root -g ${group}"
+    else
+        echo "install -m 644 -o root -g root"
+    fi
+}
+
+# install_secret_file SOURCE copies SOURCE to SECRET_FILE, for click-dog's user alone.
+install_secret_file() {
+    cp "$1" "$SECRET_FILE"
+    chown click-dog:click-dog "$SECRET_FILE"
+    chmod 600 "$SECRET_FILE"
+}
+
+# restart_click_dog returns 0 when the service is still up two seconds after a
+# restart. A service that fails at startup can report active at first.
+restart_click_dog() {
+    systemctl restart click-dog || true
+    sleep 2
+    systemctl is-active click-dog >/dev/null 2>&1
+}
 
 render_click_dog_config() {
     local out_path="$1"
@@ -606,20 +789,35 @@ render_click_dog_config_via_docker() {
     # Only an explicit choice: unset leaves init to apply the loopback rule.
     [[ -n "$OTEL_SECURE" ]]               && args+=( "--otel-secure=$OTEL_SECURE" )
     [[ -n "$KEEPER_HOSTS" ]]              && args+=( --ha-keeper "$KEEPER_HOSTS" )
+    # init's messages name the container path, so show them with the host's.
+    local render_output render_rc=0
+    render_output=$(secure_temp_file "click-dog-render")
     docker_run_mounted write \
         -v "${out_dir}:/work" \
         "ghcr.io/coltconsulting/click-dog:${VERSION}" \
-        init "${args[@]}"
+        init "${args[@]}" > "$render_output" || render_rc=$?
+    # awk, because a # or & in the path means something to sed.
+    OUT_DIR="${out_dir}/" awk '{
+        line = $0
+        out = ""
+        while ((pos = index(line, "/work/")) > 0) {
+            out = out substr(line, 1, pos - 1) ENVIRON["OUT_DIR"]
+            line = substr(line, pos + 6)
+        }
+        print out line
+    }' "$render_output"
+    rm -f "$render_output"
+    return "$render_rc"
 }
 
 # Validate an existing on-disk click-dog.yaml against the target image,
-# mirroring do_update's pre-swap validation (the `--validate` block above
+# mirroring do_update's pre-swap validation (the `validate` block above
 # the local binary mv). Run as a pre-flight before the k8s/docker update
 # paths rewrite any deployment file, so we never leave a manifest pointing
 # at an image the config can't start under. Mounts the file read-only where
 # docker-compose.yml mounts it, as the image's own user, so a config the
 # service could not read fails here too. The image entrypoint is
-# `click-dog`, so `--validate --config` is passed directly.
+# `click-dog`, so `validate --config` is passed directly.
 #
 # Validation reads every TLS file a secure connection names, but those files
 # live where the deployment mounts them (a Kubernetes Secret or ConfigMap, a
@@ -647,7 +845,7 @@ validate_config_via_docker() {
         -v "${cfg_dir}/${cfg_file}:/etc/click-dog/click-dog.yaml:ro" \
         ${tls_mounts[@]+"${tls_mounts[@]}"} \
         "ghcr.io/coltconsulting/click-dog:${VERSION}" \
-        --validate --config /etc/click-dog/click-dog.yaml || rc=$?
+        validate --config /etc/click-dog/click-dog.yaml || rc=$?
     [[ -n "$stub" ]] && rm -f "$stub"
     return "$rc"
 }
@@ -1407,8 +1605,6 @@ verify_installed_otel_ca() {
 }
 
 # ── Generate systemd unit ──────────────────────────────────────
-# ExecStart keeps the one-dash -config: the guided Update diffs installed
-# units against this text, and any change reads as an operator customization.
 generate_systemd_unit() {
     cat <<UNIT
 [Unit]
@@ -1423,7 +1619,7 @@ StartLimitBurst=5
 Type=simple
 User=click-dog
 Group=click-dog
-ExecStart=/usr/local/bin/click-dog -config /etc/click-dog/click-dog.yaml
+ExecStart=/usr/local/bin/click-dog --config /etc/click-dog/click-dog.yaml
 Restart=on-failure
 RestartSec=5
 
@@ -1837,7 +2033,7 @@ resolve_version() {
             # "$0 $*" produced an invalid `install.sh no-fallback --prerelease`.
             echo "Error: no published click-dog stable release found (HTTP 404)." >&2
             echo "  A generated manifest is long-lived, so it is never switched to the" >&2
-            echo "  pre-release channel implicitly. Re-run your command with one of:" >&2
+            echo "  pre-release channel implicitly. Re-run the command with one of:" >&2
             echo "    --prerelease   use the newest public beta" >&2
             echo "    -v VERSION     pin an exact version" >&2
             exit 1
@@ -2038,7 +2234,7 @@ resolve_binary() {
         echo "Error: could not fetch release metadata for v${VERSION}." >&2
         if [[ -z "$(github_token)" ]]; then
             echo "  Check network access, GitHub API rate limits, and that the tag exists." >&2
-            echo "  You may set GITHUB_TOKEN/GH_TOKEN or pass -b /path/to/click-dog." >&2
+            echo "  Set GITHUB_TOKEN/GH_TOKEN, or pass -b /path/to/click-dog." >&2
         else
             echo "  Check the token has read access and that the tag v${VERSION} exists." >&2
         fi
@@ -2133,8 +2329,8 @@ resolve_binary() {
 # quickstart_exit_cleanup — the guided install's EXIT handler: its config,
 # secret and unit temp files, a pinned CA's temp copy, the ClickHouse setup
 # files (which hold the monitoring user's password hash), and an
-# auto-downloaded binary. A run that ends by telling the operator to use the
-# setup files empties clickhouse_setup_tempfiles first.
+# auto-downloaded binary. A run that ends by telling the operator to run the setup
+# SQL keeps that file and removes the rest first.
 quickstart_exit_cleanup() {
     rm -f "${CONFIG_TMPFILE:-}" "${SECRET_TMPFILE:-}" "${UNIT_TMPFILE:-}" "${OTEL_CA_PIN_TMP:-}"
     if [[ -n "${clickhouse_setup_tempfiles[*]:-}" ]]; then
@@ -2254,15 +2450,14 @@ do_install() {
         install_otel_ca_cert
     fi
     cp "$CONFIG_TMPFILE" /etc/click-dog/click-dog.yaml
-    cp "$ENV_TMPFILE"    /etc/click-dog/.secret
-    chown click-dog:click-dog /etc/click-dog/click-dog.yaml /etc/click-dog/.secret
+    chown click-dog:click-dog /etc/click-dog/click-dog.yaml
     chmod 640 /etc/click-dog/click-dog.yaml
-    chmod 600 /etc/click-dog/.secret
+    install_secret_file "$ENV_TMPFILE"
 
     # Step 7: validate config against staged binary
-    if ! "$staged_binary" --validate --config /etc/click-dog/click-dog.yaml >/dev/null 2>&1; then
+    if ! "$staged_binary" validate --config /etc/click-dog/click-dog.yaml >/dev/null 2>&1; then
         echo "ERROR: config validation failed" >&2
-        "$staged_binary" --validate --config /etc/click-dog/click-dog.yaml >&2 || true
+        "$staged_binary" validate --config /etc/click-dog/click-dog.yaml >&2 || true
         rm -f /etc/click-dog/click-dog.yaml /etc/click-dog/.secret
         [[ -n "$OTEL_CA_CERT" ]] && restore_otel_ca_backup
         rm -rf "$install_stage"
@@ -2343,9 +2538,9 @@ do_update() {
     # Validate existing config against staged binary before swapping.
     # Catches the case where the new binary tightens validation and the
     # on-disk config would no longer load.
-    if ! "$staged_binary" --validate --config /etc/click-dog/click-dog.yaml >/dev/null 2>&1; then
+    if ! "$staged_binary" validate --config /etc/click-dog/click-dog.yaml >/dev/null 2>&1; then
         echo "ERROR: existing config does not validate against new binary" >&2
-        "$staged_binary" --validate --config /etc/click-dog/click-dog.yaml >&2 || true
+        "$staged_binary" validate --config /etc/click-dog/click-dog.yaml >&2 || true
         echo "Re-render via 'click-dog init' or fix the config, then re-run update." >&2
         rm -rf "$update_stage"
         update_stage=""
@@ -2353,14 +2548,25 @@ do_update() {
     fi
 
     # Swap binary, restart
+    local was_active="false"
+    systemctl is-active click-dog >/dev/null 2>&1 && was_active="true"
     [[ -f /usr/local/bin/click-dog ]] && cp /usr/local/bin/click-dog /usr/local/bin/click-dog.prev
     mv "$staged_binary" /usr/local/bin/click-dog
     chmod 755 /usr/local/bin/click-dog
     rmdir "$update_stage"
     update_stage=""
-    systemctl restart click-dog
-    sleep 2
-    systemctl is-active click-dog >/dev/null
+    if [[ "$was_active" != "true" ]]; then
+        print_release_verification_summary
+        echo "Update complete. click-dog was not running, so it stays stopped."
+        echo "Start it with: systemctl start click-dog"
+        return 0
+    fi
+    if ! restart_click_dog; then
+        echo "Error: the update installed the new binary, but click-dog is not running." >&2
+        echo "  Check its log: journalctl -u click-dog -n 50" >&2
+        echo "  The prior binary is /usr/local/bin/click-dog.prev." >&2
+        exit 1
+    fi
 
     print_release_verification_summary
     echo "Update complete."
@@ -2535,8 +2741,7 @@ do_kubernetes_update() {
 
     echo "Kubernetes update complete. Review changes and apply with: kubectl apply -k $out_dir/"
     echo "  Note: update only bumps the Deployment image tag (deployment.yaml.bak is the"
-    echo "  backup). If this directory predates dedicated health probes, regenerate"
-    echo "  manifests to pick up the health port plus /healthz and /readyz probes."
+    echo "  backup)."
 }
 
 # ── DOCKER — generate docker-compose.yml + config ──────────────
@@ -2547,8 +2752,6 @@ do_docker() {
         do_docker_update "$out_dir"
         return
     fi
-
-    command -v envsubst >/dev/null || { echo "Error: envsubst (gettext) is required for docker mode" >&2; exit 1; }
 
     [[ -z "$COLLECTOR_ADDRESS" ]] && { echo "Error: -c collector address is required for docker"; usage; }
     # A manifest outlives this run: never switch it onto the prerelease
@@ -2570,9 +2773,39 @@ do_docker() {
     resolve_password
 
     mkdir -p "$out_dir"
+    local abs_out_dir
+    abs_out_dir=$(cd "$out_dir" && pwd)
 
-    export VERSION
-    render_template "docker/docker-compose.yml.tmpl" '$VERSION' > "$out_dir/docker-compose.yml"
+    # docker-compose.yml, .env, and .gitignore come from `click-dog deploy docker`
+    # in the image, the same generator do_kubernetes runs, so a downloaded
+    # install.sh needs no files beside it. Its own messages name /work. It also
+    # requires a transport for a collector off loopback and writes a
+    # click-dog.yaml, which `click-dog init` replaces below. A first run removes
+    # that draft, so init does not report replacing an existing file.
+    #
+    # Password flows through the env (read by `deploy docker`), never argv.
+    export CLICKHOUSE_PASSWORD
+    local had_config="false"
+    if [[ -e "$out_dir/click-dog.yaml" ]]; then
+        had_config="true"
+    fi
+    local gen_rc=0
+    docker_run_mounted write \
+        -e CLICKHOUSE_PASSWORD \
+        -v "${abs_out_dir}:/work" \
+        "ghcr.io/coltconsulting/click-dog:${VERSION}" \
+        deploy docker \
+        -c "$COLLECTOR_ADDRESS" \
+        -u "$CLICKHOUSE_USER" \
+        -v "$VERSION" \
+        -o /work \
+        "--otel-secure=$OTEL_USES_TLS" > /dev/null || gen_rc=$?
+    if [[ "$gen_rc" -ne 0 ]]; then
+        exit "$gen_rc"
+    fi
+    if [[ "$had_config" != "true" ]]; then
+        rm -f "$out_dir/click-dog.yaml"
+    fi
 
     # click-dog.yaml — rendered by `click-dog init` inside the image (see
     # render_click_dog_config_via_docker for why this path can't use a
@@ -2581,23 +2814,12 @@ do_docker() {
     render_click_dog_config_via_docker "$out_dir/click-dog.yaml"
     # `init` writes 0600, but the compose service reads this file as the
     # image's own user, not the invoker who now owns it. It holds no secret
-    # (the password comes from .env), and `click-dog deploy docker` writes it
-    # 0644 too.
+    # (the password comes from .env).
     chmod 644 "$out_dir/click-dog.yaml"
 
-    # .env — Docker Compose format: escape \, $, and # per Compose v2 spec
-    local safe_pw="$CLICKHOUSE_PASSWORD"
-    safe_pw="${safe_pw//\\/\\\\}"
-    safe_pw="${safe_pw//\$/\\\$}"
-    safe_pw="${safe_pw//#/\\#}"
-    # Made private before the password goes in, new or pre-existing.
-    : > "$out_dir/.env"
-    chmod 600 "$out_dir/.env"
-    printf "CLICKHOUSE_PASSWORD=%s\n" "$safe_pw" > "$out_dir/.env"
-
-    render_template "docker/gitignore.tmpl" > "$out_dir/.gitignore"
-
     echo "Docker files generated in $out_dir/"
+    echo "  click-dog.yaml connects to ClickHouse at localhost:9440 over TLS. Edit its"
+    echo "  clickhouse section for another server or a plaintext port."
     echo "  WARNING: .env contains credentials — do not commit to version control"
     echo "  Start with: cd $out_dir && docker compose up -d"
 }
@@ -2757,9 +2979,10 @@ verify_span_log_via_sql() {
             echo "    ${SPAN_LOG_RECENT_SQL}"
             ;;
         missing)
-            echo "  WARNING: system.opentelemetry_span_log does NOT exist after setup."
-            echo "  The filesystem config did not take effect — click-dog will have no"
-            echo "  data to export. Verify manually with:"
+            echo "  WARNING: system.opentelemetry_span_log does NOT exist yet, or this user cannot"
+            echo "  see it. ClickHouse creates it when it records its first span, so this is normal"
+            echo "  until a traced query has run. If it stays missing, check the span-log config and"
+            echo "  this user's GRANT: click-dog has no data to export until then. Verify with:"
             echo "    ${SPAN_LOG_EXISTS_SQL}"
             echo "    ${SPAN_LOG_RECENT_SQL}"
             echo ""
@@ -2767,8 +2990,8 @@ verify_span_log_via_sql() {
             echo "    click-dog check"
             ;;
         no_client)
-            echo "  Could not verify span logging via SQL (no clickhouse-client or"
-            echo "  credentials available). Confirm it manually by running:"
+            echo "  Could not verify span logging via SQL: clickhouse-client is missing, or it"
+            echo "  could not connect with these credentials. Confirm it manually by running:"
             print_span_log_manual_sql
             ;;
     esac
@@ -2776,59 +2999,50 @@ verify_span_log_via_sql() {
     echo "$state"
 }
 
-# _span_log_client_has_auth CLIENT_CMD
-#
-# Pure predicate: does the client command already carry user/password auth
-# flags? Kept separate so install_test.sh can exercise it without a client.
-# Returns 0 (true) when -u / --user / --password is present.
-_span_log_client_has_auth() {
-    case " $1 " in
-        *" -u "*|*" --user"*|*" --password"*) return 0 ;;
+# Warn when a wrapper in -C would drop what the guide sends through it: the
+# password in CLICKHOUSE_PASSWORD, forwarded by name so it stays out of host process
+# arguments, and the SQL on stdin.
+# _wrapper_drops_password CLIENT returns 0 when CLIENT starts with a wrapper that
+# does not forward CLICKHOUSE_PASSWORD.
+_wrapper_drops_password() {
+    local wrapper="${1%% *}"
+    wrapper="${wrapper##*/}"
+    case "$wrapper" in
+        docker|podman|nerdctl|kubectl|oc|sudo|doas|ssh) ;;
         *) return 1 ;;
     esac
+    case " $1 " in
+        *" -e CLICKHOUSE_PASSWORD "*|*" --env CLICKHOUSE_PASSWORD "*|*" --env=CLICKHOUSE_PASSWORD "*|*" -E "*|*" --preserve-env"*) return 1 ;;
+    esac
 }
 
-# Warn when a docker-exec wrapper would drop a command-scoped password at the
-# container boundary. `docker exec -e CLICKHOUSE_PASSWORD` copies the value
-# from this process's environment without putting the secret itself in argv.
 _warn_clickhouse_client_password_forwarding() {
-    case " $1 " in
-        *" docker exec "*) ;;
-        *) return 0 ;;
+    local wrapper="${1%% *}"
+    wrapper="${wrapper##*/}"
+    if _wrapper_drops_password "$1"; then
+        echo "  WARNING: -C uses ${wrapper} without forwarding CLICKHOUSE_PASSWORD, so password" >&2
+        echo "           checks fail. For Docker: docker exec -i -e CLICKHOUSE_PASSWORD ... clickhouse-client" >&2
+    fi
+    case "$wrapper" in
+        docker|podman|nerdctl)
+            case " $1 " in
+                *" -i "*|*" -it "*|*" -ti "*|*" --interactive "*) ;;
+                *) echo "  WARNING: -C uses ${wrapper} without -i, so SQL cannot reach the client." >&2 ;;
+            esac
+            ;;
     esac
-    case " $1 " in
-        *" -e CLICKHOUSE_PASSWORD "*|*" --env CLICKHOUSE_PASSWORD "*|*" --env=CLICKHOUSE_PASSWORD "*) return 0 ;;
-    esac
-    echo "  WARNING: -C uses docker exec without forwarding CLICKHOUSE_PASSWORD." >&2
-    echo "           Add: docker exec -e CLICKHOUSE_PASSWORD ... clickhouse-client" >&2
 }
 
-# Default query runner: invoke $CLICKHOUSE_CLIENT for the SQL string. Word-split
-# $CLICKHOUSE_CLIENT intentionally (it may carry host/port/auth flags).
-#
-# Auth is deliberately conservative because this verification runs in quickstart
-# BEFORE the monitoring user is created and BEFORE a password is generated:
-#   1. Operator supplied auth via -C ("clickhouse-client -u admin --password
-#      ..."): use it verbatim — appending our own -u would duplicate the flag.
-#   2. A password already exists (CLICKHOUSE_PASSWORD env, the
-#      "use existing credentials" path): authenticate as that user — it exists.
-#   3. Default quickstart (no -C auth, no password yet): run the client as-is so
-#      it uses its own default auth. We must NOT append -u "$CLICKHOUSE_USER"
-#      here — the monitoring user does not exist yet, so probing as it would
-#      fail and drop a working single-node install to the no_client fallback,
-#      skipping the SQL verification this path exists to provide.
+# Default query runner for the span-log check. With a password in hand it connects
+# as the monitoring user, so the check proves what click-dog itself can read. With
+# none, it uses the client's own auth.
 _span_log_default_runner() {
     local sql="$1"
-    if _span_log_client_has_auth "$CLICKHOUSE_CLIENT"; then
-        # shellcheck disable=SC2086
-        $CLICKHOUSE_CLIENT -q "$sql"
-        return
-    fi
     if [[ -n "${CLICKHOUSE_PASSWORD:-}" ]]; then
         # clickhouse-client reads CLICKHOUSE_PASSWORD natively. Supplying it
         # only in the child environment keeps the secret out of /proc/*/cmdline.
-        # shellcheck disable=SC2086
-        CLICKHOUSE_PASSWORD="$CLICKHOUSE_PASSWORD" $CLICKHOUSE_CLIENT -u "$CLICKHOUSE_USER" -q "$sql"
+        set_client_connection
+        CLICKHOUSE_PASSWORD="$CLICKHOUSE_PASSWORD" "${CLIENT_CONNECTION[@]}" -u "$CLICKHOUSE_USER" -q "$sql"
         return
     fi
     # shellcheck disable=SC2086
@@ -2884,7 +3098,9 @@ EOSQL
 # Emit the users.d XML overlay on stdout. ClickHouse treats users.d entries
 # declaratively; this defines an explicit readonly=2 profile, assigns it to the
 # user, and grants only the two required tables. The built-in `readonly` profile
-# is readonly=1 and does not match click-dog's session contract.
+# is readonly=1 and does not match click-dog's session contract. A grant here
+# names no grantee: ClickHouse refuses `TO user` in a config file, and the refusal
+# fails the whole users config, so the server will not start with it.
 generate_user_setup_xml() {
     local user="$1" hash="$2"
     cat <<USERXML
@@ -2900,8 +3116,8 @@ generate_user_setup_xml() {
             <profile>click_dog_readonly</profile>
             <quota>default</quota>
             <grants>
-                <query>GRANT SELECT ON system.opentelemetry_span_log TO ${user}</query>
-                <query>GRANT SELECT ON system.query_log TO ${user}</query>
+                <query>GRANT SELECT ON system.opentelemetry_span_log</query>
+                <query>GRANT SELECT ON system.query_log</query>
             </grants>
         </${user}>
     </users>
@@ -2954,9 +3170,9 @@ do_quickstart() {
     echo "Exports ClickHouse query traces to Datadog, Honeycomb, or any"
     echo "OTEL-compatible backend. Runs as a lightweight systemd sidecar."
     echo ""
-    echo "The only ClickHouse change is creating a read-only user for"
-    echo "reading span data. You review the SQL first and choose whether"
-    echo "to run it yourself or let this script run it for you."
+    echo "The guide asks before it changes ClickHouse. It adds a read-only"
+    echo "user and can turn on span logging, which restarts ClickHouse."
+    echo "It shows the SQL first, and can run the SQL or leave it for later."
     echo ""
     echo "For manual install or multi-node deploy, see:"
     echo "  https://click-dog.com/install/"
@@ -3009,7 +3225,11 @@ do_quickstart() {
         fi
         echo ""
         echo "  [u] Update — replace binary, keep existing config and credentials"
-        echo "  [r] Reinstall — overwrite config and service; keep existing credentials"
+        if [[ -n "$CLICKHOUSE_PASSWORD" ]]; then
+            echo "  [r] Reinstall — overwrite config and service; CLICKHOUSE_PASSWORD replaces the saved password"
+        else
+            echo "  [r] Reinstall — overwrite config and service; keep existing credentials"
+        fi
         echo "  [q] Quit"
         echo ""
         while true; do
@@ -3041,9 +3261,9 @@ do_quickstart() {
                             exit 1
                         fi
                     fi
-                    if [[ -f /etc/click-dog/click-dog.yaml ]] && ! "$staged_binary" --validate --config /etc/click-dog/click-dog.yaml >/dev/null 2>&1; then
+                    if [[ -f /etc/click-dog/click-dog.yaml ]] && ! "$staged_binary" validate --config /etc/click-dog/click-dog.yaml >/dev/null 2>&1; then
                         echo "  Error: existing config does not validate against new binary" >&2
-                        "$staged_binary" --validate --config /etc/click-dog/click-dog.yaml >&2 || true
+                        "$staged_binary" validate --config /etc/click-dog/click-dog.yaml >&2 || true
                         echo "  Fix /etc/click-dog/click-dog.yaml, then re-run update." >&2
                         rm -f "$staged_binary"
                         exit 1
@@ -3065,7 +3285,7 @@ do_quickstart() {
                         systemctl daemon-reload
                     elif ! diff -q "$unit_tmp" /etc/systemd/system/click-dog.service >/dev/null 2>&1; then
                         echo "  [3/3] Systemd unit differs — keeping existing (customizations preserved)."
-                        echo "        Choose Reinstall if you want the latest default unit."
+                        echo "        Reinstall writes the latest default unit."
                     else
                         echo "  [3/3] Systemd unit unchanged."
                     fi
@@ -3074,24 +3294,17 @@ do_quickstart() {
                     # Only restart if the service was previously running.
                     # Don't resurrect a stopped/disabled service.
                     echo ""
+                    local update_ok="true"
                     if [[ "$existing_was_active" == "true" ]]; then
                         echo "  Restarting service..."
-                        systemctl restart click-dog
-                        # Poll for up to 5 seconds instead of a fixed sleep
-                        local waited=0
-                        while (( waited < 10 )); do
-                            if systemctl is-active click-dog >/dev/null 2>&1; then
-                                break
-                            fi
-                            sleep 0.5
-                            waited=$((waited + 1))
-                        done
-                        if systemctl is-active click-dog >/dev/null 2>&1; then
+                        if restart_click_dog; then
                             echo "  Updated: ${existing_version:-unknown} → ${new_version:-unknown}"
                             echo "  click-dog is running."
                         else
+                            update_ok="false"
                             echo "  Binary updated but service did not start."
                             echo "  Check logs: journalctl -u click-dog -f"
+                            echo "  The prior binary is /usr/local/bin/click-dog.prev."
                         fi
                     else
                         echo "  Updated: ${existing_version:-unknown} → ${new_version:-unknown}"
@@ -3100,13 +3313,18 @@ do_quickstart() {
                     fi
                     print_release_verification_summary "  "
                     echo ""
+                    [[ "$update_ok" == "true" ]] || exit 1
                     return
                     ;;
                 [rR])
                     echo ""
                     echo "  Proceeding with reinstall — config and service will be rewritten."
-                    echo "  Existing credentials in /etc/click-dog/.secret are kept so the"
-                    echo "  ClickHouse user keeps authenticating; delete that file first to rotate."
+                    if [[ -n "$CLICKHOUSE_PASSWORD" ]]; then
+                        echo "  CLICKHOUSE_PASSWORD replaces the password in /etc/click-dog/.secret."
+                    else
+                        echo "  Existing credentials in /etc/click-dog/.secret are kept so the"
+                        echo "  ClickHouse user keeps authenticating; delete that file first to rotate."
+                    fi
                     break
                     ;;
                 [qQ])
@@ -3124,14 +3342,14 @@ do_quickstart() {
     echo "Steps:"
     echo ""
     echo "  1. ClickHouse      — enable span logging, create a read-only user"
-    echo "                       (SELECT only; you review the SQL), then verify"
+    echo "                       (SELECT only; the SQL shows first), then verify"
     echo "                       spans are readable as that user"
     echo "  2. OTEL collector  — confirm where to send traces, and whether"
     echo "                       over TLS"
     echo "  3. Install         — download binary to /usr/local/bin/click-dog,"
     echo "                       configure in /etc/click-dog/, start systemd service"
     echo ""
-    echo "Nothing is installed until step 3. All steps require confirmation."
+    echo "Step 1 can change ClickHouse. Step 3 installs click-dog. Each change asks first."
     echo ""
     read -rp "Press Enter to begin..."
 
@@ -3144,6 +3362,14 @@ do_quickstart() {
     echo "════════════════════════════════════════════════════════════"
     echo "  Step 1/3 — ClickHouse"
     echo "════════════════════════════════════════════════════════════"
+
+    # A later restart of ClickHouse depends on these files.
+    check_clickhouse_files || exit 1
+    # Step 3 writes CLICKHOUSE_PASSWORD to .secret, so check it before [w] can
+    # restart ClickHouse.
+    if [[ -n "$CLICKHOUSE_PASSWORD" ]]; then
+        check_monitor_password_from_env || exit 1
+    fi
 
     # Check OTEL span logging — config file check, no auth needed
     echo ""
@@ -3209,20 +3435,22 @@ OTELXML
                     if [[ ! -d "$ch_config_dir" ]]; then
                         echo "  ${ch_config_dir} not found."
                         echo "  Copy manually:"
-                        echo "    cp ${otel_cfg_file} /etc/clickhouse-server/config.d/opentelemetry.${otel_cfg_ext}"
+                        echo "    $(clickhouse_file_install_cmd) ${otel_cfg_file} /etc/clickhouse-server/config.d/opentelemetry.${otel_cfg_ext}"
                         echo ""
                         read -rp "  Press Enter once done..."
                     else
                         echo ""
                         echo "  Writing to ${ch_config_dir}/opentelemetry.${otel_cfg_ext}..."
-                        cp "$otel_cfg_file" "${ch_config_dir}/opentelemetry.${otel_cfg_ext}"
+                        # shellcheck disable=SC2046 # the command's words
+                        $(clickhouse_file_install_cmd) "$otel_cfg_file" "${ch_config_dir}/opentelemetry.${otel_cfg_ext}"
                         echo -n "  Restarting ClickHouse... "
                         if systemctl restart clickhouse-server 2>/dev/null; then
                             sleep 3
                             echo "done"
                         else
                             echo "FAILED"
-                            echo "  Restart clickhouse-server manually."
+                            echo "  Restart clickhouse-server manually. If it will not start, remove"
+                            echo "  ${ch_config_dir}/opentelemetry.${otel_cfg_ext} and check its log."
                             echo ""
                             read -rp "  Press Enter once done..."
                         fi
@@ -3233,7 +3461,7 @@ OTELXML
                 [mM])
                     echo ""
                     echo "  Config saved to: ${otel_cfg_file}"
-                    echo "    cp ${otel_cfg_file} /etc/clickhouse-server/config.d/opentelemetry.${otel_cfg_ext}"
+                    echo "    $(clickhouse_file_install_cmd) ${otel_cfg_file} /etc/clickhouse-server/config.d/opentelemetry.${otel_cfg_ext}"
                     echo "    systemctl restart clickhouse-server"
                     echo ""
                     read -rp "  Press Enter once done..."
@@ -3295,323 +3523,14 @@ OTELXML
         echo ""
         echo "  Using existing credentials (user: ${CLICKHOUSE_USER}, password from env)"
         echo "  Skipping ClickHouse user setup."
-        if ! _span_log_client_has_auth "$CLICKHOUSE_CLIENT"; then
-            _warn_clickhouse_client_password_forwarding "$CLICKHOUSE_CLIENT"
-        fi
-    else
-        local mon_pass=""
-        local reusing_password="false"
-        # Tracks whether the operator explicitly confirmed a password reset;
-        # consumed only for messaging — the ALTER is gated at the prompt below.
-        local AUTH_RESET_CONFIRMED="false"
-        # Reuse existing password on re-runs so it stays in sync with ClickHouse.
-        # The secret file holds the raw password (read by click-dog via
-        # clickhouse.password_file); $(cat) strips any trailing newline.
-        if [[ -f "$SECRET_FILE" ]]; then
-            mon_pass=$(cat "$SECRET_FILE")
-            if [[ -n "$mon_pass" ]]; then
-                reusing_password="true"
-            fi
-        fi
-        if [[ -z "$mon_pass" ]]; then
-            mon_pass=$(generate_password)
-            [[ ${#mon_pass} -ge 16 ]] || { echo "Error: failed to generate password"; exit 1; }
-        fi
-        CLICKHOUSE_PASSWORD="$mon_pass"
         _warn_clickhouse_client_password_forwarding "$CLICKHOUSE_CLIENT"
-
-        # Generate SHA256 hash (used by both SQL and XML user config)
-        local pass_hash=""
-        if command -v sha256sum &>/dev/null; then
-            pass_hash=$(printf '%s' "$mon_pass" | sha256sum | awk '{print $1}')
-        elif command -v shasum &>/dev/null; then
-            pass_hash=$(printf '%s' "$mon_pass" | shasum -a 256 | awk '{print $1}')
-        fi
-
-        # Idempotent setup SQL — CREATE USER IF NOT EXISTS, never OR REPLACE.
-        # The password-mutating ALTER lives in a SEPARATE bundle so we never
-        # reset an existing user's credentials without explicit confirmation.
-        local setup_sql
-        setup_sql=$(secure_temp_file "click-dog-setup")
-        generate_user_setup_sql "$CLICKHOUSE_USER" "$pass_hash" > "$setup_sql"
-
-        local alter_sql
-        alter_sql=$(secure_temp_file "click-dog-alter-user")
-        generate_user_alter_sql "$CLICKHOUSE_USER" "$pass_hash" > "$alter_sql"
-
-        local verify_sql
-        verify_sql=$(secure_temp_file "click-dog-verify")
-        generate_user_verify_sql "$CLICKHOUSE_USER" > "$verify_sql"
-
-        # Write XML user config file (declarative users.d overlay).
-        local user_xml
-        user_xml=$(secure_temp_file "click-dog-user")
-        generate_user_setup_xml "$CLICKHOUSE_USER" "$pass_hash" > "$user_xml"
-        clickhouse_setup_tempfiles+=("$setup_sql" "$alter_sql" "$verify_sql" "$user_xml")
-
-        echo ""
-        # ── Probe the existing user before touching anything ─────────────
-        # We never assume access. When clickhouse-client is available we
-        # discover three facts: does the user authenticate with our password,
-        # and (if so) can it actually read the two system tables click-dog
-        # needs. The auth-mismatch decision is then made by a pure helper so
-        # we can never silently reset credentials.
-        local user_can_auth="false"
-        local probed="false"
-        if command -v ${CLICKHOUSE_CLIENT%% *} &>/dev/null; then
-            probed="true"
-            # Use clickhouse-client's password environment variable so the
-            # generated credential is never exposed in the process argv. A
-            # docker-exec -C wrapper must forward it with `-e CLICKHOUSE_PASSWORD`.
-            if CLICKHOUSE_PASSWORD="$mon_pass" $CLICKHOUSE_CLIENT -u "$CLICKHOUSE_USER" -q "SELECT 1" &>/dev/null; then
-                user_can_auth="true"
-            fi
-        fi
-
-        # We can't list users with our read-only probe, so treat a stored
-        # password (re-run) as evidence the user already exists. Fresh installs
-        # with no .secret are the "create" case. The pure decision helper turns
-        # (exists, can_auth) into create | ok | prompt.
-        local user_exists="$reusing_password"
-        local auth_decision
-        auth_decision=$(user_auth_mismatch_decision "$user_exists" "$user_can_auth")
-        # Without a working client we can't probe at all — fall back to the
-        # safe non-mutating create/grant flow rather than prompting blindly.
-        if [[ "$probed" != "true" ]]; then
-            auth_decision="create"
-        fi
-
-        if [[ "$auth_decision" == "ok" ]]; then
-            # User authenticates. Verify it can read BOTH required tables
-            # instead of assuming SELECT 1 implies access.
-            if CLICKHOUSE_PASSWORD="$mon_pass" $CLICKHOUSE_CLIENT -u "$CLICKHOUSE_USER" --multiquery < "$verify_sql" &>/dev/null; then
-                echo "  Existing ClickHouse user '${CLICKHOUSE_USER}' authenticates and can read"
-                echo "  system.opentelemetry_span_log and system.query_log — nothing to do."
-                echo "  Password: /etc/click-dog/.secret"
-                sql_choice="s"
-            else
-                echo "  ClickHouse user '${CLICKHOUSE_USER}' authenticates but is MISSING SELECT on"
-                echo "  one of the required system tables. The setup SQL only ADDS the two"
-                echo "  GRANTs click-dog needs (it never replaces the user)."
-            fi
-        elif [[ "$auth_decision" == "prompt" ]]; then
-            # We have a stored password but the user won't authenticate with
-            # it — the user exists with DIFFERENT credentials (or doesn't
-            # exist yet). Either way we must PROMPT before mutating auth.
-            # CREATE USER IF NOT EXISTS won't fix a wrong password, so offer
-            # an explicit, confirmed ALTER.
-            echo "  ClickHouse user '${CLICKHOUSE_USER}' did NOT authenticate with the password"
-            echo "  stored in /etc/click-dog/.secret. If the user already exists with a"
-            echo "  different password, click-dog cannot connect until they match."
-            echo ""
-            echo "  Resetting the password ALTERs the existing user's auth method. This is the"
-            echo "  ONLY change that mutates an existing account — it is not done automatically."
-            echo ""
-            local reset_choice=""
-            while true; do
-                read -rp "  Reset '${CLICKHOUSE_USER}' password to match /etc/click-dog/.secret? [y/n] " reset_choice
-                case "$reset_choice" in
-                    [yY])
-                        echo ""
-                        echo "  Will run (after you choose [r] below):"
-                        echo "  ──────────────────────────────────────────────────────"
-                        cat "$alter_sql"
-                        echo "  ──────────────────────────────────────────────────────"
-                        # Fold the confirmed ALTER into the setup bundle so the
-                        # [r] (run-SQL) path resets the password. Without this
-                        # explicit confirmation the ALTER is never emitted. (The
-                        # [x] XML path sets password_sha256_hex declaratively, so
-                        # it always reflects the saved secret on its own.)
-                        cat "$alter_sql" >> "$setup_sql"
-                        AUTH_RESET_CONFIRMED="true"
-                        break
-                        ;;
-                    [nN])
-                        echo "  Leaving '${CLICKHOUSE_USER}' credentials unchanged."
-                        echo "  The setup SQL below only creates the user if absent and adds grants."
-                        break
-                        ;;
-                    *) echo "  Please enter y or n." ;;
-                esac
-            done
-            echo ""
-        fi
-
-        if [[ "${sql_choice:-}" != "s" ]]; then
-        if [[ "$reusing_password" == "true" ]]; then
-            echo "  Reusing password from /etc/click-dog/.secret"
-            echo "  (the ClickHouse user must use the same password to connect)"
-        else
-            echo "  This sets up a read-only ClickHouse user '${CLICKHOUSE_USER}':"
-            echo "    • CREATE USER IF NOT EXISTS — an existing user of this name is left"
-            echo "      untouched; its auth, profile, quota, settings, and grants are preserved."
-            echo "    • GRANT SELECT on system.opentelemetry_span_log and system.query_log"
-            echo "      (additive — these are the only privileges click-dog requires)."
-            echo ""
-            echo "  The same password will be set in ClickHouse and saved to"
-            echo "  /etc/click-dog/.secret — both sides must match for click-dog to connect."
-            echo ""
-            echo "  To change it later, update both: the ClickHouse user password and"
-            echo "  /etc/click-dog/.secret, then restart click-dog."
-        fi
-        echo ""
-        # Always print the full SQL bundle so security-conscious operators can
-        # review or run it by hand instead of via clickhouse-client.
-        echo "  Manual SQL (review before running anywhere):"
-        echo "  ──────────────────────────────────────────────────────"
-        cat "$setup_sql"
-        echo "  ──────────────────────────────────────────────────────"
-        echo "  Saved to: ${setup_sql}"
-        echo "  Run with: ${CLICKHOUSE_CLIENT} --multiquery < ${setup_sql}"
-        echo ""
-        # The [x] XML overlay carries <password_sha256_hex>, so for an EXISTING
-        # user it declaratively resets credentials. In the auth-mismatch case
-        # where the operator DECLINED the reset, offering [x] would undo that
-        # choice (the clobber this change removes) — so drop it, leaving [r]
-        # (additive grants, no password change) and [s].
-        local offer_xml="true" menu_choices="x/r/s"
-        if [[ "$auth_decision" == "prompt" && "$AUTH_RESET_CONFIRMED" != "true" ]]; then
-            offer_xml="false"
-            menu_choices="r/s"
-        fi
-        if [[ "$offer_xml" == "true" ]]; then
-            echo "  [x] Write XML config (no clickhouse-client needed)"
-        fi
-        echo "  [r] Run SQL via clickhouse-client (will prompt for command if needed)"
-        echo "  [s] Skip — set up the '${CLICKHOUSE_USER}' user yourself"
-        if [[ "$offer_xml" != "true" ]]; then
-            echo ""
-            echo "  ([x] Write XML config is omitted here: its users.d overlay would"
-            echo "   reset '${CLICKHOUSE_USER}'s password, which you chose not to change.)"
-        fi
-        echo ""
-        while true; do
-            read -rp "  Choice [${menu_choices}]: " sql_choice
-            case "$sql_choice" in
-                [xX])
-                    if [[ "$offer_xml" != "true" ]]; then
-                        echo "  [x] is unavailable here — it would reset the password you"
-                        echo "  declined to change. Choose [r] (adds grants only) or [s]."
-                        continue
-                    fi
-                    echo ""
-                    local ch_users_dir="/etc/clickhouse-server/users.d"
-                    local ch_users_file="${ch_users_dir}/click-dog-${CLICKHOUSE_USER}.xml"
-                    if [[ -d "$ch_users_dir" ]]; then
-                        cp "$user_xml" "$ch_users_file"
-                        echo "  Written to: ${ch_users_file}"
-                        echo "  ClickHouse will pick this up automatically."
-                    else
-                        echo "  ${ch_users_dir} not found."
-                        echo ""
-                        echo "  Copy this file manually:"
-                        echo "    cp ${user_xml} /etc/clickhouse-server/users.d/click-dog-${CLICKHOUSE_USER}.xml"
-                        echo ""
-                        read -rp "  Press Enter once done..."
-                    fi
-                    break
-                    ;;
-                [rR])
-                    echo ""
-                    if ! command -v ${CLICKHOUSE_CLIENT%% *} &>/dev/null; then
-                        echo "  ${CLICKHOUSE_CLIENT%% *} not found."
-                        echo ""
-                        read -rp "  clickhouse-client command [${CLICKHOUSE_CLIENT}]: " user_client
-                        [[ -n "$user_client" ]] && CLICKHOUSE_CLIENT="$user_client"
-                        if ! command -v ${CLICKHOUSE_CLIENT%% *} &>/dev/null; then
-                            echo ""
-                            echo "  Still not found. SQL saved to: ${setup_sql}"
-                            echo "  ──────────────────────────────────────────────────────"
-                            cat "$setup_sql"
-                            echo "  ──────────────────────────────────────────────────────"
-                            echo ""
-                            echo "  Run with: ${CLICKHOUSE_CLIENT} --multiquery < ${setup_sql}"
-                            echo ""
-                            read -rp "  Press Enter once done..."
-                            break
-                        fi
-                    fi
-                    echo "  Running setup SQL..."
-                    if $CLICKHOUSE_CLIENT --multiquery < "$setup_sql" >/dev/null 2>&1; then
-                        echo "  Done."
-                        break
-                    fi
-                    # The bare client failed — almost always because the admin
-                    # user needs a host/port/password the installer doesn't have.
-                    # Re-prompting for the client PATH (the old behavior) can't
-                    # fix that, so collect admin connection details and retry with
-                    # explicit flags. These are used only to run the setup SQL and
-                    # are never written to disk.
-                    echo "  Could not connect with '${CLICKHOUSE_CLIENT}' — the admin user"
-                    echo "  likely needs a host/port/password. Enter connection details to"
-                    echo "  retry (used only to run this SQL; not saved)."
-                    echo ""
-                    local run_ok="false" attempt
-                    for attempt in 1 2; do
-                        local ch_addr ch_admin ch_admin_pass
-                        read -rp "  ClickHouse host[:port] [${CLICKHOUSE_HOST:-localhost}]: " ch_addr
-                        ch_addr="${ch_addr:-${CLICKHOUSE_HOST:-localhost}}"
-                        read -rp "  Admin user [default]: " ch_admin
-                        ch_admin="${ch_admin:-default}"
-                        read -rsp "  Admin password (blank if none): " ch_admin_pass
-                        echo ""
-                        # Base the retry on the FULL $CLICKHOUSE_CLIENT (word-split,
-                        # like the rest of the script) so flags the operator passed
-                        # via -C survive — "docker exec ... clickhouse-client",
-                        # --secure, --config-file, etc. Using only the first word
-                        # dropped them and stranded exactly the non-default installs
-                        # this path exists to rescue. Appended --host/--port/-u
-                        # override any stale values (clickhouse-client takes the last).
-                        # NOTE: IPv6 literals like [::1]:9000 aren't parsed (the
-                        # host:port split is naive) — use a hostname/IPv4, or put the
-                        # full connection in -C.
-                        # shellcheck disable=SC2206
-                        local -a admin_cli=($CLICKHOUSE_CLIENT --host "${ch_addr%%:*}")
-                        [[ "$ch_addr" == *:* ]] && admin_cli+=(--port "${ch_addr##*:}")
-                        admin_cli+=(-u "$ch_admin")
-                        echo "  Retrying as '${ch_admin}' on '${ch_addr}' (attempt ${attempt}/2)..."
-                        # Password via CLICKHOUSE_PASSWORD env (command-scoped) so it
-                        # never appears in ps / /proc/<pid>/cmdline. Empty = no
-                        # password. A "docker exec" -C wrapper must include
-                        # `-e CLICKHOUSE_PASSWORD` to copy this command-scoped value
-                        # into the container without exposing it in host argv.
-                        if CLICKHOUSE_PASSWORD="$ch_admin_pass" "${admin_cli[@]}" --multiquery < "$setup_sql" >/dev/null 2>&1; then
-                            echo "  Done."
-                            run_ok="true"
-                            break
-                        fi
-                        echo "  Still could not connect."
-                    done
-                    [[ "$run_ok" == "true" ]] && break
-                    echo ""
-                    echo "  Run the SQL manually:"
-                    echo "  ──────────────────────────────────────────────────────"
-                    cat "$setup_sql"
-                    echo "  ──────────────────────────────────────────────────────"
-                    echo ""
-                    echo "  Saved to: ${setup_sql}"
-                    echo "  Run with: CLICKHOUSE_PASSWORD=... clickhouse-client --host HOST -u ADMIN --multiquery < ${setup_sql}"
-                    echo ""
-                    read -rp "  Press Enter once done..."
-                    break
-                    ;;
-                [sS])
-                    echo "  Skipped."
-                    break
-                    ;;
-                *)
-                    echo "  Please enter x, r, or s."
-                    ;;
-            esac
-        done
-        fi  # sql_choice != s (user not already verified)
+    else
+        setup_monitoring_user
     fi
 
-    # Runtime verification — now that the monitoring user exists, confirm span
-    # logging THROUGH ClickHouse as the user click-dog will actually connect as.
-    # verify_span_log_via_sql authenticates with CLICKHOUSE_USER + the password
-    # we just set (via _span_log_default_runner), so this proves the real export
-    # path can read spans — not just that some config file mentions span logging.
+    # Confirm span logging through ClickHouse as the user click-dog connects as.
+    # verify_span_log_via_sql authenticates with CLICKHOUSE_USER and the password
+    # (via _span_log_default_runner), so this proves the export path can read spans.
     # We don't hard-fail (the operator may be enabling it elsewhere, or set the
     # user up by hand); a missing/empty table is surfaced loudly and deferred to
     # `click-dog check`. If the user couldn't be created, the probe falls back to
@@ -3668,7 +3587,7 @@ OTELXML
         echo "FAILED"
         echo ""
         echo "  Cannot reach ${COLLECTOR_ADDRESS}."
-        echo "  Is your OTEL collector / Datadog Agent running?"
+        echo "  Check that the OTEL collector or Datadog Agent is running."
         echo ""
         while true; do
             read -rp "  Continue anyway? [y/n] " col_confirm
@@ -3769,30 +3688,34 @@ OTELXML
     # Back up existing config files before overwriting so we can restore on failure
     local config_backed_up="false"
     if [[ -f /etc/click-dog/click-dog.yaml ]]; then
-        cp /etc/click-dog/click-dog.yaml /etc/click-dog/click-dog.yaml.bak
+        cp -p /etc/click-dog/click-dog.yaml /etc/click-dog/click-dog.yaml.bak
         config_backed_up="true"
     fi
     if [[ -f /etc/click-dog/.secret ]]; then
-        cp /etc/click-dog/.secret /etc/click-dog/.secret.bak
+        cp -p /etc/click-dog/.secret /etc/click-dog/.secret.bak
     fi
 
     cp "$CONFIG_TMPFILE" /etc/click-dog/click-dog.yaml
-    cp "$SECRET_TMPFILE" /etc/click-dog/.secret
-    chown click-dog:click-dog /etc/click-dog/click-dog.yaml /etc/click-dog/.secret
+    chown click-dog:click-dog /etc/click-dog/click-dog.yaml
     chmod 640 /etc/click-dog/click-dog.yaml
-    chmod 600 /etc/click-dog/.secret
+    install_secret_file "$SECRET_TMPFILE"
 
     # Validate — restore backups on failure
-    if ! "$BINARY" --validate --config /etc/click-dog/click-dog.yaml >/dev/null 2>&1; then
+    if ! "$BINARY" validate --config /etc/click-dog/click-dog.yaml >/dev/null 2>&1; then
         echo "  Error: config validation failed" >&2
-        "$BINARY" --validate --config /etc/click-dog/click-dog.yaml >&2 || true
+        "$BINARY" validate --config /etc/click-dog/click-dog.yaml >&2 || true
         # Restore previous config if we had one, otherwise clean up
         if [[ "$config_backed_up" == "true" ]]; then
             echo "  Restoring previous config..." >&2
             mv /etc/click-dog/click-dog.yaml.bak /etc/click-dog/click-dog.yaml 2>/dev/null || true
-            mv /etc/click-dog/.secret.bak /etc/click-dog/.secret 2>/dev/null || true
         else
-            rm -f /etc/click-dog/click-dog.yaml /etc/click-dog/.secret
+            rm -f /etc/click-dog/click-dog.yaml
+        fi
+        # Step 1 may have saved a password ClickHouse now holds.
+        if [[ -f /etc/click-dog/.secret.bak ]]; then
+            mv /etc/click-dog/.secret.bak /etc/click-dog/.secret
+        else
+            rm -f /etc/click-dog/.secret
         fi
         restore_otel_ca_backup
         exit 1
@@ -3820,13 +3743,13 @@ OTELXML
 
     # Start
     echo "  [4/4] Starting click-dog..."
-    systemctl restart click-dog
-    sleep 2
+    local service_up="false"
+    restart_click_dog && service_up="true"
 
     # ═══ Done ══════════════════════════════════════════════════
     echo ""
     echo "════════════════════════════════════════════════════════════"
-    if systemctl is-active click-dog >/dev/null 2>&1; then
+    if [[ "$service_up" == "true" ]]; then
         if ((${#clickhouse_setup_tempfiles[@]} > 0)); then
             rm -f "${clickhouse_setup_tempfiles[@]}"
         fi
@@ -3857,22 +3780,33 @@ OTELXML
         echo "    Full reference: ${docs_url}/configuration/${v}"
         echo "    Datadog guide: ${docs_url}/integrations/datadog/${v}"
     else
-        # The steps below point at the setup files; keep them past exit.
+        # The steps below name the setup SQL. Keep it past exit, and only it: these
+        # files hold the password hash.
+        local temp_file
+        if ((${#clickhouse_setup_tempfiles[@]} > 0)); then
+            for temp_file in "${clickhouse_setup_tempfiles[@]}"; do
+                if [[ "$temp_file" != "${MONITOR_SETUP_SQL:-}" ]]; then
+                    rm -f "$temp_file"
+                fi
+            done
+        fi
         clickhouse_setup_tempfiles=()
         systemctl stop click-dog 2>/dev/null || true
         echo "  Installed, but not yet running."
         echo "════════════════════════════════════════════════════════════"
         echo ""
-        echo "  We tried starting the service as a courtesy but it needs"
-        echo "  a working ClickHouse user first. Most likely the"
-        echo "  '${CLICKHOUSE_USER}' user hasn't been created yet."
+        echo "  click-dog did not start. It needs a working ClickHouse user, most"
+        echo "  likely '${CLICKHOUSE_USER}'."
         echo ""
         echo "  To finish setup:"
-        echo "    1. Create the ClickHouse user (if not done already):"
-        if [[ -n "${setup_sql:-}" ]]; then
-            echo "       ${CLICKHOUSE_CLIENT} -u admin --multiquery < ${setup_sql}"
+        if [[ "${MONITOR_PASSWORD_KEPT:-}" == "true" ]]; then
+            echo "    1. Write the password of '${CLICKHOUSE_USER}' to /etc/click-dog/.secret."
+        elif [[ -n "${MONITOR_SETUP_SQL:-}" ]]; then
+            echo "    1. Create the ClickHouse user, if it does not exist, as an administrator:"
+            echo "       clickhouse-client --multiquery < ${MONITOR_SETUP_SQL}"
         else
-            echo "       Create/grant the '${CLICKHOUSE_USER}' user in ClickHouse using your admin workflow."
+            echo "    1. Check that '${CLICKHOUSE_USER}' logs in with the password in /etc/click-dog/.secret"
+            echo "       and can read system.opentelemetry_span_log and system.query_log."
         fi
         echo "    2. Start the service:"
         echo "       systemctl restart click-dog"
@@ -3881,6 +3815,927 @@ OTELXML
         echo "  Logs:    journalctl -u click-dog -f"
     fi
     echo ""
+}
+
+# ── Monitoring user ────────────────────────────────────────────
+# The guided install's ClickHouse user setup. A password saved in .secret shows
+# the user exists, but its absence shows nothing: `click-dog deploy uninstall`
+# deletes the file and leaves the user.
+
+# guide_read VARIABLE PROMPT reads one answer. A closed stdin stops the guide,
+# because a menu that retried it would never end.
+guide_read() {
+    if ! read -rp "$2" "$1"; then
+        echo "" >&2
+        echo "  Error: stdin closed before an answer." >&2
+        exit 1
+    fi
+}
+
+# guide_read_secret VARIABLE PROMPT reads a password exactly as typed, unechoed.
+guide_read_secret() {
+    if ! IFS= read -rsp "$2" "$1"; then
+        echo "" >&2
+        echo "  Error: stdin closed before an answer." >&2
+        exit 1
+    fi
+    echo ""
+}
+
+guide_pause() {
+    # shellcheck disable=SC2034 # guide_read sets it, and nothing reads it
+    local pause_answer
+    guide_read pause_answer "  Press Enter once done..."
+}
+
+# add_client_words WORD... adds to both client connections.
+add_client_words() {
+    CLIENT_CONNECTION+=("$@")
+    CLIENT_CONNECTION_NO_CONFIG+=("$@")
+}
+
+# add_client_host REPLACEMENT HOST WORD... adds -C's host flag, unless a replacement
+# host takes its place, and notes when it names another server.
+add_client_host() {
+    local replacement="$1" host="$2"
+    shift 2
+    if [[ -n "$replacement" ]]; then
+        return 0
+    fi
+    case "$host" in
+        localhost|127.0.0.1|::1) ;;
+        *) CLIENT_IS_LOCAL="false" ;;
+    esac
+    add_client_words "$@"
+}
+
+# set_client_connection [HOST [PORT]] sets CLIENT_CONNECTION to $CLICKHOUSE_CLIENT
+# with no user or password of its own, for connecting as a chosen user:
+# clickhouse-client refuses a repeated --user. HOST and PORT replace any in -C,
+# because the client uses the first --host it sees. Words before the client belong
+# to a wrapper and stay.
+#
+# CLIENT_CONNECTION_NO_CONFIG is the same connection without -C's config flags. A
+# password in the client's config beats CLICKHOUSE_PASSWORD, so a refused login
+# tries once more that way: see monitor_user_authenticates.
+set_client_connection() {
+    local host="${1:-}" port="${2:-}" words word base i start=0
+    # shellcheck disable=SC2206 # split like every other use of the variable
+    words=($CLICKHOUSE_CLIENT)
+    for ((i = 0; i < ${#words[@]}; i++)); do
+        base="${words[i]##*/}"
+        if [[ "$base" == "clickhouse-client" || ("$base" == "clickhouse" && "${words[i + 1]:-}" == "client") ]]; then
+            start=$i
+            break
+        fi
+    done
+    CLIENT_CONNECTION=("${words[@]:0:$((start + 1))}")
+    CLIENT_CONNECTION_NO_CONFIG=("${CLIENT_CONNECTION[@]}")
+    CLIENT_IS_LOCAL="true"
+    if ((start > 0)); then
+        CLIENT_IS_LOCAL="false"
+    fi
+    i=$((start + 1))
+    while ((i < ${#words[@]})); do
+        word="${words[i]}"
+        i=$((i + 1))
+        case "$word" in
+            -u|--user) i=$((i + 1)) ;;
+            --password)
+                # With no value, --password makes the client prompt.
+                if [[ "${words[i]:-}" != -* ]]; then
+                    i=$((i + 1))
+                fi
+                ;;
+            -u*|--user=*|--password=*|--ask-password) ;;
+            -c|-C|--config|--config-file)
+                CLIENT_CONNECTION+=("$word" "${words[i]:-}")
+                i=$((i + 1))
+                ;;
+            -c*|-C*|--config=*|--config-file=*) CLIENT_CONNECTION+=("$word") ;;
+            --connection)
+                CLIENT_IS_LOCAL="false"
+                CLIENT_CONNECTION+=("$word" "${words[i]:-}")
+                i=$((i + 1))
+                ;;
+            --connection=*)
+                CLIENT_IS_LOCAL="false"
+                CLIENT_CONNECTION+=("$word")
+                ;;
+            -h|--host)
+                add_client_host "$host" "${words[i]:-}" "$word" "${words[i]:-}"
+                i=$((i + 1))
+                ;;
+            --host=*) add_client_host "$host" "${word#--host=}" "$word" ;;
+            -h*) add_client_host "$host" "${word#-h}" "$word" ;;
+            --port)
+                if [[ -z "$port" ]]; then
+                    add_client_words "$word" "${words[i]:-}"
+                fi
+                i=$((i + 1))
+                ;;
+            --port=*)
+                if [[ -z "$port" ]]; then
+                    add_client_words "$word"
+                fi
+                ;;
+            *) add_client_words "$word" ;;
+        esac
+    done
+    if [[ -n "$host" ]]; then
+        add_client_host "" "$host" --host "$host"
+    fi
+    if [[ -n "$port" ]]; then
+        add_client_words --port "$port"
+    fi
+    if [[ "${CLIENT_USES_EMPTY_CONFIG:-}" == "true" && "$CLIENT_IS_LOCAL" == "true" ]]; then
+        CLIENT_CONNECTION=("${CLIENT_CONNECTION_NO_CONFIG[@]}" --config-file "$CLIENT_EMPTY_CONFIG")
+    fi
+}
+
+# make_client_empty_config sets CLIENT_EMPTY_CONFIG to a private config file with
+# nothing in it.
+make_client_empty_config() {
+    if [[ -n "${CLIENT_EMPTY_CONFIG:-}" ]]; then
+        return 0
+    fi
+    local file
+    file=$(secure_temp_file "click-dog-client-config")
+    # clickhouse-client picks the parser from the extension.
+    mv "$file" "${file}.xml"
+    echo "<config></config>" > "${file}.xml"
+    clickhouse_setup_tempfiles+=("${file}.xml")
+    CLIENT_EMPTY_CONFIG="${file}.xml"
+}
+
+# monitor_user_login PASSWORD CONNECTION_WORD...
+#
+# The password stays in the child's environment, out of the process list. A
+# wrapper in -C must forward it: `docker exec -i -e CLICKHOUSE_PASSWORD`.
+monitor_user_login() {
+    local password="$1"
+    shift
+    CLICKHOUSE_PASSWORD="$password" "$@" -u "$CLICKHOUSE_USER" -q "SELECT 1" &>/dev/null
+}
+
+# monitor_user_authenticates PASSWORD returns 0 when the monitoring user logs in on
+# CLIENT_CONNECTION, 1 when ClickHouse refuses the password, and 2 when the client
+# gets no answer. After a refusal, a client that reaches this host tries once with
+# an empty config, and keeps using it if that works. That login can drop the
+# config's TLS, so it stays on this host.
+monitor_user_authenticates() {
+    local rc=0
+    monitor_user_login "$1" "${CLIENT_CONNECTION[@]}" || rc=$?
+    case "$rc" in
+        0) return 0 ;;
+        "$CLICKHOUSE_CLIENT_AUTH_FAILED") ;;
+        *) return 2 ;;
+    esac
+    if [[ "$CLIENT_IS_LOCAL" == "true" && "${CLIENT_USES_EMPTY_CONFIG:-}" != "true" ]]; then
+        make_client_empty_config
+        if monitor_user_login "$1" "${CLIENT_CONNECTION_NO_CONFIG[@]}" --config-file "$CLIENT_EMPTY_CONFIG"; then
+            CLIENT_USES_EMPTY_CONFIG="true"
+            CLIENT_CONNECTION=("${CLIENT_CONNECTION_NO_CONFIG[@]}" --config-file "$CLIENT_EMPTY_CONFIG")
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# monitor_user_xml_file prints the first config file, other than the guide's own,
+# that names the monitoring user. A profile or quota can share the name, so this
+# counts only when ClickHouse cannot answer, or to say where a user it reports is.
+monitor_user_xml_file() {
+    local file dir="${CLICKHOUSE_USERS_DIR%/*}"
+    while IFS= read -r file; do
+        if [[ "$file" != "${CLICKHOUSE_USERS_DIR}/click-dog-${CLICKHOUSE_USER}.xml" ]] \
+            && grep -Eqs "<${CLICKHOUSE_USER}[[:space:]>]|^[[:space:]]*[\"']?${CLICKHOUSE_USER}[\"']?:" "$file"; then
+            echo "$file"
+            return 0
+        fi
+    done < <(
+        printf '%s\n' "$dir/users.xml" "$dir/users.yaml" "$dir/users.yml"
+        clickhouse_loaded_files "$CLICKHOUSE_USERS_DIR" "$dir/conf.d"
+    )
+}
+
+# monitoring_user_server_state prints where the user is defined, ignoring the
+# guide's own users.d file:
+#   xml      XML config
+#   sql      SQL-managed: ALTER USER works
+#   absent   no such user
+#   unknown  the client could not read system.users
+monitoring_user_server_state() {
+    local storages
+    # The type, because an operator can rename the storage itself.
+    # shellcheck disable=SC2086
+    if storages=$($CLICKHOUSE_CLIENT --param_monitor_user="$CLICKHOUSE_USER" \
+        -q "SELECT d.type FROM system.users AS u INNER JOIN system.user_directories AS d ON u.storage = d.name WHERE u.name = {monitor_user:String}" 2>/dev/null); then
+        # The same name can be in both storages. The XML definition wins.
+        case "$storages" in
+            "") echo "absent" ;;
+            *users_xml*) echo "xml" ;;
+            *) echo "sql" ;;
+        esac
+    elif [[ -n "$(monitor_user_xml_file)" ]]; then
+        echo "xml"
+    else
+        echo "unknown"
+    fi
+}
+
+# monitoring_user_state adds the guide's own users.d file to the server's answer:
+#   overlay     the file defines the user. ClickHouse loaded it, or cannot say
+#   not_loaded  the file exists on the server this client reaches, and ClickHouse
+#               still does not report the user from XML after polling users.d
+#   xml         another file defines the user. The guide cannot change it: a
+#               second definition stops ClickHouse at its next start
+monitoring_user_state() {
+    local state polls=0
+    state=$(monitoring_user_server_state)
+    if [[ ! -f "${CLICKHOUSE_USERS_DIR}/click-dog-${CLICKHOUSE_USER}.xml" || "$CLIENT_IS_LOCAL" != "true" ]]; then
+        echo "$state"
+        return 0
+    fi
+    while [[ "$state" != "xml" && "$state" != "unknown" ]] && ((polls < 8)); do
+        sleep 1
+        state=$(monitoring_user_server_state)
+        polls=$((polls + 1))
+    done
+    case "$state" in
+        xml|unknown) echo "overlay" ;;
+        *) echo "not_loaded" ;;
+    esac
+}
+
+# offer_to_delete_monitor_user_file FILE asks about a file [x] just wrote.
+offer_to_delete_monitor_user_file() {
+    local answer
+    echo "  ClickHouse does not start with a users.d file it cannot load."
+    while true; do
+        guide_read answer "  Delete $1? [y/n]: "
+        case "$answer" in
+            [yY]*)
+                rm -f "$1"
+                echo "  Deleted."
+                return 0
+                ;;
+            [nN]*)
+                echo "  Kept. Fix or delete it before ClickHouse next restarts."
+                return 0
+                ;;
+            *) echo "  Please enter y or n." ;;
+        esac
+    done
+}
+
+# print_xml_user_note says what to do about a user another file defines.
+print_xml_user_note() {
+    local file
+    file=$(monitor_user_xml_file)
+    echo "  ${file:-The ClickHouse XML config} defines '${CLICKHOUSE_USER}'."
+    echo "  The guide leaves that file alone: a second definition of this user stops"
+    echo "  ClickHouse at its next start. To use this user, add these lines to its"
+    echo "  definition there:"
+    echo "    <grants>"
+    echo "        <query>GRANT SELECT ON system.opentelemetry_span_log</query>"
+    echo "        <query>GRANT SELECT ON system.query_log</query>"
+    echo "    </grants>"
+}
+
+# monitor_password_hash PASSWORD — the SHA-256 both the SQL and the XML carry.
+monitor_password_hash() {
+    if command -v sha256sum &>/dev/null; then
+        printf '%s' "$1" | sha256sum | awk '{print $1}'
+    elif command -v shasum &>/dev/null; then
+        printf '%s' "$1" | shasum -a 256 | awk '{print $1}'
+    fi
+}
+
+# write_monitor_user_files PASSWORD SETUP_SQL ALTER_SQL USER_XML
+write_monitor_user_files() {
+    local hash
+    hash=$(monitor_password_hash "$1")
+    generate_user_setup_sql "$CLICKHOUSE_USER" "$hash" > "$2"
+    generate_user_alter_sql "$CLICKHOUSE_USER" "$hash" > "$3"
+    generate_user_setup_xml "$CLICKHOUSE_USER" "$hash" > "$4"
+}
+
+# save_monitor_password PASSWORD keeps the password the guide just set in
+# ClickHouse, so stopping before step 3 does not lose it. On a first install the
+# service user does not exist yet, and step 3 sets the owner.
+save_monitor_password() {
+    mkdir -p "${SECRET_FILE%/*}"
+    (umask 077 && printf '%s' "$1" > "$SECRET_FILE")
+    chown click-dog:click-dog "$SECRET_FILE" 2>/dev/null || true
+    chmod 600 "$SECRET_FILE"
+    echo "  Password saved to ${SECRET_FILE}."
+}
+
+# prompt_existing_monitor_user ALLOW_NEW
+#
+# The user exists and does not authenticate with the password in hand, which
+# CREATE USER IF NOT EXISTS cannot fix. Sets MONITOR_USER_CHOICE to entered, new,
+# or keep; "entered" leaves a password that authenticated in
+# MONITOR_USER_PASSWORD. ALLOW_NEW is false when the guide cannot change the user.
+prompt_existing_monitor_user() {
+    local allow_new="$1" choices="e/k" choice entered
+    MONITOR_USER_CHOICE="keep"
+    MONITOR_USER_PASSWORD=""
+    echo "  [e] Enter its current password"
+    if [[ "$allow_new" == "true" ]]; then
+        choices="e/n/k"
+        echo "  [n] Set a new password and save it in /etc/click-dog/.secret. Anything else"
+        echo "      using the current password stops working."
+    fi
+    echo "  [k] Keep it unchanged and fix the password by hand"
+    echo ""
+    while true; do
+        guide_read choice "  Choice [${choices}]: "
+        case "$choice" in
+            [eE])
+                guide_read_secret entered "  Current password for '${CLICKHOUSE_USER}': "
+                if [[ -n "$entered" ]] && monitor_user_authenticates "$entered"; then
+                    echo "  It authenticates."
+                    MONITOR_USER_CHOICE="entered"
+                    MONITOR_USER_PASSWORD="$entered"
+                    return 0
+                fi
+                echo "  That password did not authenticate."
+                ;;
+            [nN])
+                if [[ "$allow_new" == "true" ]]; then
+                    MONITOR_USER_CHOICE="new"
+                    return 0
+                fi
+                echo "  Please enter one of ${choices}."
+                ;;
+            [kK]) return 0 ;;
+            *) echo "  Please enter one of ${choices}." ;;
+        esac
+    done
+}
+
+print_monitor_password_kept_note() {
+    echo "  Leaving '${CLICKHOUSE_USER}' unchanged. click-dog cannot connect until"
+    echo "  /etc/click-dog/.secret holds this user's password: after the install, write it"
+    echo "  there and restart click-dog."
+}
+
+# check_monitor_password_from_env settles the connection the span-log check uses,
+# and returns 1 when ClickHouse refuses CLICKHOUSE_PASSWORD: step 3 would replace a
+# working password with it.
+check_monitor_password_from_env() {
+    local rc=0
+    set_client_connection
+    monitor_user_authenticates "$CLICKHOUSE_PASSWORD" || rc=$?
+    if ((rc == 1)) && ! _wrapper_drops_password "$CLICKHOUSE_CLIENT"; then
+        echo "" >&2
+        echo "  Error: ClickHouse refused user '${CLICKHOUSE_USER}' with CLICKHOUSE_PASSWORD." >&2
+        echo "  A password in the client's config beats CLICKHOUSE_PASSWORD, so check that" >&2
+        echo "  config too." >&2
+        echo "  /etc/click-dog/.secret is unchanged. Set the correct password, or unset" >&2
+        echo "  CLICKHOUSE_PASSWORD so the guide sets up the user, then run the guide again." >&2
+        return 1
+    fi
+}
+
+# run_sql_file FILE CONNECTION_WORD... sends FILE on stdin and checks that a last
+# statement came back. A wrapper without stdin (docker exec with no -i) runs
+# nothing and exits 0.
+SQL_NOT_RUN_MESSAGE="The SQL did not reach the client. A wrapper must pass stdin, as docker exec -i does."
+# clickhouse-client's exit status when the server refuses a login.
+CLICKHOUSE_CLIENT_AUTH_FAILED=4
+run_sql_file() {
+    local file="$1" output
+    shift
+    output=$("$@" --multiquery < <(cat "$file"; echo "SELECT 'click-dog-sql-ran';")) || return
+    if [[ "$output" != *click-dog-sql-ran* ]]; then
+        echo "$SQL_NOT_RUN_MESSAGE" >&2
+        return 1
+    fi
+}
+
+# run_setup_sql FILE runs FILE on the connection in SQL_ADMIN_CLIENT, as the
+# admin. SQL_ADMIN_PASSWORD is unset when the client carries its own auth.
+run_setup_sql() {
+    if [[ -n "${SQL_ADMIN_PASSWORD+set}" ]]; then
+        CLICKHOUSE_PASSWORD="$SQL_ADMIN_PASSWORD" run_sql_file "$1" "${SQL_ADMIN_CLIENT[@]}"
+    else
+        run_sql_file "$1" "${SQL_ADMIN_CLIENT[@]}"
+    fi
+}
+
+# wait_for_monitor_user PASSWORD
+#
+# ClickHouse polls users.d, so an overlay takes effect a few seconds after it is
+# written.
+wait_for_monitor_user() {
+    local attempt
+    for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+        if monitor_user_authenticates "$1"; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+# generate_monitor_password prints a new password, or fails when it cannot make one.
+generate_monitor_password() {
+    local password
+    password=$(generate_password)
+    if ((${#password} < 16)); then
+        echo "Error: failed to generate password" >&2
+        return 1
+    fi
+    printf '%s' "$password"
+}
+
+# setup_monitoring_user creates or adopts the read-only ClickHouse user and
+# leaves its password in CLICKHOUSE_PASSWORD for the rest of the guide.
+setup_monitoring_user() {
+    local mon_pass="" password_source="generated" sql_choice="" kept_pass="" kept_source=""
+    # Whether the operator confirmed a new password for an existing user.
+    local AUTH_RESET_CONFIRMED="false"
+    # Whether ClickHouse now holds, or the operator is told to give it, mon_pass.
+    local password_applied="false"
+    # Reuse existing password on re-runs so it stays in sync with ClickHouse.
+    # The secret file holds the raw password (read by click-dog via
+    # clickhouse.password_file); $(cat) strips any trailing newline.
+    if [[ -f "$SECRET_FILE" ]]; then
+        mon_pass=$(cat "$SECRET_FILE")
+        if [[ -n "$mon_pass" ]]; then
+            password_source="secret"
+        fi
+    fi
+    if [[ -z "$mon_pass" ]]; then
+        mon_pass=$(generate_monitor_password) || exit 1
+    fi
+    CLICKHOUSE_PASSWORD="$mon_pass"
+    _warn_clickhouse_client_password_forwarding "$CLICKHOUSE_CLIENT"
+
+    # Idempotent setup SQL: CREATE USER IF NOT EXISTS, never OR REPLACE. The
+    # ALTER that changes a password is a separate file, used only after the
+    # operator confirms it.
+    local setup_sql alter_sql verify_sql user_xml
+    setup_sql=$(secure_temp_file "click-dog-setup")
+    alter_sql=$(secure_temp_file "click-dog-alter-user")
+    verify_sql=$(secure_temp_file "click-dog-verify")
+    user_xml=$(secure_temp_file "click-dog-user")
+    clickhouse_setup_tempfiles+=("$setup_sql" "$alter_sql" "$verify_sql" "$user_xml")
+    MONITOR_SETUP_SQL="$setup_sql"
+    write_monitor_user_files "$mon_pass" "$setup_sql" "$alter_sql" "$user_xml"
+    generate_user_verify_sql "$CLICKHOUSE_USER" > "$verify_sql"
+
+    echo ""
+    # ── Probe the existing user before touching anything ─────────────
+    # With clickhouse-client the guide learns three things: whether the user
+    # exists, whether it authenticates with this password, and whether it can
+    # read the two system tables. user_auth_mismatch_decision then decides.
+    set_client_connection
+    local user_can_auth="false" probed="false"
+    # shellcheck disable=SC2086
+    if command -v ${CLICKHOUSE_CLIENT%% *} &>/dev/null; then
+        local auth_rc=0
+        monitor_user_authenticates "$mon_pass" || auth_rc=$?
+        case "$auth_rc" in
+            0)
+                probed="true"
+                user_can_auth="true"
+                ;;
+            1) probed="true" ;;
+            *)
+                echo "  The ClickHouse client could not connect, so the guide cannot check '${CLICKHOUSE_USER}'."
+                echo "  Check that ClickHouse is running and that -C reaches it."
+                echo ""
+                ;;
+        esac
+    fi
+
+    local ch_users_file="${CLICKHOUSE_USERS_DIR}/click-dog-${CLICKHOUSE_USER}.xml"
+    local user_state user_exists="false"
+    user_state=$(monitoring_user_state)
+    if [[ "$user_state" == "not_loaded" ]]; then
+        echo "  WARNING: ClickHouse does not report '${CLICKHOUSE_USER}' from ${ch_users_file}."
+        echo "  ClickHouse does not start with a users.d file it cannot load. Check that file and"
+        echo "  the ClickHouse server log before ClickHouse next restarts."
+        echo ""
+        user_state=$(monitoring_user_server_state)
+    fi
+    # SQL cannot change a user defined in XML, so no later step may offer it.
+    if [[ "$user_state" == "overlay" || "$user_state" == "xml" ]]; then
+        MONITOR_SETUP_SQL=""
+    fi
+
+    # ClickHouse answers when this client may read system.users. Otherwise a
+    # stored password is the only evidence, and a user may exist that nothing
+    # here knows about: [r] checks after its SQL runs, and [x] asks first.
+    if [[ "$password_source" == "secret" ]]; then
+        user_exists="true"
+    fi
+    case "$user_state" in
+        overlay|xml|sql) user_exists="true" ;;
+        absent) user_exists="false" ;;
+    esac
+    local auth_decision
+    auth_decision=$(user_auth_mismatch_decision "$user_exists" "$user_can_auth")
+    # With no client there is nothing to ask: offer the create/grant flow.
+    if [[ "$probed" != "true" ]]; then
+        auth_decision="create"
+    fi
+
+    if [[ "$auth_decision" == "prompt" ]]; then
+        if [[ "$password_source" == "secret" ]]; then
+            echo "  ClickHouse user '${CLICKHOUSE_USER}' did NOT authenticate with the password"
+            echo "  stored in /etc/click-dog/.secret."
+            if [[ "$CLIENT_IS_LOCAL" != "true" ]]; then
+                echo "  A password in the client's config beats the saved one, so the saved"
+                echo "  password can be right. Check that config before choosing [n]."
+            fi
+        else
+            echo "  ClickHouse user '${CLICKHOUSE_USER}' already exists, and this host has no"
+            echo "  saved password for it. 'click-dog deploy uninstall' removes"
+            echo "  /etc/click-dog/.secret and leaves the ClickHouse user."
+        fi
+        local allow_new="true"
+        if [[ "$user_state" == "xml" ]]; then
+            allow_new="false"
+            local xml_file
+            xml_file=$(monitor_user_xml_file)
+            echo "  ${xml_file:-The ClickHouse XML config} defines it, so the guide cannot set a new password."
+        fi
+        echo ""
+        prompt_existing_monitor_user "$allow_new"
+        case "$MONITOR_USER_CHOICE" in
+            entered)
+                mon_pass="$MONITOR_USER_PASSWORD"
+                CLICKHOUSE_PASSWORD="$mon_pass"
+                password_source="entered"
+                write_monitor_user_files "$mon_pass" "$setup_sql" "$alter_sql" "$user_xml"
+                auth_decision="ok"
+                ;;
+            new)
+                # [s] puts these back: the new password reaches ClickHouse only
+                # through [x] or [r].
+                kept_pass="$mon_pass"
+                kept_source="$password_source"
+                mon_pass=$(generate_monitor_password) || exit 1
+                CLICKHOUSE_PASSWORD="$mon_pass"
+                password_source="generated"
+                write_monitor_user_files "$mon_pass" "$setup_sql" "$alter_sql" "$user_xml"
+                echo ""
+                if [[ "$user_state" == "overlay" ]]; then
+                    echo "  [x] below writes the new password to ${ch_users_file}."
+                else
+                    echo "  [r] below runs:"
+                    echo "  ──────────────────────────────────────────────────────"
+                    cat "$alter_sql"
+                    echo "  ──────────────────────────────────────────────────────"
+                    cat "$alter_sql" >> "$setup_sql"
+                fi
+                AUTH_RESET_CONFIRMED="true"
+                ;;
+            keep)
+                print_monitor_password_kept_note
+                MONITOR_PASSWORD_KEPT="true"
+                MONITOR_SETUP_SQL=""
+                # Nothing is left to run: SQL cannot change an XML user, and the
+                # overlay would replace the password just kept.
+                if [[ "$user_state" == "overlay" || "$user_state" == "xml" ]]; then
+                    sql_choice="s"
+                fi
+                ;;
+        esac
+        echo ""
+    fi
+
+    if [[ "$auth_decision" == "ok" ]]; then
+        # SELECT 1 says nothing about the two tables, so read them.
+        local verify_err=""
+        if verify_err=$(CLICKHOUSE_PASSWORD="$mon_pass" run_sql_file "$verify_sql" "${CLIENT_CONNECTION[@]}" -u "$CLICKHOUSE_USER" 2>&1 >/dev/null); then
+            echo "  ClickHouse user '${CLICKHOUSE_USER}' authenticates and can read"
+            echo "  system.opentelemetry_span_log and system.query_log — nothing to do."
+            sql_choice="s"
+        elif [[ "$verify_err" == *UNKNOWN_TABLE* ]]; then
+            # ClickHouse creates these tables when it first writes to them, and a
+            # missing table hides whether the user may read it.
+            local missing_table="system.opentelemetry_span_log" created_when="records its first span"
+            if [[ "$verify_err" == *query_log* ]]; then
+                missing_table="system.query_log"
+                created_when="logs its first query"
+            fi
+            echo "  ClickHouse user '${CLICKHOUSE_USER}' authenticates. The guide cannot check its"
+            echo "  access to ${missing_table} yet."
+            echo "  ClickHouse creates that table when it ${created_when}."
+            echo "  Running the setup again adds the GRANTs if they are missing."
+        elif [[ "$verify_err" == *"$SQL_NOT_RUN_MESSAGE"* ]]; then
+            echo "  ClickHouse user '${CLICKHOUSE_USER}' authenticates, but the guide could not"
+            echo "  check its access. ${SQL_NOT_RUN_MESSAGE}"
+        else
+            echo "  ClickHouse user '${CLICKHOUSE_USER}' authenticates but is MISSING SELECT on"
+            echo "  one of the required system tables."
+            case "$user_state" in
+                overlay) echo "  [x] rewrites ${ch_users_file} with the two GRANTs click-dog needs." ;;
+                xml) ;;
+                *) echo "  The setup SQL adds the two GRANTs click-dog needs and changes nothing else." ;;
+            esac
+        fi
+    fi
+
+    if [[ "$sql_choice" == "s" ]]; then
+        return 0
+    fi
+
+    if [[ "$user_state" == "xml" ]]; then
+        print_xml_user_note
+        return 0
+    fi
+
+    if [[ "$password_source" == "secret" ]]; then
+        echo "  Reusing password from /etc/click-dog/.secret"
+        echo "  (the ClickHouse user must use the same password to connect)"
+    elif [[ "$auth_decision" == "create" ]]; then
+        echo "  This sets up a read-only ClickHouse user '${CLICKHOUSE_USER}':"
+        echo "    • CREATE USER IF NOT EXISTS leaves an existing user of this name as it is:"
+        echo "      its password, profile, quota, settings, and grants stay."
+        echo "    • GRANT SELECT on system.opentelemetry_span_log and system.query_log."
+        echo "      click-dog needs nothing else."
+        echo ""
+        if [[ "$user_state" == "absent" ]]; then
+            echo "  The guide sets the same password in ClickHouse and saves it to"
+            echo "  /etc/click-dog/.secret. click-dog connects only when both match."
+        else
+            echo "  The guide saves the generated password to /etc/click-dog/.secret. This client"
+            echo "  cannot read system.users, so the user may already exist with another password."
+            echo "  [r] checks that after its SQL runs. [x] asks first, because it replaces a user."
+        fi
+        echo ""
+        echo "  To change it later, update both: the ClickHouse user password and"
+        echo "  /etc/click-dog/.secret, then restart click-dog."
+    fi
+    echo ""
+
+    local offer_sql="true" offer_xml="true"
+    case "$user_state" in
+        # Every statement fails on a user defined in XML.
+        overlay) offer_sql="false" ;;
+        # An overlay hides a SQL user, taking its settings and grants with it.
+        sql) offer_xml="false" ;;
+    esac
+    # The overlay sets the password, which the operator just declined to change.
+    if [[ "$auth_decision" == "prompt" && "$AUTH_RESET_CONFIRMED" != "true" ]]; then
+        offer_xml="false"
+    fi
+    if [[ "$offer_sql" == "true" ]]; then
+        echo "  Manual SQL (review before running anywhere):"
+        echo "  ──────────────────────────────────────────────────────"
+        cat "$setup_sql"
+        echo "  ──────────────────────────────────────────────────────"
+        echo "  Saved to: ${setup_sql}"
+        echo "  Run with: clickhouse-client --multiquery < ${setup_sql}"
+        echo ""
+    fi
+    local menu_choices="s"
+    [[ "$offer_sql" == "true" ]] && menu_choices="r/${menu_choices}"
+    [[ "$offer_xml" == "true" ]] && menu_choices="x/${menu_choices}"
+    if [[ "$offer_xml" == "true" ]]; then
+        echo "  [x] Write XML config (no clickhouse-client needed)"
+        if [[ -f "$ch_users_file" ]]; then
+            echo "      This replaces the whole of ${ch_users_file}: its password and anything else in it."
+        fi
+    fi
+    if [[ "$offer_sql" == "true" ]]; then
+        echo "  [r] Run SQL via clickhouse-client (asks for the command if needed)"
+    fi
+    echo "  [s] Skip: set up '${CLICKHOUSE_USER}' by hand"
+    echo ""
+    while true; do
+        guide_read sql_choice "  Choice [${menu_choices}]: "
+        case "$sql_choice" in
+            [xX])
+                if [[ "$offer_xml" != "true" ]]; then
+                    echo "  [x] is not available for this user. Choose one of ${menu_choices}."
+                    continue
+                fi
+                if [[ "$user_state" == "unknown" ]]; then
+                    local replace_answer
+                    echo ""
+                    echo "  This client cannot read system.users, so '${CLICKHOUSE_USER}' may already exist."
+                    echo "  [x] replaces that user's password and settings."
+                    guide_read replace_answer "  Write the file anyway? [y/n]: "
+                    case "$replace_answer" in
+                        [yY]*) ;;
+                        *)
+                            echo "  Choose one of ${menu_choices}."
+                            continue
+                            ;;
+                    esac
+                fi
+                echo ""
+                # SQL cannot change a user this file defines.
+                MONITOR_SETUP_SQL=""
+                if [[ -d "$CLICKHOUSE_USERS_DIR" ]]; then
+                    # shellcheck disable=SC2046 # the command's words
+                    $(clickhouse_file_install_cmd) "$user_xml" "$ch_users_file"
+                    echo "  Written to: ${ch_users_file}"
+                    # Saved before the wait, so stopping during it keeps the password.
+                    save_monitor_password "$mon_pass"
+                else
+                    echo "  ${CLICKHOUSE_USERS_DIR} not found."
+                    echo ""
+                    echo "  Copy this file manually:"
+                    echo "    $(clickhouse_file_install_cmd) ${user_xml} /etc/clickhouse-server/users.d/click-dog-${CLICKHOUSE_USER}.xml"
+                    echo ""
+                    save_monitor_password "$mon_pass"
+                    guide_pause
+                fi
+                if [[ "$probed" == "true" ]]; then
+                    echo -n "  Waiting for ClickHouse to load it... "
+                    if wait_for_monitor_user "$mon_pass"; then
+                        echo "ok"
+                    else
+                        echo "FAILED"
+                        echo "  '${CLICKHOUSE_USER}' does not authenticate with the new password."
+                        echo "  Check the ClickHouse server log: click-dog cannot connect until it does."
+                        if [[ -f "$ch_users_file" ]]; then
+                            offer_to_delete_monitor_user_file "$ch_users_file"
+                        fi
+                    fi
+                fi
+                break
+                ;;
+            [rR])
+                if [[ "$offer_sql" != "true" ]]; then
+                    echo "  [r] is not available: SQL cannot change a user defined in XML."
+                    continue
+                fi
+                echo ""
+                # shellcheck disable=SC2086
+                if ! command -v ${CLICKHOUSE_CLIENT%% *} &>/dev/null; then
+                    echo "  The clickhouse-client command was not found."
+                    echo ""
+                    local user_client
+                    guide_read user_client "  clickhouse-client command: "
+                    [[ -n "$user_client" ]] && CLICKHOUSE_CLIENT="$user_client"
+                    # shellcheck disable=SC2086
+                    if ! command -v ${CLICKHOUSE_CLIENT%% *} &>/dev/null; then
+                        echo ""
+                        echo "  Still not found. SQL saved to: ${setup_sql}"
+                        echo "  ──────────────────────────────────────────────────────"
+                        cat "$setup_sql"
+                        echo "  ──────────────────────────────────────────────────────"
+                        echo ""
+                        echo "  Run with: clickhouse-client --multiquery < ${setup_sql}"
+                        echo ""
+                        guide_pause
+                        password_applied="true"
+                        break
+                    fi
+                    set_client_connection
+                fi
+                echo "  Running setup SQL..."
+                # shellcheck disable=SC2206 # split like every other use
+                SQL_ADMIN_CLIENT=($CLICKHOUSE_CLIENT)
+                unset SQL_ADMIN_PASSWORD
+                local run_ok="false" run_err=""
+                if run_err=$(run_setup_sql "$setup_sql" 2>&1 >/dev/null); then
+                    echo "  Done."
+                    run_ok="true"
+                elif [[ "$run_err" == *"$SQL_NOT_RUN_MESSAGE"* ]]; then
+                    # Connection details cannot help a wrapper with no stdin.
+                    echo "  ${SQL_NOT_RUN_MESSAGE}"
+                else
+                    # The bare client failed, usually because the admin needs a
+                    # host, port, or password. Ask for those and retry. They are
+                    # used only for this SQL and never written to disk.
+                    echo "  Could not run it with the client command:"
+                    head -n 2 <<<"$run_err" | sed 's/^/    /'
+                    echo ""
+                    echo "  The admin user likely needs a host, port, or password. Enter connection"
+                    echo "  details to retry (used only to run this SQL; not saved)."
+                    echo ""
+                    local attempt
+                    for attempt in 1 2; do
+                        local ch_addr ch_admin ch_admin_pass
+                        guide_read ch_addr "  ClickHouse host[:port] [${CLICKHOUSE_HOST:-localhost}]: "
+                        ch_addr="${ch_addr:-${CLICKHOUSE_HOST:-localhost}}"
+                        guide_read ch_admin "  Admin user [default]: "
+                        ch_admin="${ch_admin:-default}"
+                        guide_read_secret ch_admin_pass "  Admin password (blank if none): "
+                        # Flags from -C survive: "docker exec ... clickhouse-client",
+                        # --secure, and so on. The typed host and port replace -C's.
+                        # IPv6 literals like [::1]:9000 aren't parsed (the host:port
+                        # split is naive): use a hostname/IPv4, or put the full
+                        # connection in -C.
+                        local ch_port=""
+                        if [[ "$ch_addr" == *:* ]]; then
+                            ch_port="${ch_addr##*:}"
+                        fi
+                        set_client_connection "${ch_addr%%:*}" "$ch_port"
+                        SQL_ADMIN_CLIENT=("${CLIENT_CONNECTION[@]}" -u "$ch_admin")
+                        echo "  Retrying as '${ch_admin}' on '${ch_addr}' (attempt ${attempt}/2)..."
+                        # The password goes in CLICKHOUSE_PASSWORD for this command
+                        # only, so it stays out of the process list.
+                        SQL_ADMIN_PASSWORD="$ch_admin_pass"
+                        local retry_rc=0
+                        run_err=$(run_setup_sql "$setup_sql" 2>&1 >/dev/null) || retry_rc=$?
+                        if [[ "$retry_rc" == "0" ]]; then
+                            echo "  Done."
+                            run_ok="true"
+                            break
+                        fi
+                        echo "  That did not work:"
+                        head -n 2 <<<"$run_err" | sed 's/^/    /'
+                        if [[ "$retry_rc" == "$CLICKHOUSE_CLIENT_AUTH_FAILED" ]]; then
+                            echo "  If the client's config holds a password, it beats the one typed here."
+                        fi
+                    done
+                fi
+                if [[ "$run_ok" != "true" ]]; then
+                    echo ""
+                    echo "  Run the SQL manually:"
+                    echo "  ──────────────────────────────────────────────────────"
+                    cat "$setup_sql"
+                    echo "  ──────────────────────────────────────────────────────"
+                    echo ""
+                    echo "  Saved to: ${setup_sql}"
+                    echo "  Run with: CLICKHOUSE_PASSWORD=... clickhouse-client --host HOST -u ADMIN --multiquery < ${setup_sql}"
+                    echo ""
+                    guide_pause
+                    password_applied="true"
+                    break
+                fi
+                # The SQL succeeding proves little: CREATE USER IF NOT EXISTS
+                # leaves an existing user's password alone. Declining a new
+                # password above already accepted that outcome.
+                if [[ "$auth_decision" == "prompt" && "$AUTH_RESET_CONFIRMED" != "true" ]]; then
+                    break
+                fi
+                if monitor_user_authenticates "$mon_pass"; then
+                    password_applied="true"
+                else
+                    echo ""
+                    echo "  The SQL ran, but '${CLICKHOUSE_USER}' does not authenticate with the password"
+                    echo "  this install holds. Most likely the user already existed: CREATE USER IF NOT"
+                    echo "  EXISTS leaves its password alone."
+                    echo ""
+                    prompt_existing_monitor_user "true"
+                    case "$MONITOR_USER_CHOICE" in
+                        entered)
+                            mon_pass="$MONITOR_USER_PASSWORD"
+                            CLICKHOUSE_PASSWORD="$mon_pass"
+                            write_monitor_user_files "$mon_pass" "$setup_sql" "$alter_sql" "$user_xml"
+                            ;;
+                        new)
+                            mon_pass=$(generate_monitor_password) || exit 1
+                            CLICKHOUSE_PASSWORD="$mon_pass"
+                            write_monitor_user_files "$mon_pass" "$setup_sql" "$alter_sql" "$user_xml"
+                            password_applied="true"
+                            if run_err=$(run_setup_sql "$alter_sql" 2>&1 >/dev/null); then
+                                echo "  Password set."
+                            else
+                                echo "  Could not set it:"
+                                head -n 2 <<<"$run_err" | sed 's/^/    /'
+                                echo "  Run this as a ClickHouse administrator:"
+                                cat "$alter_sql"
+                            fi
+                            ;;
+                        keep)
+                            print_monitor_password_kept_note
+                            MONITOR_PASSWORD_KEPT="true"
+                            MONITOR_SETUP_SQL=""
+                            ;;
+                    esac
+                fi
+                break
+                ;;
+            [sS])
+                echo "  Skipped."
+                if [[ "$AUTH_RESET_CONFIRMED" == "true" ]]; then
+                    mon_pass="$kept_pass"
+                    CLICKHOUSE_PASSWORD="$mon_pass"
+                    password_source="$kept_source"
+                    write_monitor_user_files "$mon_pass" "$setup_sql" "$alter_sql" "$user_xml"
+                    if [[ "$password_source" == "secret" ]]; then
+                        echo "  The password of '${CLICKHOUSE_USER}' did not change, and /etc/click-dog/.secret"
+                        echo "  keeps the password it had."
+                    else
+                        echo "  The password of '${CLICKHOUSE_USER}' did not change, so click-dog cannot connect"
+                        echo "  until /etc/click-dog/.secret and ClickHouse match."
+                    fi
+                fi
+                break
+                ;;
+            *)
+                echo "  Please enter one of ${menu_choices}."
+                ;;
+        esac
+    done
+
+    if [[ "$password_applied" == "true" ]]; then
+        save_monitor_password "$mon_pass"
+    fi
 }
 
 # ── Dispatch ─────────────────────────────────────────────────────

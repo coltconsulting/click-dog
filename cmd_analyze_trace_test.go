@@ -26,10 +26,13 @@ import (
 type fakeTraceSource struct {
 	traceIDs    []string
 	traceIDsErr error
-	spans       []model.OpenTelemetrySpan
-	spansErr    error
-	queryLog    map[string]model.QueryLog
-	queryLogErr error
+	// traceIDStart is the earliest query-span start the bridge reports with
+	// a non-empty match.
+	traceIDStart time.Time
+	spans        []model.OpenTelemetrySpan
+	spansErr     error
+	queryLog     map[string]model.QueryLog
+	queryLogErr  error
 
 	candidates    []model.QueryLog
 	candidatesErr error
@@ -57,19 +60,30 @@ type fakeTraceSource struct {
 	traceIDsByCall       [][]string
 	traceIDCallCount     int
 
+	// traceQueriesErr fails the per-trace filter lookup.
+	traceQueriesErr error
+
+	// serverNow is the server's clock; zero makes ServerTime fail.
+	serverNow time.Time
+
 	traceIDQueryID   string
+	traceIDSince     time.Time
 	spanTraceIDs     []string
+	spanSince        time.Time
 	spanBlacklist    []string
 	queryLogQueryIDs []string
+	queryLogStartUs  uint64
 	candidateOpts    clickhouse.RecentQueryCandidateOptions
 	currentOpts      clickhouse.CurrentQueryCandidateOptions
 	rollupOpts       clickhouse.QueryFamilyRollupOptions
 }
 
-func (f *fakeTraceSource) FetchTraceIDsByQueryID(_ context.Context, queryID string, _, _ int) ([]string, error) {
+func (f *fakeTraceSource) FetchTraceIDsByQueryID(_ context.Context, queryID string, _ int, since time.Time, _ int) ([]string, time.Time, error) {
 	f.traceIDQueryID = queryID
+	f.traceIDSince = since
 	call := f.traceIDCallCount
 	f.traceIDCallCount++
+	ids := f.traceIDs
 	// traceIDsByCall models -wait polling: each successive call returns the
 	// next configured result (the last entry repeats once exhausted), so a test
 	// can make the trace materialize on the Nth poll.
@@ -77,19 +91,31 @@ func (f *fakeTraceSource) FetchTraceIDsByQueryID(_ context.Context, queryID stri
 		if call >= len(f.traceIDsByCall) {
 			call = len(f.traceIDsByCall) - 1
 		}
-		return f.traceIDsByCall[call], f.traceIDsErr
+		ids = f.traceIDsByCall[call]
 	}
-	return f.traceIDs, f.traceIDsErr
+	if len(ids) == 0 {
+		return ids, time.Time{}, f.traceIDsErr
+	}
+	return ids, f.traceIDStart, f.traceIDsErr
 }
 
-func (f *fakeTraceSource) FetchSpansForTraceIDs(_ context.Context, traceIDs []string, _, _ int, blacklist []string) ([]model.OpenTelemetrySpan, error) {
+func (f *fakeTraceSource) ServerTime(context.Context) (time.Time, error) {
+	if f.serverNow.IsZero() {
+		return time.Time{}, errors.New("server time unavailable")
+	}
+	return f.serverNow, nil
+}
+
+func (f *fakeTraceSource) FetchSpansForTraceIDs(_ context.Context, traceIDs []string, _ int, since time.Time, _ int, blacklist []string) ([]model.OpenTelemetrySpan, error) {
 	f.spanTraceIDs = traceIDs
+	f.spanSince = since
 	f.spanBlacklist = blacklist
 	return f.spans, f.spansErr
 }
 
-func (f *fakeTraceSource) FetchQueryLogByQueryIDs(_ context.Context, queryIDs []string, _ int) (map[string]model.QueryLog, error) {
+func (f *fakeTraceSource) FetchQueryLogByQueryIDs(_ context.Context, queryIDs []string, _ int, earliestStartUs uint64) (map[string]model.QueryLog, error) {
 	f.queryLogQueryIDs = queryIDs
+	f.queryLogStartUs = earliestStartUs
 	return f.queryLog, f.queryLogErr
 }
 
@@ -185,6 +211,18 @@ func fakeCurrentMatches(ql model.QueryLog, needle string, normalized bool) bool 
 
 func (f *fakeTraceSource) QueryLogNormalizedSupported() bool { return f.normalized }
 
+func (f *fakeTraceSource) FetchTraceNodes(_ context.Context, traceIDs []uuid.UUID, _ int, _ uint64, _ model.AncestorRead) (map[uuid.UUID][]model.TraceNode, error) {
+	if f.traceQueriesErr != nil {
+		return nil, f.traceQueriesErr
+	}
+	all := append(append([]model.OpenTelemetrySpan(nil), f.spans...), f.analysisSpans...)
+	return fakeTraceNodes(all, traceIDs), nil
+}
+
+func (f *fakeTraceSource) FetchQueryOrigins(_ context.Context, queryIDs []string, _ int, _ uint64) (map[string]model.QueryOrigin, error) {
+	return fakeQueryOrigins(f.queryLog, queryIDs), nil
+}
+
 func (f *fakeTraceSource) FetchQueryFamilyRollups(_ context.Context, opts clickhouse.QueryFamilyRollupOptions) ([]model.QueryFamilyRollup, error) {
 	f.rollupOpts = opts
 	return f.families, f.familiesErr
@@ -194,8 +232,8 @@ func (f *fakeTraceSource) FetchQueryFamilyRollups(_ context.Context, opts clickh
 // fake satisfy queryAnalysisSource (embedded in traceDrilldownSource) so the
 // findings fan-out can drive the SAME buildAnalysisInput path as `analyze
 // queries`. They are only exercised when -fanout findings is requested.
-func (f *fakeTraceSource) FetchOpenTelemetrySpansWithOpts(_ context.Context, _ int, _ time.Duration, _ int, _ clickhouse.FetchOpts) ([]model.OpenTelemetrySpan, error) {
-	return f.analysisSpans, f.analysisSpansErr
+func (f *fakeTraceSource) FetchOpenTelemetrySpansWithOpts(_ context.Context, _ int, _ time.Duration, limit int, opts clickhouse.FetchOpts) ([]model.OpenTelemetrySpan, error) {
+	return sampleSpans(f.analysisSpans, limit, opts), f.analysisSpansErr
 }
 
 func (f *fakeTraceSource) FetchQueryFamilyDimensionCounts(_ context.Context, _ clickhouse.QueryFamilyDimensionCountOptions) ([]clickhouse.QueryFamilyDimensionCount, error) {
@@ -306,6 +344,72 @@ func TestAnalyzeTrace_SourceOtherWithoutIdentityExits2(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "--source other requires an identity flag") {
 		t.Errorf("stderr missing required-identity message:\n%s", errOut.String())
+	}
+}
+
+// TestAnalyzeTrace_InvalidIdentityExits2 pins the documented usage exit for a
+// malformed identity. Release testing found --normalized-query-hash abc
+// exiting 1 after connecting, and --trace-id not-a-uuid exiting 0 with a
+// report that resolved nothing. Both are rejected before the config loads,
+// so the missing --config path here is never read.
+func TestAnalyzeTrace_InvalidIdentityExits2(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing.yaml")
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--normalized-query-hash", "abc"}, `invalid --normalized-query-hash "abc"`},
+		{[]string{"--normalized-query-hash", "-1"}, `invalid --normalized-query-hash "-1"`},
+		// Zero is rejected like the all-zero trace ID below.
+		{[]string{"--normalized-query-hash", "0"}, `invalid --normalized-query-hash "0": want a nonzero`},
+		{[]string{"--normalized-query-hash", "18446744073709551616"}, `invalid --normalized-query-hash "18446744073709551616"`},
+		{[]string{"--trace-id", "not-a-uuid"}, `invalid --trace-id "not-a-uuid"`},
+		{[]string{"--trace-id", "0123456789abcdef0123456789abcde"}, `invalid --trace-id`},
+		{[]string{"--trace-id", "00000000000000000000000000000000"}, `invalid --trace-id`},
+		{[]string{"--source", "other", "--trace-id", "xyz"}, `invalid --trace-id "xyz"`},
+	} {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			code := runAnalyzeTrace(append(tc.args, "--config", missing), &out, &errOut)
+			if code != 2 {
+				t.Fatalf("exit code = %d, want 2; stderr:\n%s", code, errOut.String())
+			}
+			if !strings.Contains(errOut.String(), tc.want) {
+				t.Errorf("stderr = %q, want it to contain %q", errOut.String(), tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateTraceIdentity_AcceptsValidForms(t *testing.T) {
+	for _, tc := range []struct{ traceID, hash string }{
+		{"", ""},
+		{"0123456789abcdef0123456789abcdef", ""},
+		{"01234567-89ab-cdef-0123-456789abcdef", ""},
+		{"01234567-89AB-CDEF-0123-456789ABCDEF", ""},
+		{"", "1"},
+		{"", "18446744073709551615"},
+	} {
+		if err := validateTraceIdentity(tc.traceID, tc.hash); err != nil {
+			t.Errorf("validateTraceIdentity(%q, %q) = %v, want nil", tc.traceID, tc.hash, err)
+		}
+	}
+}
+
+func TestAnalyzeTraceWizard_RepromptsOnInvalidIdentity(t *testing.T) {
+	src := &fakeTraceSource{normalized: true}
+	// other -> trace-id -> malformed value (re-asked) -> stdin closes.
+	in := strings.NewReader("other\ntrace-id\nnot-a-uuid\n")
+	var out, errOut bytes.Buffer
+	code := runAnalyzeTraceWizard(in, &out, &errOut, src, testTraceConfig(), "", wizardBaseOptions(), "json", "")
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1 after stdin closed; stderr:\n%s", code, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), `invalid --trace-id "not-a-uuid"`) {
+		t.Errorf("stderr missing invalid trace ID message:\n%s", errOut.String())
+	}
+	if strings.Count(out.String(), "Identity kind") != 2 {
+		t.Errorf("want the identity kind asked again after the invalid value:\n%s", out.String())
 	}
 }
 
@@ -605,9 +709,156 @@ func TestAnalyzeTrace_TableOutputIsCompact(t *testing.T) {
 	}
 }
 
+// TestAnalyzeTrace_QueryIDLookupStartsAtTheWindow pins the bridge's span-log
+// bound: the query-id lookup reads from the start of the report window, not
+// from the whole days the partition filter rounds the lookback up to.
+func TestAnalyzeTrace_QueryIDLookupStartsAtTheWindow(t *testing.T) {
+	fixedEnd := time.Date(2026, 6, 15, 13, 30, 0, 0, time.UTC)
+	prevNow := traceNowFunc
+	traceNowFunc = func() time.Time { return fixedEnd }
+	defer func() { traceNowFunc = prevNow }()
+
+	src := &fakeTraceSource{}
+	opts := defaultTraceOptions()
+	opts.QueryID = "q-123"
+	opts.Lookback = 90 * time.Minute
+	if _, err := buildTraceDrilldownReport(context.Background(), src, testTraceConfig(), "", opts); err != nil {
+		t.Fatalf("buildTraceDrilldownReport: %v", err)
+	}
+	if want := fixedEnd.Add(-opts.Lookback); !src.traceIDSince.Equal(want) {
+		t.Errorf("query-id lookup since = %s, want the window start %s", src.traceIDSince, want)
+	}
+}
+
+// TestAnalyzeTrace_ReadsStartAtTheServersWindowWhenThisClockIsAhead pins the
+// floor against clock skew: the span log and query_log carry the server's
+// clock, so a host clock ahead of it moves the reads back to the server's own
+// window start. A host clock behind it keeps the host's earlier start.
+func TestAnalyzeTrace_ReadsStartAtTheServersWindowWhenThisClockIsAhead(t *testing.T) {
+	fixedEnd := time.Date(2026, 6, 15, 13, 30, 0, 0, time.UTC)
+	prevNow := traceNowFunc
+	traceNowFunc = func() time.Time { return fixedEnd }
+	defer func() { traceNowFunc = prevNow }()
+
+	for _, tt := range []struct {
+		name   string
+		server time.Time
+		want   time.Time
+	}{
+		{"server behind", fixedEnd.Add(-5 * time.Minute), fixedEnd.Add(-5*time.Minute - time.Hour)},
+		{"server ahead", fixedEnd.Add(5 * time.Minute), fixedEnd.Add(-time.Hour)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			src := &fakeTraceSource{serverNow: tt.server}
+			opts := defaultTraceOptions()
+			opts.QueryID = "q-123"
+			opts.Lookback = time.Hour
+			if _, err := buildTraceDrilldownReport(context.Background(), src, testTraceConfig(), "", opts); err != nil {
+				t.Fatalf("buildTraceDrilldownReport: %v", err)
+			}
+			if !src.traceIDSince.Equal(tt.want) {
+				t.Errorf("query-id lookup since = %s, want %s", src.traceIDSince, tt.want)
+			}
+			if want := uint64(tt.want.UnixMicro()); src.queryLogStartUs != want {
+				t.Errorf("query_log lookup start = %d, want %d", src.queryLogStartUs, want)
+			}
+		})
+	}
+}
+
+// TestAnalyzeTrace_SpanFetchStartsAtTheQuery pins the span fetch's span-log
+// bound on the query-id path: it reads from the matched query's own start,
+// which the bridge reports, even when that is before the report window.
+func TestAnalyzeTrace_SpanFetchStartsAtTheQuery(t *testing.T) {
+	fixedEnd := time.Date(2026, 6, 15, 13, 30, 0, 0, time.UTC)
+	prevNow := traceNowFunc
+	traceNowFunc = func() time.Time { return fixedEnd }
+	defer func() { traceNowFunc = prevNow }()
+
+	traceID := uuid.New()
+	queryStart := fixedEnd.Add(-3 * time.Hour)
+	src := &fakeTraceSource{traceIDs: []string{traceID.String()}, traceIDStart: queryStart}
+	opts := defaultTraceOptions()
+	opts.QueryID = "q-123"
+	if _, err := buildTraceDrilldownReport(context.Background(), src, testTraceConfig(), "", opts); err != nil {
+		t.Fatalf("buildTraceDrilldownReport: %v", err)
+	}
+	if !src.spanSince.Equal(queryStart) {
+		t.Errorf("span fetch since = %s, want the query's start %s", src.spanSince, queryStart)
+	}
+}
+
+// TestAnalyzeTrace_WaitedSpanFetchStartsAtTheQuery covers -wait: the start
+// comes from the poll that found the trace.
+func TestAnalyzeTrace_WaitedSpanFetchStartsAtTheQuery(t *testing.T) {
+	prev := traceWaitPollInterval
+	traceWaitPollInterval = time.Millisecond
+	defer func() { traceWaitPollInterval = prev }()
+
+	traceID := uuid.New()
+	queryStart := time.Date(2026, 6, 15, 13, 0, 0, 0, time.UTC)
+	src := &fakeTraceSource{traceIDsByCall: [][]string{nil, {traceID.String()}}, traceIDStart: queryStart}
+	opts := defaultTraceOptions()
+	opts.QueryID = "q-123"
+	opts.Wait = time.Second
+	ids, start, err := resolveTraceIDsWithWait(context.Background(), src, opts, 1, queryStart.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("resolveTraceIDsWithWait: %v", err)
+	}
+	if len(ids) != 1 || !start.Equal(queryStart) {
+		t.Errorf("ids, start = %v, %s; want [%s], %s", ids, start, traceID, queryStart)
+	}
+}
+
+// TestAnalyzeTrace_NamedTraceSpanFetchStartsAtTheWindow pins the bound of a
+// bare -trace-id, which has only the report window to go by.
+func TestAnalyzeTrace_NamedTraceSpanFetchStartsAtTheWindow(t *testing.T) {
+	fixedEnd := time.Date(2026, 6, 15, 13, 30, 0, 0, time.UTC)
+	prevNow := traceNowFunc
+	traceNowFunc = func() time.Time { return fixedEnd }
+	defer func() { traceNowFunc = prevNow }()
+
+	src := &fakeTraceSource{}
+	opts := defaultTraceOptions()
+	opts.TraceID = uuid.New().String()
+	opts.Lookback = 90 * time.Minute
+	if _, err := buildTraceDrilldownReport(context.Background(), src, testTraceConfig(), "", opts); err != nil {
+		t.Fatalf("buildTraceDrilldownReport: %v", err)
+	}
+	if want := fixedEnd.Add(-opts.Lookback); !src.spanSince.Equal(want) {
+		t.Errorf("span fetch since = %s, want the window start %s", src.spanSince, want)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Lookback -> day rounding (shared rule reuse)
 // ---------------------------------------------------------------------------
+
+// TestAnalyzeTrace_QueryLogLookupStartsAtWindow pins the event_time floor of
+// the selected query's query_log lookup: the query finished inside the
+// requested window, so the reader is handed the window start, not the
+// day-rounded partition floor.
+func TestAnalyzeTrace_QueryLogLookupStartsAtWindow(t *testing.T) {
+	traceID := uuid.New()
+	src := &fakeTraceSource{
+		traceIDs: []string{traceID.String()},
+		spans:    []model.OpenTelemetrySpan{makeSpan(traceID, 1, 0, "Query", 1_000_000, 2_000_000)},
+		queryLog: map[string]model.QueryLog{},
+	}
+	fixedEnd := time.Date(2026, 6, 15, 1, 0, 0, 0, time.UTC)
+	prevNow := traceNowFunc
+	traceNowFunc = func() time.Time { return fixedEnd }
+	defer func() { traceNowFunc = prevNow }()
+
+	opts := defaultTraceOptions()
+	opts.Lookback = 90 * time.Minute
+	if _, err := buildTraceDrilldownReport(context.Background(), src, testTraceConfig(), "", opts); err != nil {
+		t.Fatalf("buildTraceDrilldownReport: %v", err)
+	}
+	if want := uint64(fixedEnd.Add(-90 * time.Minute).UnixMicro()); src.queryLogStartUs != want {
+		t.Errorf("query_log lookup start = %d, want the window start %d", src.queryLogStartUs, want)
+	}
+}
 
 func TestAnalyzeTrace_LookbackDayRoundingReusesSharedRule(t *testing.T) {
 	tests := []struct {
@@ -2201,4 +2452,81 @@ func containsSubstring(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// A drilldown names its query or trace directly, so the report must still
+// omit what the filters exclude: the trace's spans by the per-trace decision
+// and whitelist_operations, and the query_log row by the row filters.
+func TestBuildTraceDrilldownReport_HonorsFilters(t *testing.T) {
+	traceID := uuid.MustParse("11111111-2222-3333-4444-555555555555")
+	root := makeSpan(traceID, 100, 0, "query", 1_000_000, 5_000_000)
+	root.Attributes = map[string]string{"clickhouse.query_id": "q-123", "db.statement": "SELECT * FROM patients"}
+	child := makeSpan(traceID, 200, 100, "ReadData", 2_000_000, 3_000_000)
+	newSource := func() *fakeTraceSource {
+		return &fakeTraceSource{
+			traceIDs: []string{traceID.String()},
+			spans:    []model.OpenTelemetrySpan{root, child},
+			queryLog: map[string]model.QueryLog{
+				"q-123": {
+					QueryID: "q-123", QueryKind: "QueryFinish", Query: "SELECT * FROM patients",
+					User: "etl_user", InitialUser: "etl_user",
+					ClientAddress: "10.0.0.5", InitialAddress: "::ffff:10.0.0.5",
+					QueryDurationMs: 4200,
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name      string
+		filters   config.FiltersConfig
+		lookupErr error
+		spans     int  // spans in the reported trace; 0 means no trace
+		queryLog  bool // whether the query_log section is reported
+		warning   string
+	}{
+		{"no filters", config.FiltersConfig{}, nil, 2, true, ""},
+		{"admitting filters", config.FiltersConfig{
+			WhitelistUsers: []string{"etl_user"}, WhitelistIPs: []string{"10.0.0.0/8"}, BlacklistQueries: []string{"orders"},
+		}, nil, 2, true, ""},
+		{"blacklist_users", config.FiltersConfig{BlacklistUsers: []string{"etl_user"}}, nil, 0, false, "the configured filters exclude"},
+		{"whitelist_users", config.FiltersConfig{WhitelistUsers: []string{"web"}}, nil, 0, false, "the configured filters exclude"},
+		{"blacklist_queries", config.FiltersConfig{BlacklistQueries: []string{"patients"}}, nil, 0, false, "the configured filters exclude"},
+		{"whitelist_ips", config.FiltersConfig{WhitelistIPs: []string{"192.0.2.0/24"}}, nil, 0, false, "the configured filters exclude"},
+		{"whitelist_operations", config.FiltersConfig{WhitelistOperations: []string{"query"}}, nil, 1, true, ""},
+		{"lookup error fails closed", config.FiltersConfig{BlacklistQueries: []string{"orders"}}, errors.New("boom"), 0, true, "could not resolve"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src := newSource()
+			src.traceQueriesErr = tt.lookupErr
+			cfg := testTraceConfig()
+			cfg.Filters.WhitelistUsers = tt.filters.WhitelistUsers
+			cfg.Filters.BlacklistUsers = tt.filters.BlacklistUsers
+			cfg.Filters.BlacklistQueries = tt.filters.BlacklistQueries
+			cfg.Filters.WhitelistIPs = tt.filters.WhitelistIPs
+			cfg.Filters.WhitelistOperations = tt.filters.WhitelistOperations
+
+			report, err := buildTraceDrilldownReport(context.Background(), src, cfg, "", defaultTraceOptions())
+			if err != nil {
+				t.Fatalf("buildTraceDrilldownReport: %v", err)
+			}
+			gotSpans := 0
+			if report.Trace != nil {
+				gotSpans = report.Trace.SpanCount
+			}
+			if gotSpans != tt.spans {
+				t.Errorf("trace spans = %d, want %d", gotSpans, tt.spans)
+			}
+			if (report.QueryLog != nil) != tt.queryLog {
+				t.Errorf("query_log reported = %v, want %v", report.QueryLog != nil, tt.queryLog)
+			}
+			if !tt.queryLog && report.SelectedCandidate != nil && report.SelectedCandidate.User != "" {
+				t.Errorf("an excluded query_log row leaked into the candidate: user %q", report.SelectedCandidate.User)
+			}
+			if tt.warning != "" && !strings.Contains(strings.Join(report.Warnings, "\n"), tt.warning) {
+				t.Errorf("warnings %q do not mention %q", report.Warnings, tt.warning)
+			}
+		})
+	}
 }

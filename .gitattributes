@@ -53,6 +53,8 @@ scripts/site-preflight_test.sh export-ignore
 scripts/lib/cf-preflight.sh export-ignore
 scripts/lib/cf-preflight_test.sh export-ignore
 Makefile.internal export-ignore
+# Exercises Makefile.internal's release recipe, so it goes where that file goes.
+scripts/release-targets_test.sh export-ignore
 scripts/bd-local.sh export-ignore
 
 # The docs site (click-dog.com) is internal-only: it publishes from this

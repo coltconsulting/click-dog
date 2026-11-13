@@ -7,13 +7,10 @@
 #
 # Usage:
 #   ansible-playbook -i inventory.ini playbook-canary.yaml \
-#     --extra-vars "clickhouse_password=YOUR_PASSWORD"
+#     --extra-vars "clickhouse_password=REPLACE_WITH_PASSWORD"
 #
 # Options:
 #   canary_soak_minutes       Minutes to wait after canary readiness check (default: 5)
-#   click_dog_health_enabled  Set false only during a legacy migration where
-#                             canary nodes have not yet received a config with
-#                             the health: listener block on :8686.
 #
 # Note: The full fleet deploy uses the main playbook's serial setting.
 # -f N (forks) bounds hosts in flight but does not create completed waves;
@@ -47,7 +44,6 @@
         status_code: 200
       retries: 6
       delay: 10
-      when: click_dog_health_enabled | default(true)
 
 # Step 3: Soak time — let the canary run before proceeding to the full fleet
 - name: Canary soak period

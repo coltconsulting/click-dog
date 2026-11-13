@@ -1,15 +1,20 @@
 package health
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/coltconsulting/click-dog/internal/clicklog"
 	"github.com/coltconsulting/click-dog/internal/model"
 )
 
@@ -19,9 +24,12 @@ type fakePinger struct {
 	calls   int
 }
 
-func (f *fakePinger) IsHealthy(_ context.Context) bool {
+func (f *fakePinger) Ping(_ context.Context) error {
 	f.calls++
-	return f.healthy
+	if f.healthy {
+		return nil
+	}
+	return errors.New("dial tcp 127.0.0.1:9000: connect: connection refused")
 }
 
 // fakeSource is a minimal CycleSource for tests. Field names mirror the
@@ -31,6 +39,7 @@ type fakeSource struct {
 	haveLast   bool
 	cbState    string
 	backoffSec float64
+	leader     int
 	upSince    time.Time
 }
 
@@ -40,6 +49,7 @@ func (f *fakeSource) Snapshot() Snapshot {
 		HaveLastCycle:       f.haveLast,
 		CircuitBreakerState: f.cbState,
 		BackoffIntervalSecs: f.backoffSec,
+		Leader:              f.leader,
 		UpSince:             f.upSince,
 	}
 }
@@ -69,12 +79,8 @@ func TestHealthz_AlwaysOK(t *testing.T) {
 	}
 }
 
-func TestReadyz_PreservesLegacyKeyOrder(t *testing.T) {
-	// /readyz used to be built from a map[string]any, whose keys serialize
-	// alphabetically — so existing consumers see "checks" before
-	// "status". The struct-based refactor must preserve that order or
-	// any external literal-string matcher silently breaks. Pin the byte
-	// order here so a future re-shuffle of readyzResult fields trips
+func TestReadyz_ChecksKeyPrecedesStatus(t *testing.T) {
+	// Pin the JSON key order so a re-shuffle of readyzResult fields trips
 	// this test.
 	srv := newTestServer(&fakePinger{healthy: true}, &fakeSource{cbState: "closed"})
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
@@ -88,7 +94,7 @@ func TestReadyz_PreservesLegacyKeyOrder(t *testing.T) {
 		t.Fatalf("body missing expected keys: %s", body)
 	}
 	if checksAt >= statusAt {
-		t.Errorf("readyz body has \"status\" before \"checks\" — legacy contract requires \"checks\" first; body=%s", body)
+		t.Errorf("readyz body has \"status\" before \"checks\"; body=%s", body)
 	}
 }
 
@@ -137,6 +143,64 @@ func TestReadyz_503WhenClickHouseDown(t *testing.T) {
 	checks, _ := got["checks"].(map[string]any)
 	if checks["clickhouse"] != "unreachable" {
 		t.Errorf("clickhouse check = %v, want unreachable", checks["clickhouse"])
+	}
+}
+
+// captureHealthLog sends clicklog output at level to a buffer for the test.
+func captureHealthLog(t *testing.T, level string) *bytes.Buffer {
+	t.Helper()
+	if err := clicklog.InitLogger(level, "", "text", 0, 0); err != nil {
+		t.Fatalf("InitLogger: %v", err)
+	}
+	t.Cleanup(clicklog.CloseLogger)
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	return &buf
+}
+
+// TestReadyz_PingFailureLoggedOncePerStateChange pins that a failing
+// ClickHouse ping logs at the rate its state changes, not the probe rate. A
+// prober calling /readyz every second during an outage used to log a warning
+// per call.
+func TestReadyz_PingFailureLoggedOncePerStateChange(t *testing.T) {
+	buf := captureHealthLog(t, "info")
+	p := &fakePinger{healthy: false}
+	srv := newTestServer(p, &fakeSource{cbState: "closed"})
+	probe := func() int {
+		w := httptest.NewRecorder()
+		srv.readyz(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		return w.Code
+	}
+
+	for i := 0; i < 5; i++ {
+		if code := probe(); code != http.StatusServiceUnavailable {
+			t.Fatalf("probe %d = %d, want 503", i, code)
+		}
+	}
+	if got := strings.Count(buf.String(), "[WARN]"); got != 1 {
+		t.Errorf("warnings over 5 failing probes = %d, want 1\n%s", got, buf.String())
+	}
+	if !strings.Contains(buf.String(), "[WARN] Readiness probe: ClickHouse ping failed: dial tcp") {
+		t.Errorf("warning does not name the ping error:\n%s", buf.String())
+	}
+
+	buf.Reset()
+	p.healthy = true
+	for i := 0; i < 3; i++ {
+		if code := probe(); code != http.StatusOK {
+			t.Fatalf("probe after recovery = %d, want 200", code)
+		}
+	}
+	if got := strings.Count(buf.String(), "ClickHouse ping succeeded again"); got != 1 {
+		t.Errorf("recovery lines over 3 healthy probes = %d, want 1\n%s", got, buf.String())
+	}
+
+	buf.Reset()
+	p.healthy = false
+	probe()
+	if got := strings.Count(buf.String(), "[WARN]"); got != 1 {
+		t.Errorf("a new outage should warn once, got %d\n%s", got, buf.String())
 	}
 }
 
@@ -391,6 +455,34 @@ func TestStatus_LeaderStandbySkipReportsHealthyStandby(t *testing.T) {
 	}
 }
 
+// TestStatus_PromotedInstanceIsNotStandby pins /status during a promoted
+// instance's first cycle as leader: the last recorded cycle is still the
+// standby skip, but the leader gauge already says active, so standby is false.
+// Release testing saw standby: true for 5-17 s after promotion. The standby
+// skip still counts as health evidence until the first leader cycle records.
+func TestStatus_PromotedInstanceIsNotStandby(t *testing.T) {
+	src := &fakeSource{
+		cbState:  "closed",
+		upSince:  time.Now(),
+		haveLast: true,
+		leader:   1,
+		last:     CycleSnapshot{Skipped: true, SkipReason: model.CycleSkipReasonLeaderStandby, At: time.Now()},
+	}
+	srv := newTestServer(&fakePinger{healthy: true}, src)
+	req := httptest.NewRequest(http.MethodGet, "/status", nil)
+	w := httptest.NewRecorder()
+	srv.status(w, req)
+
+	var got statusResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if got.Standby {
+		t.Error("standby = true for an instance the leader gauge reports active; want false")
+	}
+	if !got.ClickHouseHealthy {
+		t.Error("clickhouse_healthy = false during the first leader cycle; want true")
+	}
+}
+
 func TestStatus_LastCycleErrored_ReportsUnhealthy(t *testing.T) {
 	// Most recent cycle failed → CH not healthy, even if the breaker hasn't
 	// opened yet (e.g. failure_threshold > 1 and we've only had one fail).
@@ -488,7 +580,7 @@ func TestStatus_NilSource_FallsBackToClosed(t *testing.T) {
 }
 
 func TestStatus_DoesNotLivePing(t *testing.T) {
-	// Regression guard: /status MUST NOT call Pinger.IsHealthy on every
+	// Regression guard: /status MUST NOT call Pinger.Ping on every
 	// request — it infers ClickHouseHealthy from the breaker state so
 	// dashboards polling /status don't stack 2s timeouts on a slow CH.
 	p := &fakePinger{healthy: false}
@@ -505,7 +597,7 @@ func TestStatus_DoesNotLivePing(t *testing.T) {
 	srv.status(w, req)
 
 	if p.calls != 0 {
-		t.Errorf("pinger.IsHealthy called %d times from /status, want 0", p.calls)
+		t.Errorf("pinger.Ping called %d times from /status, want 0", p.calls)
 	}
 
 	var got statusResponse

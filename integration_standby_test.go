@@ -147,7 +147,8 @@ func assertGateFollowsLeadership(t *testing.T, ctx context.Context, phase string
 		isLeader := inst.le.IsLeader()
 		inst.exp.reset()
 		var lastErr error
-		ok := pollUntil(20*time.Second, func() bool {
+		// The seeded traces are selected once they are LiveSettle old.
+		ok := pollUntil(20*time.Second+clickhouse.LiveSettle, func() bool {
 			lastErr = inst.driveCycle(t, ctx)
 			if isLeader {
 				return inst.exp.spanCount() > 0

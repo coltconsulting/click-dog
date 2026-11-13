@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"io"
@@ -140,6 +141,81 @@ func printFlagDefaults(w io.Writer, fs *flag.FlagSet) {
 		}
 		_, _ = fmt.Fprintln(w, line)
 	})
+}
+
+// rejectLeftoverArgs refuses positional arguments left after fs parsed args.
+// No subcommand takes positional arguments after its flags, and Go's flag
+// package stops at the first word that is not a flag: "--redact-dimensions
+// false --fail-on critical" parses as --redact-dimensions followed by the word
+// false, and --fail-on is silently ignored. Callers print the error and exit 2.
+func rejectLeftoverArgs(cmd string, fs *flag.FlagSet, args []string) error {
+	if fs.NArg() == 0 {
+		return nil
+	}
+	arg := fs.Arg(0)
+	// When a true or false follows a boolean flag, name the spelling that
+	// works. fs.Args() is a suffix of args, so the word before it is the last
+	// one parsed.
+	if i := len(args) - fs.NArg() - 1; (arg == "true" || arg == "false") && i >= 0 {
+		if name := boolFlagName(fs, args[i]); name != "" {
+			return fmt.Errorf("%s: unexpected argument %q: boolean flags take their value with =, e.g. --%s=%s", cmd, arg, name, arg)
+		}
+	}
+	return fmt.Errorf("%s: unexpected argument %q", cmd, arg)
+}
+
+// boolFlagName returns the name of the boolean flag that word sets, or "" when
+// word is not a bare boolean flag such as --redact-dimensions or -yes.
+func boolFlagName(fs *flag.FlagSet, word string) string {
+	if !strings.HasPrefix(word, "-") || strings.Contains(word, "=") {
+		return ""
+	}
+	name := strings.TrimLeft(word, "-")
+	if name == "" || len(word)-len(name) > 2 {
+		return ""
+	}
+	f := fs.Lookup(name)
+	if f == nil {
+		return ""
+	}
+	if b, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && b.IsBoolFlag() {
+		return name
+	}
+	return ""
+}
+
+// maxPromptLineBytes bounds one line of interactive input. It matches the
+// Linux terminal's canonical-mode line buffer, so no answer typed at a
+// terminal is longer; only piped input can exceed it.
+const maxPromptLineBytes = 4096
+
+// errPromptLineTooLong reports an interactive input line over
+// maxPromptLineBytes. The rest of that line is left unread: input with no
+// newline, such as /dev/zero, has no end to skip to.
+var errPromptLineTooLong = fmt.Errorf("input line is longer than %d bytes", maxPromptLineBytes)
+
+// readPromptLine reads one line of interactive input without its trailing
+// newline, consuming at most maxPromptLineBytes+2 bytes of it. Like
+// bufio.Reader.ReadString it returns any partial line together with the read
+// error (io.EOF when input ends without a newline). A CRLF ending is not
+// counted toward the bound; the CR is returned for the caller to trim, as it
+// is on shorter lines. A line over the bound returns "" and
+// errPromptLineTooLong; callers treat it as invalid input and stop prompting.
+func readPromptLine(r *bufio.Reader) (string, error) {
+	var line []byte
+	for {
+		c, err := r.ReadByte()
+		if err != nil {
+			return string(line), err
+		}
+		if c == '\n' {
+			return string(line), nil
+		}
+		if len(line) >= maxPromptLineBytes && (len(line) > maxPromptLineBytes || c != '\r') {
+			return "", errPromptLineTooLong
+		}
+		line = append(line, c)
+	}
 }
 
 // loadConfig resolves a -config flag value and loads the file it names. It

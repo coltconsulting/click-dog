@@ -3,30 +3,27 @@ package main
 import (
 	"bytes"
 	"context"
-	"slices"
 	"strings"
 	"testing"
 )
 
-func TestRewriteBackfillArgs(t *testing.T) {
+func TestParseBackfillArgs(t *testing.T) {
 	tests := []struct {
 		name     string
 		args     []string
-		wantArgv []string // nil means the rewrite must be refused
-		wantCode int      // only checked when wantArgv is nil
-		wantErr  string   // substring expected on stderr
+		want     *runOptions // nil means the parse must be refused
+		wantCode int         // only checked when want is nil
+		wantErr  string      // substring expected on stderr
 	}{
 		{
-			name:     "start and end map onto legacy mode flags",
-			args:     []string{"--start", "2024-01-01T00:00:00Z", "--end", "2024-01-02T00:00:00Z"},
-			wantArgv: []string{"-backfill-end", "2024-01-02T00:00:00Z", "-backfill-start", "2024-01-01T00:00:00Z"},
+			name: "start and end select a backfill run",
+			args: []string{"--start", "2024-01-01T00:00:00Z", "--end", "2024-01-02T00:00:00Z"},
+			want: &runOptions{configPath: "click-dog.yaml", backfillStart: "2024-01-01T00:00:00Z", backfillEnd: "2024-01-02T00:00:00Z"},
 		},
 		{
-			name: "config and dry-run pass through",
+			name: "config and dry-run are carried",
 			args: []string{"--start", "a", "--end", "b", "--config", "x.yaml", "--dry-run"},
-			wantArgv: []string{
-				"-config", "x.yaml", "-dry-run", "-backfill-end", "b", "-backfill-start", "a",
-			},
+			want: &runOptions{configPath: "x.yaml", dryRun: true, backfillStart: "a", backfillEnd: "b"},
 		},
 		{
 			name:     "missing end is refused",
@@ -39,6 +36,12 @@ func TestRewriteBackfillArgs(t *testing.T) {
 			args:     []string{"--start", "a", "--end", "b", "extra"},
 			wantCode: 2,
 			wantErr:  `unexpected argument "extra"`,
+		},
+		{
+			name:     "boolean value word is refused with the = form",
+			args:     []string{"--dry-run", "false", "--start", "a", "--end", "b"},
+			wantCode: 2,
+			wantErr:  `unexpected argument "false": boolean flags take their value with =, e.g. --dry-run=false`,
 		},
 		{
 			name:     "unknown flag is refused",
@@ -57,23 +60,24 @@ func TestRewriteBackfillArgs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var errOut bytes.Buffer
-			argv, code := rewriteBackfillArgs(tt.args, &errOut)
+			got, code := parseBackfillArgs(tt.args, &errOut)
 
-			if tt.wantArgv == nil {
-				if argv != nil {
-					t.Fatalf("argv = %v, want refusal (nil)", argv)
+			if tt.want == nil {
+				if got != nil {
+					t.Fatalf("opts = %+v, want refusal (nil)", got)
 				}
 				if code != tt.wantCode {
 					t.Errorf("exit = %d, want %d", code, tt.wantCode)
 				}
 			} else {
-				if argv == nil {
-					t.Fatalf("rewrite refused (code %d): %s", code, errOut.String())
+				if got == nil {
+					t.Fatalf("parse refused (code %d): %s", code, errOut.String())
 				}
-				// fs.Visit iterates flags in lexical order, so the translated
-				// argv order is deterministic and asserted exactly.
-				if !slices.Equal(argv, tt.wantArgv) {
-					t.Errorf("argv = %v, want %v", argv, tt.wantArgv)
+				if *got != *tt.want {
+					t.Errorf("opts = %+v, want %+v", *got, *tt.want)
+				}
+				if !got.backfill() {
+					t.Error("parsed options do not select backfill mode")
 				}
 			}
 			if tt.wantErr != "" && !strings.Contains(errOut.String(), tt.wantErr) {
@@ -83,20 +87,19 @@ func TestRewriteBackfillArgs(t *testing.T) {
 	}
 }
 
-// TestDispatch_BackfillVerbFallsThroughRewritten asserts the backfill verb is
-// a fall-through with translated argv: main() must continue into flag parsing
-// using the rewritten args, keeping the pipeline wiring untouched.
-func TestDispatch_BackfillVerbFallsThroughRewritten(t *testing.T) {
+// TestDispatch_BackfillVerbFallsThroughWithOptions asserts the backfill verb
+// is a fall-through carrying its parsed options: main() runs the same pipeline
+// it builds for scheduled mode, with the range set.
+func TestDispatch_BackfillVerbFallsThroughWithOptions(t *testing.T) {
 	var out, errOut bytes.Buffer
-	code, fellThrough, argv := dispatch(
+	code, fellThrough, opts := dispatch(
 		[]string{"click-dog", "backfill", "--start", "a", "--end", "b"}, &out, &errOut)
 
 	if !fellThrough {
-		t.Fatalf("backfill verb must fall through to flag parsing (code %d, stderr %s)", code, errOut.String())
+		t.Fatalf("backfill verb must fall through to the pipeline (code %d, stderr %s)", code, errOut.String())
 	}
-	want := []string{"click-dog", "-backfill-end", "b", "-backfill-start", "a"}
-	if !slices.Equal(argv, want) {
-		t.Errorf("argv = %v, want %v", argv, want)
+	if opts == nil || opts.backfillStart != "a" || opts.backfillEnd != "b" {
+		t.Errorf("opts = %+v, want the backfill range a..b", opts)
 	}
 	if out.Len() > 0 || errOut.Len() > 0 {
 		t.Errorf("fall-through wrote output: out=%q err=%q", out.String(), errOut.String())
@@ -105,8 +108,7 @@ func TestDispatch_BackfillVerbFallsThroughRewritten(t *testing.T) {
 
 // TestRunBackfillMode_ArgumentDiagnostics pins the argument-validation
 // messages to the standardized surface: they run before any dependency is
-// touched (nil deps prove it), and none may teach the deprecated
-// -backfill-start/-backfill-end spelling.
+// touched (nil deps prove it), and each names the backfill range.
 func TestRunBackfillMode_ArgumentDiagnostics(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -125,9 +127,6 @@ func TestRunBackfillMode_ArgumentDiagnostics(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("err = %q, want substring %q", err, tt.wantErr)
-			}
-			if strings.Contains(err.Error(), "backfill-start") || strings.Contains(err.Error(), "backfill-end") {
-				t.Errorf("err %q teaches the deprecated flag spelling", err)
 			}
 		})
 	}

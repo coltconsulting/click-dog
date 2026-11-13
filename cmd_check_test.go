@@ -159,3 +159,57 @@ func TestCertHostnameHint(t *testing.T) {
 		})
 	}
 }
+
+func TestQueryLogNeeded(t *testing.T) {
+	off := false
+	tests := []struct {
+		name   string
+		mutate func(*config.Config)
+		want   bool
+	}{
+		{"enrichment on by default", func(c *config.Config) {}, true},
+		{"enrichment off, no filters", func(c *config.Config) { c.Monitor.EnrichFromQueryLog = &off }, false},
+		{"whitelist_users", func(c *config.Config) {
+			c.Monitor.EnrichFromQueryLog = &off
+			c.Filters.WhitelistUsers = []string{"app"}
+		}, true},
+		{"blacklist_users", func(c *config.Config) {
+			c.Monitor.EnrichFromQueryLog = &off
+			c.Filters.BlacklistUsers = []string{"backup"}
+		}, true},
+		{"whitelist_ips", func(c *config.Config) {
+			c.Monitor.EnrichFromQueryLog = &off
+			c.Filters.WhitelistIPs = []string{"10.0.0.0/8"}
+		}, true},
+		// The live path reads statements from the span log.
+		{"blacklist_queries", func(c *config.Config) {
+			c.Monitor.EnrichFromQueryLog = &off
+			c.Filters.BlacklistQueries = []string{"secret"}
+		}, false},
+	}
+	for _, tt := range tests {
+		cfg := &config.Config{}
+		tt.mutate(cfg)
+		if got := queryLogNeeded(cfg); got != tt.want {
+			t.Errorf("%s: queryLogNeeded = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestQueryIDNeeded(t *testing.T) {
+	off := false
+	cfg := &config.Config{}
+	cfg.Monitor.EnrichFromQueryLog = &off
+	if queryIDNeeded(cfg) {
+		t.Error("no enrichment and no query filters should not need query_id")
+	}
+	cfg.Filters.BlacklistQueries = []string{"secret"}
+	if !queryIDNeeded(cfg) {
+		t.Error("blacklist_queries reads trace statements by query_id")
+	}
+	cfg.Filters.BlacklistQueries = nil
+	cfg.Filters.WhitelistIPs = []string{"10.0.0.0/8"}
+	if !queryIDNeeded(cfg) {
+		t.Error("whitelist_ips resolves clients by query_id")
+	}
+}

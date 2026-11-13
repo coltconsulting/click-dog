@@ -35,9 +35,9 @@ func RenderTable(report AnalysisReport) string {
 	case !report.Coverage.SpanSampleAvailable:
 		b.WriteString("  span query_id coverage: unavailable\n")
 	case report.Coverage.SpanSampleSize == 0:
-		b.WriteString("  span query_id coverage: no spans sampled\n")
+		b.WriteString("  span query_id coverage: no query spans sampled\n")
 	default:
-		fmt.Fprintf(&b, "  span query_id coverage: %.1f%% (%d/%d)\n",
+		fmt.Fprintf(&b, "  span query_id coverage: %.1f%% (%d/%d query spans)\n",
 			report.Coverage.QueryIDRatio*100,
 			report.Coverage.SpansWithQueryID,
 			report.Coverage.SpanSampleSize)

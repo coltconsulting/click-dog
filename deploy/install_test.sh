@@ -12,17 +12,31 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TEST_TEMP_DIRS=()
 
 # ── Test helpers ──────────────────────────────────────────────
-cleanup_temp_dirs() {
-    local dir
+# A suite that stops before its last line tested less than it reports, whatever
+# status bash leaves behind.
+SUITE_FINISHED="false"
+finish_suite() {
+    local status=$? dir
     for dir in "${TEST_TEMP_DIRS[@]+"${TEST_TEMP_DIRS[@]}"}"; do
         rm -rf "$dir"
     done
+    if [[ "$SUITE_FINISHED" != "true" ]]; then
+        echo "FAIL: the suite stopped before its last test"
+        [[ "$status" -ne 0 ]] || status=1
+    fi
+    exit "$status"
 }
-trap cleanup_temp_dirs EXIT
+trap finish_suite EXIT
 
 make_temp_dir() {
     mktemp -d "${TMPDIR:-/tmp}/click-dog-test.XXXXXX"
 }
+
+# Give this run its own TMPDIR. Some assertions count temp files by name, and
+# another run on the same machine would change the count mid-test.
+TMPDIR=$(make_temp_dir)
+export TMPDIR
+TEST_TEMP_DIRS+=("$TMPDIR")
 
 assert_eq() {
     local desc="$1" expected="$2" actual="$3"
@@ -84,6 +98,16 @@ assert_not_contains() {
         echo "    expected NOT to contain: $needle"
         FAIL=$((FAIL + 1))
     fi
+}
+
+assert_before() { # assert_before DESC FIRST SECOND HAYSTACK
+    local before
+    if [[ "$4" != *"$3"* ]]; then
+        assert_contains "$1" "$3" "$4"
+        return
+    fi
+    before=${4%%"$3"*}
+    assert_contains "$1" "$2" "$before"
 }
 
 # ── Source install.sh functions ───────────────────────────────
@@ -1189,7 +1213,7 @@ download_line=$(grep -n '^    resolve_binary$' <<<"$install_body" | cut -d: -f1)
 install_trap_line=$(line_of "trap 'rm -f \"\$CONFIG_TMPFILE\"")
 backup_ca_line=$(line_of '        backup_otel_ca')
 place_ca_line=$(line_of '        install_otel_ca_cert')
-validate_line=$(line_of '--validate --config /etc/click-dog/click-dog.yaml')
+validate_line=$(line_of ' validate --config /etc/click-dog/click-dog.yaml')
 in_order() {
     local prev=0 n
     for n in "$@"; do
@@ -1398,13 +1422,13 @@ assert_contains "help documents --otel-ca-cert" "--otel-ca-cert FILE" "$usage_ou
 echo ""
 echo "=== click-dog invocations use --long flags ==="
 
-# The binary's top-level flags (--version, --validate, --config) are passed
-# from many call sites; none may use the one-dash spelling. Comments are
-# skipped; the init -h help probe greps for a substring, not a flag. The
-# systemd unit's ExecStart keeps -config so installed units still match.
+# The binary's --version and --config flags are passed from many call sites;
+# none may use the one-dash spelling, and validation is the validate
+# subcommand, never a -validate flag. Comments are
+# skipped; the init -h help probe greps for a substring, not a flag.
 one_dash_calls=$(grep -nE '(^|[ "])-(version|validate|config)( |$|")' deploy/install.sh \
-    | grep -vE '^[0-9]+:[[:space:]]*#' | grep -v ':ExecStart=' || true)
-assert_eq "no one-dash --version/--validate/--config call" "" "$one_dash_calls"
+    | grep -vE '^[0-9]+:[[:space:]]*#' || true)
+assert_eq "no one-dash -version/-validate/-config call" "" "$one_dash_calls"
 
 echo ""
 echo "=== legacy installer uninstall delegates safely ==="
@@ -1530,7 +1554,7 @@ $FAKE_PRINT_OTEL_SECURE
 STUB
 cat >> "$install_sandbox/click-dog" <<'STUB'
 case "$1" in
-    --version|--validate) exit 0 ;;
+    --version|validate) exit 0 ;;
     init)
         shift
         case "$1" in
@@ -1570,10 +1594,14 @@ fi
 installer_source=$(sed -n '1,/^# ── Dispatch/p' "$INSTALL_SCRIPT" \
     | grep -v '^set -euo pipefail' \
     | sed "s|/etc/systemd/system/click-dog.service|$sandbox/click-dog.service|g")
+# The guide needs root and looks for an installed binary.
+if [[ "$HARNESS_ACTION" == "quickstart" ]]; then
+    installer_source=$(sed -e 's/\$EUID -ne 0/0 -ne 0/' -e "s|/usr/local/bin/click-dog|$sandbox/bin/click-dog|g" <<<"$installer_source")
+fi
 eval "$installer_source"
 
 CONFIG_FROM_FILE="$sandbox/input.yaml"
-CLICKHOUSE_PASSWORD="testpass123"
+CLICKHOUSE_PASSWORD="${HARNESS_CH_PASSWORD-testpass123}"
 COLLECTOR_ADDRESS=""
 SYSTEMD="false"
 BINARY="$sandbox/click-dog"
@@ -1585,8 +1613,24 @@ file() { echo "ELF 64-bit LSB executable"; }
 id() { return 0; }
 useradd() { return 0; }
 chown() { return 0; }
-systemctl() { return 0; }
-sleep() { return 0; }
+# A service that fails its restart reports active until it has had time to die.
+rm -f "$sandbox/restarted" "$sandbox/settled"
+systemctl() {
+    case "$1" in
+        restart) : > "$sandbox/restarted" ;;
+        is-active)
+            [[ -z "${HARNESS_SERVICE_STOPPED:-}" ]] || return 3
+            [[ -z "${HARNESS_RESTART_FAILS:-}" || ! -e "$sandbox/settled" ]] || return 3
+            ;;
+    esac
+    return 0
+}
+sleep() {
+    if [[ -e "$sandbox/restarted" ]]; then
+        : > "$sandbox/settled"
+    fi
+    return 0
+}
 
 mkdir() {
     if [[ "$*" == *"/etc/click-dog"* || "$*" == *"/usr/local/bin"* ]]; then
@@ -1613,6 +1657,10 @@ mktemp() {
                 return
                 ;;
         esac
+    fi
+    if [[ "${1:-}" == /tmp/click-dog-quickstart-update.* ]]; then
+        command mktemp "$sandbox/quickstart-update.XXXXXX"
+        return
     fi
     command mktemp "$@"
 }
@@ -1643,6 +1691,14 @@ case "$HARNESS_ACTION" in
         do_install
         ;;
     update)  do_update ;;
+    quickstart)
+        require_quickstart_tty() { return 0; }
+        openssl() { return 1; }
+        docker() { return "${HARNESS_LOGIN_RC:-0}"; }
+        CLICKHOUSE_USERS_DIR="$sandbox/ch/users.d"
+        CLICKHOUSE_CLIENT="${HARNESS_CLIENT:-$sandbox/fake-login}"
+        do_quickstart
+        ;;
     *) echo "unknown harness action: $HARNESS_ACTION" >&2; exit 1 ;;
 esac
 HARNESS
@@ -1742,6 +1798,122 @@ assert_eq "successful do_update exits 0" "0" "$update_status"
 assert_contains "successful do_update reaches completion" "Update complete." "$update_out"
 assert_not_contains "successful do_update has no unbound trap variable" "unbound variable" "$update_out"
 
+# A service that fails after the restart looks active at first.
+update_status=0
+update_out=$(INSTALL_SCRIPT="$SCRIPT_DIR/install.sh" INSTALL_SANDBOX="$install_sandbox" \
+    HARNESS_ACTION=update HARNESS_RESTART_FAILS=1 \
+    bash "$install_sandbox/run-install.sh" 2>&1) || update_status="$?"
+assert_eq "an update whose service dies exits non-zero" "1" "$update_status"
+assert_contains "an update whose service dies says so" "click-dog is not running" "$update_out"
+assert_not_contains "an update whose service dies claims nothing" "Update complete." "$update_out"
+
+update_status=0
+update_out=$(INSTALL_SCRIPT="$SCRIPT_DIR/install.sh" INSTALL_SANDBOX="$install_sandbox" \
+    HARNESS_ACTION=update HARNESS_SERVICE_STOPPED=1 \
+    bash "$install_sandbox/run-install.sh" 2>&1) || update_status="$?"
+assert_eq "an update of a stopped service exits 0" "0" "$update_status"
+assert_contains "an update of a stopped service says so" "so it stays stopped" "$update_out"
+assert_eq "an update leaves a stopped service stopped" "no" \
+    "$([[ -e "$install_sandbox/restarted" ]] && echo yes || echo no)"
+
+echo ""
+echo "=== the guide's stops, on the real do_quickstart ==="
+
+mkdir -p "$install_sandbox/ch/users.d" "$install_sandbox/bin"
+printf '#!/bin/sh\nexit "${HARNESS_LOGIN_RC:-0}"\n' > "$install_sandbox/fake-login"
+chmod +x "$install_sandbox/fake-login"
+# run_guide ANSWERS VAR=VALUE... — runs the guide until it stops or stdin ends.
+run_guide() {
+    local answers="$1"
+    shift
+    guide_status=0
+    guide_out=$(printf '%b' "$answers" | env INSTALL_SCRIPT="$SCRIPT_DIR/install.sh" INSTALL_SANDBOX="$install_sandbox" \
+        HARNESS_ACTION=quickstart "$@" bash "$install_sandbox/run-install.sh" 2>&1) || guide_status="$?"
+}
+guide_bad_file="$install_sandbox/ch/users.d/click-dog-old.xml"
+
+echo '<query>GRANT SELECT ON system.query_log TO mon</query>' > "$guide_bad_file"
+run_guide '\n'
+assert_eq "step 1 stops on a file ClickHouse cannot load" "1" "$guide_status"
+assert_contains "step 1 names the file" "$guide_bad_file" "$guide_out"
+assert_contains "step 1 says to delete it" "rm FILE" "$guide_out"
+assert_not_contains "step 1 stops before the span-log check" "Checking ClickHouse OTEL span logging" "$guide_out"
+rm -f "$guide_bad_file"
+run_guide '\n'
+assert_contains "step 1 goes on when no file stops ClickHouse" "Checking ClickHouse OTEL span logging" "$guide_out"
+assert_contains "step 1 says when it cannot check the files" "cannot check that ClickHouse can read its config files" "$guide_out"
+
+# CLICKHOUSE_PASSWORD replaces .secret in step 3, so a refused one stops here.
+run_guide '\ns\n' HARNESS_LOGIN_RC=4
+assert_eq "a refused CLICKHOUSE_PASSWORD stops the guide" "1" "$guide_status"
+assert_contains "a refused CLICKHOUSE_PASSWORD says so" "ClickHouse refused user 'click_dog_monitor' with CLICKHOUSE_PASSWORD" "$guide_out"
+assert_not_contains "a refused CLICKHOUSE_PASSWORD stops before the span-log check" "Verifying span logging" "$guide_out"
+assert_not_contains "a refused CLICKHOUSE_PASSWORD stops before [w] can restart ClickHouse" "Checking ClickHouse OTEL span logging" "$guide_out"
+assert_contains "a refused CLICKHOUSE_PASSWORD names the client config" "A password in the client's config beats CLICKHOUSE_PASSWORD" "$guide_out"
+run_guide '\ns\n' HARNESS_LOGIN_RC=0
+assert_contains "an accepted CLICKHOUSE_PASSWORD goes on" "Verifying span logging" "$guide_out"
+run_guide '\ns\n' HARNESS_LOGIN_RC=210
+assert_contains "no answer from ClickHouse does not stop the guide" "Verifying span logging" "$guide_out"
+run_guide '\ns\n' HARNESS_LOGIN_RC=4 "HARNESS_CLIENT=docker exec c clickhouse-client"
+assert_contains "a wrapper that drops the password does not stop the guide" "Verifying span logging" "$guide_out"
+run_guide '\ns\n' HARNESS_LOGIN_RC=4 "HARNESS_CLIENT=docker exec -e CLICKHOUSE_PASSWORD c clickhouse-client"
+assert_eq "a wrapper that forwards the password can stop the guide" "1" "$guide_status"
+
+# The guide's update option, with the same dying service.
+cp "$install_sandbox/click-dog" "$install_sandbox/bin/click-dog"
+run_guide 'u\n'
+assert_eq "the guide's update finishes" "0" "$guide_status"
+assert_contains "the guide's update reports a service that stays up" "click-dog is running." "$guide_out"
+cp "$install_sandbox/click-dog" "$install_sandbox/bin/click-dog"
+run_guide 'u\n' HARNESS_RESTART_FAILS=1
+assert_contains "the guide's update reports a service that dies" "service did not start" "$guide_out"
+assert_eq "the guide's update exits 1 when the service dies" "1" "$guide_status"
+assert_contains "the guide's update names the prior binary" "click-dog.prev" "$guide_out"
+assert_not_contains "the guide's update claims nothing for a service that dies" "click-dog is running." "$guide_out"
+
+# A reinstall says what happens to the saved password.
+cp "$install_sandbox/click-dog" "$install_sandbox/bin/click-dog"
+echo '<query>GRANT SELECT ON system.query_log TO mon</query>' > "$guide_bad_file"
+run_guide 'r\n\n'
+assert_contains "a reinstall with CLICKHOUSE_PASSWORD says it replaces the saved one" "CLICKHOUSE_PASSWORD replaces" "$guide_out"
+assert_not_contains "a reinstall with CLICKHOUSE_PASSWORD does not say it is kept" "are kept so the" "$guide_out"
+run_guide 'r\n\n' HARNESS_CH_PASSWORD=
+assert_contains "a reinstall with no password keeps the saved one" "are kept so the" "$guide_out"
+assert_contains "the menu with no password keeps the saved one" "[r] Reinstall — overwrite config and service; keep existing credentials" "$guide_out"
+run_guide 'q\n'
+assert_contains "the menu with CLICKHOUSE_PASSWORD says it replaces the saved one" "[r] Reinstall — overwrite config and service; CLICKHOUSE_PASSWORD replaces the saved password" "$guide_out"
+assert_not_contains "the menu with CLICKHOUSE_PASSWORD does not say it keeps the saved one" "keep existing credentials" "$guide_out"
+rm -f "$guide_bad_file" "$install_sandbox/bin/click-dog"
+
+echo ""
+echo "=== the installer's environment ==="
+
+env_out=$(env CLICKHOUSE_HOST=ops CLICKHOUSE_USER=ops INSTALL_SCRIPT="$SCRIPT_DIR/install.sh" bash -c '
+    eval "$(sed -n "1,/^# ── Dispatch/p" "$INSTALL_SCRIPT" | grep -v "^set -euo pipefail")"
+    printenv CLICKHOUSE_HOST || echo unset
+    printenv CLICKHOUSE_USER || echo unset
+')
+assert_eq "the client does not inherit the script's host and user" "unset
+unset" "$env_out"
+
+echo ""
+echo "=== install_secret_file ==="
+
+sf_tmp=$(make_temp_dir)
+TEST_TEMP_DIRS+=("$sf_tmp")
+printf 'pw' > "$sf_tmp/src"
+chmod 644 "$sf_tmp/src"
+sf_log=$(
+    chown() { echo "chown $*"; }
+    # shellcheck disable=SC2034 # read by the eval'd function
+    SECRET_FILE="$sf_tmp/.secret"
+    install_secret_file "$sf_tmp/src"
+)
+assert_eq "the password file goes to click-dog's user" "chown click-dog:click-dog $sf_tmp/.secret" "$sf_log"
+# shellcheck disable=SC2012 # one known file
+assert_eq "the password file is private" "-rw-------" "$(ls -l "$sf_tmp/.secret" | cut -c1-10)"
+assert_eq "the password file holds the password" "pw" "$(cat "$sf_tmp/.secret")"
+
 echo ""
 echo "=== require_unified_init_binary ==="
 
@@ -1794,8 +1966,7 @@ echo ""
 echo "=== generate_systemd_unit ==="
 
 unit=$(generate_systemd_unit)
-# One dash on purpose: the guided Update diffs installed units against this.
-assert_contains "has ExecStart" "ExecStart=/usr/local/bin/click-dog -config /etc/click-dog/click-dog.yaml" "$unit"
+assert_contains "has ExecStart" "ExecStart=/usr/local/bin/click-dog --config /etc/click-dog/click-dog.yaml" "$unit"
 assert_contains "has Restart=on-failure" "Restart=on-failure" "$unit"
 assert_contains "has StartLimitBurst" "StartLimitBurst=5" "$unit"
 assert_contains "start limits live in [Unit]" $'StartLimitBurst=5\n\n[Service]' "$unit"
@@ -1852,35 +2023,6 @@ assert_not_contains "guided handoff drops checkout-only uninstall path" \
     "To undo everything: ./deploy/install.sh uninstall" "$installer_text"
 
 echo ""
-echo "=== update is binary-swap only (no config merge) ==="
-
-# Functions deleted in the merge-removal refactor must stay deleted —
-# their presence would signal a partial revert.
-assert_not_defined() {
-    local name="$1"
-    if declare -F "$name" >/dev/null 2>&1; then
-        echo "  FAIL: function '$name' should not exist (merge removed)"
-        FAIL=$((FAIL + 1))
-    else
-        echo "  PASS: $name is undefined"
-        PASS=$((PASS + 1))
-    fi
-}
-assert_not_defined generate_config_defaults
-assert_not_defined generate_kubernetes_config_defaults
-assert_not_defined generate_merge_script
-
-# --no-merge stays in the flag parser as a noop alias for backward compat;
-# regression-protect against an accidental re-introduction of MERGE_CONFIG.
-if [[ -z "${MERGE_CONFIG+x}" ]]; then
-    echo "  PASS: MERGE_CONFIG is unset (merge removed)"
-    PASS=$((PASS + 1))
-else
-    echo "  FAIL: MERGE_CONFIG should be unset (merge removed)"
-    FAIL=$((FAIL + 1))
-fi
-
-echo ""
 echo "=== quickstart update keeps update safeguards ==="
 
 quickstart_body=$(awk '/^do_quickstart\(\)/,/^# ── Dispatch/' deploy/install.sh)
@@ -1889,7 +2031,7 @@ assert_contains "quickstart update stages the binary before swap" \
 assert_contains "quickstart update rejects downgrades" \
     "refusing to downgrade" "$quickstart_body"
 assert_contains "quickstart update validates existing config" \
-    "--validate --config /etc/click-dog/click-dog.yaml" "$quickstart_body"
+    "validate --config /etc/click-dog/click-dog.yaml" "$quickstart_body"
 assert_contains "quickstart update keeps a .prev rollback binary" \
     "click-dog.prev" "$quickstart_body"
 assert_contains "quickstart update cleans auto-downloaded binary" \
@@ -1931,9 +2073,31 @@ assert_not_contains "quickstart no fixed user XML path" \
 assert_not_contains "quickstart no fixed span-log config path" \
     '/tmp/click-dog-opentelemetry' "$quickstart_body"
 assert_contains "manual span-log copy keeps loadable extension" \
-    'cp ${otel_cfg_file} /etc/clickhouse-server/config.d/opentelemetry.${otel_cfg_ext}' "$quickstart_body"
+    '$(clickhouse_file_install_cmd) ${otel_cfg_file} /etc/clickhouse-server/config.d/opentelemetry.${otel_cfg_ext}' "$quickstart_body"
 assert_contains "manual users.d copy keeps loadable extension" \
-    'cp ${user_xml} /etc/clickhouse-server/users.d/click-dog-${CLICKHOUSE_USER}.xml' "$quickstart_body"
+    '$(clickhouse_file_install_cmd) ${user_xml} /etc/clickhouse-server/users.d/click-dog-${CLICKHOUSE_USER}.xml' "$quickstart_body"
+# ClickHouse refuses to start with an unreadable file in config.d or users.d,
+# and the temp files are 0600: a plain cp as root carries that over.
+assert_not_contains "nothing copies a temp file into ClickHouse's config with cp" \
+    'cp "$otel_cfg_file"' "$quickstart_body"
+assert_not_contains "nothing copies the user overlay with cp" \
+    'cp "$user_xml"' "$quickstart_body"
+assert_eq "ClickHouse files go to its group, unreadable to others" \
+    "install -m 640 -o root -g clickhouse" \
+    "$(systemctl() { return 1; }; getent() { return 0; }; clickhouse_file_install_cmd)"
+assert_eq "without a clickhouse group the file has to be world-readable" \
+    "install -m 644 -o root -g root" \
+    "$(systemctl() { return 1; }; getent() { return 2; }; clickhouse_file_install_cmd)"
+assert_eq "files for ClickHouse go to the group its unit runs as" \
+    "install -m 640 -o root -g chsvc" \
+    "$(systemctl() { [[ "$3" == "Group" ]] && echo chsvc; }; getent() { return 0; }; clickhouse_file_install_cmd)"
+assert_eq "a unit with only a user gives that user's group" \
+    "install -m 640 -o root -g svcgroup" \
+    "$(systemctl() { [[ "$3" == "User" ]] && echo chsvc; }; id() { echo svcgroup; }; getent() { return 0; }; clickhouse_file_install_cmd)"
+assert_eq "a unit naming a group this host lacks falls back to clickhouse" "install -m 640 -o root -g clickhouse" \
+    "$(systemctl() { [[ "$3" == "Group" ]] && echo nosuch; }; getent() { [[ "$2" == "clickhouse" ]]; }; clickhouse_file_install_cmd)"
+assert_eq "a unit naming a group this host lacks, and no clickhouse group, is world-readable" "install -m 644 -o root -g root" \
+    "$(systemctl() { [[ "$3" == "Group" ]] && echo nosuch; }; getent() { return 2; }; clickhouse_file_install_cmd)"
 
 echo ""
 echo "=== do_kubernetes (delegates to click-dog deploy kubernetes) ==="
@@ -2126,7 +2290,7 @@ k8s_validate_mode=""
 docker() {
     local argv="$*" src
     case " $argv " in
-        *" --validate "*)
+        *" validate --config "*)
             src="${argv#* -v }"
             src="${src%%:/etc/click-dog/*}"
             k8s_validate_mode=$(ls -l "$src" | cut -c1-10) ;;
@@ -2299,11 +2463,11 @@ mount_security=""
 DOCKER_SECURITY_PROBED=""
 VERSION=26.04.1 validate_config_via_docker "$pf_tmp/click-dog.yaml"
 assert_eq "config validation keeps the image's own user and mounts only the file" \
-    "run --rm -v $(cd "$pf_tmp" && pwd)/click-dog.yaml:/etc/click-dog/click-dog.yaml:ro ghcr.io/coltconsulting/click-dog:26.04.1 --validate --config /etc/click-dog/click-dog.yaml" \
+    "run --rm -v $(cd "$pf_tmp" && pwd)/click-dog.yaml:/etc/click-dog/click-dog.yaml:ro ghcr.io/coltconsulting/click-dog:26.04.1 validate --config /etc/click-dog/click-dog.yaml" \
     "$mount_args"
 # ...which only holds while the compose template mounts it there.
 assert_contains "compose mounts the config where validation does" \
-    "./click-dog.yaml:/etc/click-dog/click-dog.yaml:ro" "$(cat "$SCRIPT_DIR/templates/docker/docker-compose.yml.tmpl")"
+    "./click-dog.yaml:/etc/click-dog/click-dog.yaml:ro" "$(cat "$SCRIPT_DIR/../internal/deploy/template/docker/docker-compose.yml.tmpl")"
 
 # TLS files live where the deployment mounts them, never next to the config,
 # so each absolute path the config names gets an empty read-only stand-in:
@@ -2339,7 +2503,7 @@ VERSION=26.04.1 validate_config_via_docker "$tls_cfg"
 tls_cfg_abs=$(cd "$tls_cfg_dir" && pwd)
 tls_stub_re="$tls_cfg_abs/\.click-dog-tls-stub\.[A-Za-z0-9]+"
 assert_match "TLS validation mounts a stand-in for each file, read-only" \
-    "^run --rm -v $tls_cfg_abs/click-dog.yaml:/etc/click-dog/click-dog.yaml:ro -v ${tls_stub_re}:/etc/click-dog/ch-ca.pem:ro -v ${tls_stub_re}:/etc/click-dog/tls/ca.pem:ro -v ${tls_stub_re}:/etc/click-dog/tls/client.crt:ro -v ${tls_stub_re}:/etc/click-dog/tls/client.key:ro ghcr.io/coltconsulting/click-dog:26.04.1 --validate --config /etc/click-dog/click-dog.yaml$" \
+    "^run --rm -v $tls_cfg_abs/click-dog.yaml:/etc/click-dog/click-dog.yaml:ro -v ${tls_stub_re}:/etc/click-dog/ch-ca.pem:ro -v ${tls_stub_re}:/etc/click-dog/tls/ca.pem:ro -v ${tls_stub_re}:/etc/click-dog/tls/client.crt:ro -v ${tls_stub_re}:/etc/click-dog/tls/client.key:ro ghcr.io/coltconsulting/click-dog:26.04.1 validate --config /etc/click-dog/click-dog.yaml$" \
     "$mount_args"
 assert_not_contains "a commented-out path gets no stand-in" "old.pem" "$mount_args"
 assert_eq "the stand-in is removed after validation" "click-dog.yaml" "$(ls -A "$tls_cfg_dir")"
@@ -2381,13 +2545,19 @@ docker_run() {
                 "$tls_sandbox/click-dog" "$@"
                 return
                 ;;
+            *" deploy docker "*)
+                mount="${argv#* -v }"
+                mount="${mount%%:/work*}"
+                : > "$mount/docker-compose.yml"
+                : > "$mount/.gitignore"
+                : > "$mount/click-dog.yaml"
+                ( umask 077; : > "$mount/.env" ) ;;
             *" init "*)
                 mount="${argv#* -v }"
                 mount="${mount%%:/work*}"
                 ( umask 077; : > "$mount/click-dog.yaml" ) ;;
         esac
     }
-    envsubst() { cat; }
     # do_docker reads these; it arrives via the eval in source_functions.
     # shellcheck disable=SC2034
     OUTPUT_DIR="$out_dir" SUBCOMMAND="" VERSION="26.04.1"
@@ -2406,8 +2576,12 @@ docker_rc=0
 assert_eq "do_docker succeeds" "0" "$docker_rc"
 assert_eq "docker-mode config is readable by the image's user" \
     "-rw-r--r--" "$(ls -l "$docker_tmp/out/click-dog.yaml" | cut -c1-10)"
-assert_eq ".env stays private" "-rw-------" "$(ls -l "$docker_tmp/out/.env" | cut -c1-10)"
 docker_calls=$(cat "$docker_log")
+assert_contains "docker generates its files with the image's deploy docker" \
+    "deploy docker -c otel:4317 -u click_dog_monitor -v 26.04.1 -o /work --otel-secure=true" "$docker_calls"
+assert_contains "the password reaches the generator through the environment" \
+    "-e CLICKHOUSE_PASSWORD -v" "$docker_calls"
+assert_not_contains "the password stays out of the docker command line" "testpass123" "$docker_calls"
 assert_contains "docker asks the image for the transport, with the host network" \
     "run --rm --network host ghcr.io/coltconsulting/click-dog:26.04.1 init --print-otel-secure --collector otel:4317" "$docker_calls"
 assert_contains "docker checks an automatic TLS choice in the image" \
@@ -2464,9 +2638,9 @@ assert_eq "docker guards the image, asks it, then checks, all before the passwor
         "$(grep -nF 'resolve_otel_transport || exit 1' <<<"$docker_body" | head -1 | cut -d: -f1)" \
         "$(grep -nF 'preflight_otel_tls || exit 1' <<<"$docker_body" | head -1 | cut -d: -f1)" \
         "$(grep -nF '    resolve_password' <<<"$docker_body" | head -1 | cut -d: -f1)")"
-assert_eq ".env is private before the password goes in" "true" \
-    "$(in_order "$(grep -nF 'chmod 600 "$out_dir/.env"' <<<"$docker_body" | cut -d: -f1)" \
-        "$(grep -nF 'printf "CLICKHOUSE_PASSWORD=' <<<"$docker_body" | cut -d: -f1)")"
+assert_eq "init replaces the generator's config" "true" \
+    "$(in_order "$(grep -nF 'deploy docker \' <<<"$docker_body" | cut -d: -f1)" \
+        "$(grep -nF 'render_click_dog_config_via_docker "$out_dir/click-dog.yaml"' <<<"$docker_body" | cut -d: -f1)")"
 
 # A `docker run` that bind-mounts outside docker_run_mounted would regress on
 # Linux Docker Engine, and a writable mount must use `write`.
@@ -2482,16 +2656,6 @@ assert_eq "finds the docker_run_mounted calls" "true" \
     "$([[ $(grep -cE '^[[:space:]]*docker_run_mounted (read|write) ' <<<"$run_cmds") -ge 4 ]] && echo true || echo false)"
 assert_eq "every read mount is read-only" "" \
     "$(grep -E '^[[:space:]]*docker_run_mounted read ' <<<"$run_cmds" | grep -vE ':ro"' || true)"
-
-echo ""
-echo "=== --no-merge backward-compat notice ==="
-
-# --no-merge is a no-op now, but scripts may still pass it; it must print a
-# one-line notice that the merge was removed. Drive the real script with -h so
-# the flag loop runs and usage() exits before any filesystem writes.
-nm_out=$(bash "$SCRIPT_DIR/install.sh" --no-merge -h 2>&1) || true
-assert_contains "--no-merge prints a no-op notice"        "no-op"                   "$nm_out"
-assert_contains "--no-merge notice explains merge removal" "config merge was removed" "$nm_out"
 
 echo ""
 echo "=== verify_release_archive ==="
@@ -3122,8 +3286,13 @@ assert_contains "prerelease uses the list endpoint" "/releases?per_page=20" "$(c
 # Under set -e the old extractor's 141 ended install.sh silently right after
 # assigning VERSION. Reproduce that in a subshell that really has errexit on:
 # $() drops it, and so does a subshell on the left of ||.
+#
+# The page comes from cat, as it would from real curl. In bash 3.2 a builtin
+# printf past the pipe buffer fails with EINTR when the <(curl_auth_config) child
+# exits mid-write, which made this test flake on macOS.
 VERSION=""; PRERELEASE="true"
-curl() { printf '%s' "${@: -1}" > "$rv_url_file"; printf '%s\n200' "$pre_big"; }
+printf '%s\n200' "$pre_big" > "$rv_tmp/big_page"
+curl() { printf '%s' "${@: -1}" > "$rv_url_file"; cat "$rv_tmp/big_page"; }
 set +e
 (set -e; resolve_version >/dev/null 2>&1; printf '%s' "$VERSION" > "$rv_tmp/big_version")
 rv_big_status=$?
@@ -3418,25 +3587,15 @@ assert_contains "manual fallback mentions check"   "click-dog check" "$manual"
 echo ""
 echo "=== _span_log_default_runner auth handling (#180 review) ==="
 
-# Pure predicate: operator-supplied auth (via -C) must be detected so the
-# runner doesn't append the monitoring user on top of it.
-has_auth() { if _span_log_client_has_auth "$1"; then echo yes; else echo no; fi; }
-assert_eq "-u + --password detected as auth"  "yes" "$(has_auth 'clickhouse-client -u admin --password secret')"
-assert_eq "--user long flag detected as auth" "yes" "$(has_auth 'clickhouse-client --user admin')"
-assert_eq "--password alone detected as auth" "yes" "$(has_auth 'clickhouse-client --password secret')"
-assert_eq "plain client has no auth"          "no"  "$(has_auth 'clickhouse-client')"
-assert_eq "host-only flag is not auth"        "no"  "$(has_auth 'clickhouse-client --host db.internal')"
-
-# Runner: a client that already carries auth is used verbatim — the monitoring
-# user (which may not exist yet at quickstart verification) is NOT appended, and
-# the operator's -u is not duplicated.
 record_args() { echo "$*"; }
 _sv_chc="$CLICKHOUSE_CLIENT"; _sv_u="${CLICKHOUSE_USER:-}"; _sv_p="${CLICKHOUSE_PASSWORD:-}"
 
+# Runner: with a password, the check connects as the monitoring user even when -C
+# carries an admin, so it proves what click-dog itself can read.
 CLICKHOUSE_CLIENT="record_args -u admin --password secret"; CLICKHOUSE_USER="monitoring"; CLICKHOUSE_PASSWORD="monpass"
 auth_out="$(_span_log_default_runner 'SELECT 1')"
-assert_contains "operator auth used verbatim" "-u admin --password secret -q SELECT 1" "$auth_out"
-assert_not_contains "monitoring user not appended over operator auth" "monitoring" "$auth_out"
+assert_eq "the check replaces -C's user with the monitoring user" "-u monitoring -q SELECT 1" "$auth_out"
+assert_not_contains "-C's password stays out of the check" "secret" "$auth_out"
 
 # Runner: a password already exists (CLICKHOUSE_PASSWORD env) → authenticate as
 # that user, since it exists. Record the child environment separately so the
@@ -3453,12 +3612,23 @@ assert_not_contains "existing password is absent from argv" "--password" "$withp
 # silently degrading to the no-client/manual path.
 docker_warn="$(_warn_clickhouse_client_password_forwarding 'docker exec clickhouse clickhouse-client' 2>&1)"
 assert_contains "docker exec without env forwarding warns" "without forwarding CLICKHOUSE_PASSWORD" "$docker_warn"
-docker_safe="$(_warn_clickhouse_client_password_forwarding 'docker exec -e CLICKHOUSE_PASSWORD clickhouse clickhouse-client' 2>&1)"
+assert_contains "docker exec without -i warns" "without -i" "$docker_warn"
+docker_safe="$(_warn_clickhouse_client_password_forwarding 'docker exec -i -e CLICKHOUSE_PASSWORD clickhouse clickhouse-client' 2>&1)"
 assert_eq "docker exec by-name env forwarding is accepted" "" "$docker_safe"
-docker_long_safe="$(_warn_clickhouse_client_password_forwarding 'docker exec --env=CLICKHOUSE_PASSWORD clickhouse clickhouse-client' 2>&1)"
+docker_long_safe="$(_warn_clickhouse_client_password_forwarding 'docker exec -it --env=CLICKHOUSE_PASSWORD clickhouse clickhouse-client' 2>&1)"
 assert_eq "docker exec long env forwarding is accepted" "" "$docker_long_safe"
-docker_invalid_short="$(_warn_clickhouse_client_password_forwarding 'docker exec -e=CLICKHOUSE_PASSWORD clickhouse clickhouse-client' 2>&1)"
+docker_invalid_short="$(_warn_clickhouse_client_password_forwarding 'docker exec -i -e=CLICKHOUSE_PASSWORD clickhouse clickhouse-client' 2>&1)"
 assert_contains "invalid docker short env spelling still warns" "without forwarding CLICKHOUSE_PASSWORD" "$docker_invalid_short"
+assert_contains "kubectl exec warns" "uses kubectl without forwarding" \
+    "$(_warn_clickhouse_client_password_forwarding 'kubectl exec pod -- clickhouse-client' 2>&1)"
+assert_contains "sudo warns" "uses sudo without forwarding" \
+    "$(_warn_clickhouse_client_password_forwarding 'sudo -u ch clickhouse-client' 2>&1)"
+assert_eq "sudo -E keeps the environment" "" \
+    "$(_warn_clickhouse_client_password_forwarding 'sudo -E -u ch clickhouse-client' 2>&1)"
+assert_eq "a client under another name is no wrapper" "" \
+    "$(_warn_clickhouse_client_password_forwarding '/opt/ch/chclient --secure' 2>&1)"
+assert_eq "sudo --preserve-env forwards the password" "" \
+    "$(_warn_clickhouse_client_password_forwarding 'sudo --preserve-env=CLICKHOUSE_PASSWORD clickhouse-client' 2>&1)"
 plain_safe="$(_warn_clickhouse_client_password_forwarding 'clickhouse-client' 2>&1)"
 assert_eq "plain clickhouse-client needs no boundary warning" "" "$plain_safe"
 
@@ -3550,8 +3720,9 @@ assert_contains "XML sets the password hash"   "<password_sha256_hex>0badc0de</p
 assert_contains "XML defines readonly=2 profile" "<readonly>2</readonly>"                      "$xml_out"
 assert_contains "XML uses click-dog profile"     "<profile>click_dog_readonly</profile>"       "$xml_out"
 assert_not_contains "XML does not use built-in readonly=1 profile" "<profile>readonly</profile>" "$xml_out"
-assert_contains "XML grants span log"          "GRANT SELECT ON system.opentelemetry_span_log TO click_dog_monitor" "$xml_out"
-assert_contains "XML grants query log"         "GRANT SELECT ON system.query_log TO click_dog_monitor"              "$xml_out"
+assert_contains "XML grants span log"          "<query>GRANT SELECT ON system.opentelemetry_span_log</query>" "$xml_out"
+assert_contains "XML grants query log"         "<query>GRANT SELECT ON system.query_log</query>"              "$xml_out"
+assert_not_contains "XML names no grantee, which ClickHouse refuses in a config file" " TO " "$xml_out"
 
 echo ""
 echo "=== user_auth_mismatch_decision (issue #181) ==="
@@ -3573,17 +3744,40 @@ quickstart_body=$(awk '/^do_quickstart\(\)/,/^# ── Dispatch/' deploy/install
 # Generated monitoring credentials must use clickhouse-client's environment
 # support, not process arguments visible to other local users.
 assert_not_contains "generated password is absent from client argv" '--password "$mon_pass"' "$quickstart_body"
-assert_contains "generated password uses child environment" 'CLICKHOUSE_PASSWORD="$mon_pass" $CLICKHOUSE_CLIENT' "$quickstart_body"
+assert_contains "generated password uses child environment" 'CLICKHOUSE_PASSWORD="$password" "$@"' "$quickstart_body"
 assert_contains "manual fallback models argv-safe password handling" 'Run with: CLICKHOUSE_PASSWORD=... clickhouse-client' "$quickstart_body"
-assert_contains "embedded -C auth suppresses forwarding warning" 'if ! _span_log_client_has_auth "$CLICKHOUSE_CLIENT"; then' "$quickstart_body"
+assert_contains "a password from the environment still warns about wrappers" '_warn_clickhouse_client_password_forwarding "$CLICKHOUSE_CLIENT"' "$quickstart_body"
+# A failed span-log restart names the file and waits for the operator.
+assert_contains "a failed restart names the file to remove" \
+    '${ch_config_dir}/opentelemetry.${otel_cfg_ext} and check its log.' "$quickstart_body"
+assert_contains "a failed restart waits for the operator" \
+    "$(printf '%s\n' 'and check its log."' '                            echo ""' '                            read -rp "  Press Enter once done..."')" "$quickstart_body"
+# The not-running ending names the setup SQL and keeps only that file.
+assert_contains "the not-running ending names the setup SQL" 'clickhouse-client --multiquery < ${MONITOR_SETUP_SQL}' "$quickstart_body"
+assert_contains "the not-running ending names it whenever it has one" 'elif [[ -n "${MONITOR_SETUP_SQL:-}" ]]; then' "$quickstart_body"
+assert_contains "the not-running ending says what to do after [k]" 'Write the password of' "$quickstart_body"
+assert_contains "the not-running ending has a step with no SQL to run" "logs in with the password in /etc/click-dog/.secret" "$quickstart_body"
+assert_contains "a backup of the config keeps its owner" 'cp -p /etc/click-dog/click-dog.yaml /etc/click-dog/click-dog.yaml.bak' "$quickstart_body"
+assert_contains "a backup of the password keeps its owner" 'cp -p /etc/click-dog/.secret /etc/click-dog/.secret.bak' "$quickstart_body"
+assert_contains "the not-running ending removes the other files" '"$temp_file" != "${MONITOR_SETUP_SQL:-}"' "$quickstart_body"
+assert_contains "a failed start reaches the not-running ending" 'restart_click_dog && service_up="true"' "$quickstart_body"
+assert_contains "a failed validation restores a password saved in step 1" 'mv /etc/click-dog/.secret.bak /etc/click-dog/.secret' "$quickstart_body"
+assert_contains "a failed first validation removes the password it wrote" "$(printf '%s\n' '        else' '            rm -f /etc/click-dog/.secret')" "$quickstart_body"
+assert_contains "the not-running ending removes each other file" 'rm -f "$temp_file"' "$quickstart_body"
+assert_contains "the environment path warns right after it says so" "$(printf '%s\n' 'echo "  Skipping ClickHouse user setup."' '        _warn_clickhouse_client_password_forwarding "$CLICKHOUSE_CLIENT"')" "$quickstart_body"
+# A failed update says what happened.
+update_body=$(awk '/^do_update\(\)/,/^}/' deploy/install.sh)
+assert_contains "a failed update says the service is down" "the update installed the new binary, but click-dog is not running" "$update_body"
+assert_contains "a failed update names the prior binary" "click-dog.prev" "$update_body"
+assert_before "an update records the service's state before it swaps the binary" \
+    'systemctl is-active click-dog >/dev/null 2>&1 && was_active="true"' 'mv "$staged_binary" /usr/local/bin/click-dog' "$update_body"
+assert_contains "an update says how to start a stopped service" "Start it with: systemctl start click-dog" "$update_body"
 # The inaccurate "Nothing else is changed" reassurance must be gone.
 assert_not_contains "no false 'Nothing else is changed' copy" "Nothing else is changed" "$quickstart_body"
 # Copy must accurately describe the non-clobbering CREATE USER IF NOT EXISTS posture.
 assert_contains "copy explains IF NOT EXISTS preserves existing user" "CREATE USER IF NOT EXISTS" "$quickstart_body"
 # Manual SQL bundle is always surfaced for review.
 assert_contains "manual SQL bundle is printed for review" "Manual SQL (review before running anywhere):" "$quickstart_body"
-# Auth mutation is gated behind an explicit confirmation prompt.
-assert_contains "auth reset is behind an explicit prompt" "Reset '\${CLICKHOUSE_USER}' password to match" "$quickstart_body"
 assert_contains "existing-user path verifies real table access" 'generate_user_verify_sql' "$quickstart_body"
 # Declining the reset must also drop the [x] XML path — its users.d overlay
 # carries password_sha256_hex and would otherwise reset the existing user's
@@ -3591,12 +3785,1302 @@ assert_contains "existing-user path verifies real table access" 'generate_user_v
 # removes). Gate it on the same reset confirmation.
 assert_contains "declined reset gates the XML path" 'offer_xml="false"' "$quickstart_body"
 assert_contains "XML path keyed on declined auth-mismatch" '"$auth_decision" == "prompt" && "$AUTH_RESET_CONFIRMED" != "true"' "$quickstart_body"
-assert_contains "menu omits [x] when reset declined" "Write XML config is omitted here" "$quickstart_body"
-assert_contains "[x] is refused when not offered" "it would reset the password you" "$quickstart_body"
+assert_contains "[x] is refused when not offered" "[x] is not available for this user" "$quickstart_body"
+
+echo ""
+echo "=== install.sh docker from a lone download ==="
+
+# A release publishes install.sh by itself, so this runs a copy with nothing
+# beside it. The Docker client is fake; the script is real and unsourced.
+lone_tmp=$(make_temp_dir)
+TEST_TEMP_DIRS+=("$lone_tmp")
+mkdir -p "$lone_tmp/dl" "$lone_tmp/bin"
+cp "$SCRIPT_DIR/install.sh" "$lone_tmp/dl/install.sh"
+cat > "$lone_tmp/bin/docker" <<'FAKE'
+#!/usr/bin/env bash
+argv=" $* "
+mount="${argv#* -v }"
+mount="${mount%%:/work*}"
+case "$argv" in
+    *" info "*) ;;
+    *" init -h "*) echo "  --print-otel-secure" ;;
+    *" init --print-otel-secure "*) echo "false" ;;
+    *" deploy docker "*)
+        echo "services: {}" > "$mount/docker-compose.yml"
+        echo ".env" > "$mount/.gitignore"
+        echo "from-deploy" > "$mount/click-dog.yaml"
+        printf "CLICKHOUSE_PASSWORD='%s'\n" "$CLICKHOUSE_PASSWORD" > "$mount/.env" ;;
+    *" init "*)
+        [[ ! -e "$mount/click-dog.yaml" ]] || echo "existing file replaced"
+        echo "from-init" > "$mount/click-dog.yaml"
+        echo "Wrote /work/click-dog.yaml" ;;
+    *) echo "unexpected docker call:$argv" >&2; exit 64 ;;
+esac
+FAKE
+chmod +x "$lone_tmp/bin/docker"
+lone_rc=0
+lone_out=$(cd "$lone_tmp/dl" && PATH="$lone_tmp/bin:$PATH" CLICKHOUSE_PASSWORD="lonepass" \
+    bash ./install.sh docker -c localhost:4317 -v 26.04.1 2>&1) || lone_rc=$?
+assert_eq "a downloaded install.sh generates docker files" "0" "$lone_rc"
+assert_contains "it reports where the files are" "Docker files generated in ./click-dog-docker/" "$lone_out"
+assert_not_contains "the generator's container path stays hidden" "/work" "$lone_out"
+for lone_file in docker-compose.yml .env .gitignore; do
+    assert_eq "lone download wrote $lone_file" "yes" \
+        "$([[ -f "$lone_tmp/dl/click-dog-docker/$lone_file" ]] && echo yes || echo no)"
+done
+assert_eq "the config is init's, not the generator's" "from-init" "$(cat "$lone_tmp/dl/click-dog-docker/click-dog.yaml")"
+assert_contains "the output names the host path" "click-dog-docker/click-dog.yaml" "$lone_out"
+assert_contains "the output says where the config connects" "localhost:9440 over TLS" "$lone_out"
+assert_not_contains "a first run replaces nothing" "existing file replaced" "$lone_out"
+lone_rc=0
+lone_out=$(cd "$lone_tmp/dl" && PATH="$lone_tmp/bin:$PATH" CLICKHOUSE_PASSWORD="lonepass" \
+    bash ./install.sh docker -c localhost:4317 -v 26.04.1 2>&1) || lone_rc=$?
+assert_eq "a second run succeeds" "0" "$lone_rc"
+assert_contains "a second run says it replaced the config" "existing file replaced" "$lone_out"
+
+# A generator refusal stops the run in its own words, before init overwrites anything.
+sed -i.bak 's|\*" deploy docker "\*)|*" deploy docker "*) echo "refused by generator" >\&2; exit 7 ;; *" never "*)|' "$lone_tmp/bin/docker"
+lone_rc=0
+lone_out=$(cd "$lone_tmp/dl" && PATH="$lone_tmp/bin:$PATH" CLICKHOUSE_PASSWORD="lonepass" \
+    bash ./install.sh docker -c localhost:4317 -v 26.04.1 -o refused 2>&1) || lone_rc=$?
+assert_eq "a generator refusal is the exit status" "7" "$lone_rc"
+assert_contains "a generator refusal is shown" "refused by generator" "$lone_out"
+assert_eq "init does not run after a refusal" "no" \
+    "$([[ -e "$lone_tmp/dl/refused/click-dog.yaml" ]] && echo yes || echo no)"
+
+echo ""
+echo "=== set_client_connection ==="
+
+client_words() { # client_words CLIENT [HOST [PORT]]
+    CLICKHOUSE_CLIENT="$1"
+    set_client_connection "${2:-}" "${3:-}"
+    echo "${CLIENT_CONNECTION[*]}"
+}
+assert_eq "a bare client is unchanged" "clickhouse-client" "$(client_words "clickhouse-client")"
+assert_eq "the client's user and password are dropped" "clickhouse-client --secure" \
+    "$(client_words "clickhouse-client -u admin --password hunter2 --secure")"
+assert_eq "the = spellings are dropped" "clickhouse-client --host h" \
+    "$(client_words "clickhouse-client --user=admin --password=hunter2 --host h")"
+assert_eq "an attached -u is dropped" "clickhouse-client --host h" \
+    "$(client_words "clickhouse-client -uadmin --host h")"
+assert_eq "--password with no value keeps the next flag" "clickhouse-client --secure" \
+    "$(client_words "clickhouse-client --password --secure")"
+assert_eq "--password with no value keeps the next flag's value" "clickhouse-client --host db1 --port 9000" \
+    "$(client_words "clickhouse-client --password --host db1 --port 9000")"
+assert_eq "--ask-password is dropped" "clickhouse-client --host h" \
+    "$(client_words "clickhouse-client --ask-password --host h")"
+assert_eq "the two-word client is found" "clickhouse client" \
+    "$(client_words "clickhouse client -u admin")"
+assert_eq "a client path is found" "/usr/bin/clickhouse-client" \
+    "$(client_words "/usr/bin/clickhouse-client -u admin")"
+assert_eq "a client under another name is the first word" "chclient --secure" \
+    "$(client_words "chclient -u admin --password pw --secure")"
+assert_eq "a wrapper's -u stays" "docker exec -u root -e CLICKHOUSE_PASSWORD ch1 clickhouse-client" \
+    "$(client_words "docker exec -u root -e CLICKHOUSE_PASSWORD ch1 clickhouse-client -u admin")"
+assert_eq "a wrapper's path naming clickhouse does not end the wrapper" \
+    "docker exec -w /var/lib/clickhouse -u root ch1 clickhouse-client" \
+    "$(client_words "docker exec -w /var/lib/clickhouse -u root ch1 clickhouse-client -u admin")"
+assert_eq "a wrapper's namespace and --user stay" \
+    "kubectl exec -n clickhouse --user=ops pod -- clickhouse-client" \
+    "$(client_words "kubectl exec -n clickhouse --user=ops pod -- clickhouse-client --user=admin")"
+
+# A config flag stays on the normal connection and leaves the one a refused login
+# tries next.
+client_no_config() {
+    CLICKHOUSE_CLIENT="$1"
+    set_client_connection
+    echo "${CLIENT_CONNECTION_NO_CONFIG[*]}"
+}
+for cw_flags in "-c /x.xml" "-C /x.xml" "--config /x.xml" "--config-file /x.xml" "-c/x.xml" "-C/x.xml" \
+    "--config=/x.xml" "--config-file=/x.xml" "--connection prod" "--connection=prod"; do
+    assert_eq "$cw_flags stays on the connection" "clickhouse-client --secure $cw_flags" \
+        "$(client_words "clickhouse-client --secure $cw_flags")"
+    assert_eq "$cw_flags leaves the no-config connection" "clickhouse-client --secure" \
+        "$(client_no_config "clickhouse-client --secure $cw_flags")"
+done
+assert_eq "other flags stay on the no-config connection" "clickhouse-client --host h --port 9 --secure" \
+    "$(client_no_config "clickhouse-client --host h --port 9 --secure")"
+
+# A typed host or port takes the place of -C's: the client uses the first --host.
+for cw_flags in "--host old" "--host=old" "-h old" "-hold"; do
+    assert_eq "a typed host replaces $cw_flags" "clickhouse-client --secure --host new" \
+        "$(client_words "clickhouse-client $cw_flags --secure" new)"
+done
+for cw_flags in "--port 9001" "--port=9001"; do
+    assert_eq "a typed port replaces $cw_flags" "clickhouse-client --secure --host new --port 9002" \
+        "$(client_words "clickhouse-client $cw_flags --secure" new 9002)"
+    assert_eq "with no typed port, $cw_flags stays" "clickhouse-client $cw_flags --host new" \
+        "$(client_words "clickhouse-client $cw_flags" new)"
+done
+assert_eq "the no-config connection gets the typed host too" "clickhouse-client --host new --port 9002" \
+    "$(CLICKHOUSE_CLIENT="clickhouse-client --host old"; set_client_connection new 9002; echo "${CLIENT_CONNECTION_NO_CONFIG[*]}")"
+assert_eq "with no typed host, -C's stays" "clickhouse-client --host old" "$(client_words "clickhouse-client --host old")"
+
+# Whether this client reaches the server whose files are on this host.
+client_local() {
+    CLICKHOUSE_CLIENT="$1"
+    set_client_connection
+    echo "$CLIENT_IS_LOCAL"
+}
+for cw_client in "clickhouse-client" "clickhouse-client --host localhost" "clickhouse-client --host=127.0.0.1" "clickhouse-client -h::1"; do
+    assert_eq "local: $cw_client" "true" "$(client_local "$cw_client")"
+done
+for cw_client in "clickhouse-client --host db1" "clickhouse-client --host=db1" "clickhouse-client -h db1" "clickhouse-client -hdb1" \
+    "clickhouse-client --connection prod" "clickhouse-client --connection=prod" "docker exec c clickhouse-client"; do
+    assert_eq "not local: $cw_client" "false" "$(client_local "$cw_client")"
+done
+
+# Once the empty config worked, every later connection uses it.
+assert_eq "the empty config sticks, in place of -C's" "clickhouse-client --secure --config-file /tmp/empty.xml" \
+    "$(CLIENT_USES_EMPTY_CONFIG=true CLIENT_EMPTY_CONFIG=/tmp/empty.xml; client_words "clickhouse-client -c /x.xml --secure")"
+assert_eq "the empty config stays on this host" "clickhouse-client -c /x.xml --host db1" \
+    "$(CLICKHOUSE_CLIENT="clickhouse-client -c /x.xml"; CLIENT_USES_EMPTY_CONFIG=true; CLIENT_EMPTY_CONFIG=/tmp/empty.xml; set_client_connection db1; echo "${CLIENT_CONNECTION[*]}")"
+
+# The file the empty-config login uses.
+cw_empty=$(
+    clickhouse_setup_tempfiles=()
+    make_client_empty_config
+    make_client_empty_config
+    echo "$CLIENT_EMPTY_CONFIG"
+    echo "${#clickhouse_setup_tempfiles[@]}"
+)
+cw_empty_file=$(head -1 <<<"$cw_empty")
+assert_contains "the empty config has the extension the client needs" ".xml" "$cw_empty_file"
+assert_eq "the empty config is empty" "<config></config>" "$(cat "$cw_empty_file")"
+# shellcheck disable=SC2012 # one known file
+assert_eq "the empty config is private" "-rw-------" "$(ls -l "$cw_empty_file" | cut -c1-10)"
+assert_eq "the empty config is made once, and cleaned up" "1" "$(tail -1 <<<"$cw_empty")"
+rm -f "$cw_empty_file"
+
+echo ""
+echo "=== monitor_user_authenticates ==="
+
+# ma_client exits with whatever the words ask for: rc=N on the normal connection,
+# and empty=N with an empty config.
+ma_client() {
+    echo "$*" >> "$ma_log"
+    if [[ " $* " == *" --config-file "* ]]; then
+        return "$ma_empty_rc"
+    fi
+    return "$ma_rc"
+}
+ma_wrapper() { ma_client "$@"; }
+ma_run() { # ma_run RC EMPTY_RC [CLIENT] — prints status, then logins made
+    ma_rc="$1" ma_empty_rc="$2"
+    (
+        clickhouse_setup_tempfiles=()
+        CLICKHOUSE_CLIENT="${3:-ma_client}"
+        CLICKHOUSE_USER="mon"
+        set_client_connection
+        rc=0
+        monitor_user_authenticates "pw" || rc=$?
+        echo "$rc $(wc -l < "$ma_log" | tr -d ' ') ${CLIENT_USES_EMPTY_CONFIG:-false}"
+        rm -f "${clickhouse_setup_tempfiles[@]+"${clickhouse_setup_tempfiles[@]}"}"
+    )
+    : > "$ma_log"
+}
+ma_log="$cw_empty_file.log"
+: > "$ma_log"
+TEST_TEMP_DIRS+=("$ma_log")
+assert_eq "a login that works makes one try" "0 1 false" "$(ma_run 0 0)"
+assert_eq "a refusal tries the empty config, and keeps it if it works" "0 2 true" "$(ma_run 4 0)"
+assert_eq "a refusal on both is a refusal" "1 2 false" "$(ma_run 4 4)"
+assert_eq "a refusal then no answer is still a refusal" "1 2 false" "$(ma_run 4 210)"
+assert_eq "no answer makes no second try" "2 1 false" "$(ma_run 210 0)"
+assert_eq "any other status is no answer" "2 1 false" "$(ma_run 1 0)"
+assert_eq "a wrapper's client gets no second try" "1 1 false" "$(ma_run 4 0 "ma_wrapper clickhouse-client")"
+assert_eq "a client on another host gets no second try" "1 1 false" "$(ma_run 4 0 "ma_client --host db1")"
+assert_eq "a named connection gets no second try" "1 1 false" "$(ma_run 4 0 "ma_client --connection prod")"
+assert_eq "a client on this host gets the second try" "0 2 true" "$(ma_run 4 0 "ma_client --host localhost")"
+
+echo ""
+echo "=== clickhouse_unreadable_files ==="
+
+ur_tmp=$(make_temp_dir)
+TEST_TEMP_DIRS+=("$ur_tmp")
+mkdir -p "$ur_tmp/config.d" "$ur_tmp/conf.d" "$ur_tmp/users.d/subdir"
+: > "$ur_tmp/conf.d/unreadable-g.xml"
+: > "$ur_tmp/users.d/unreadable-h.XML"
+: > "$ur_tmp/config.d/unreadable-i.YAML"
+: > "$ur_tmp/users.d/unreadable-j.Conf"
+: > "$ur_tmp/config.d/fine.xml"
+: > "$ur_tmp/config.d/unreadable-a.xml"
+: > "$ur_tmp/config.d/unreadable-b.yml"
+: > "$ur_tmp/users.d/fine.yaml"
+: > "$ur_tmp/users.d/unreadable-c.conf"
+: > "$ur_tmp/users.d/unreadable-d.yaml"
+: > "$ur_tmp/users.d/unreadable-e.xml.bak"
+: > "$ur_tmp/users.d/.unreadable-f.xml"
+# ur_run UNIT_USER UNIT_GROUP [SUPPLEMENTARY] — runs the check with stderr in
+# $ur_tmp/note. Group IDs: chgrp 2002, chmain 3003 (chsvc's main group), extra 5005,
+# suppx 4004, root 0. getent initgroups lists chsvc's member groups from UR_MEMBERS
+# (default: extra). setpriv accepts only "--regid=X --groups=Y" equal to UR_EXPECT,
+# and fails for files named unreadable. UR_NO_SETPRIV=1 runs with no setpriv at all.
+ur_run() {
+    (
+        ur_user="$1" ur_group="$2" ur_supp="${3:-}"
+        systemctl() {
+            case "$3" in
+                User) echo "$ur_user" ;;
+                Group) echo "$ur_group" ;;
+                SupplementaryGroups) echo "$ur_supp" ;;
+            esac
+        }
+        id() {
+            case "$1 $2" in
+                "-gn chsvc") echo chmain ;;
+                *) return 1 ;;
+            esac
+        }
+        getent() {
+            case "$1 $2" in
+                "passwd 1001") echo "chsvc:x:1001:3003::/:/bin/false" ;;
+                "group 2002"|"group chgrp") echo "chgrp:x:2002:" ;;
+                "group chmain") echo "chmain:x:3003:" ;;
+                "group root") echo "root:x:0:" ;;
+                "group suppx") echo "suppx:x:4004:" ;;
+                "group blankgid") echo "blankgid:x::" ;;
+                "initgroups chsvc") echo "chsvc                 ${UR_MEMBERS-5005}" ;;
+                *) return 2 ;;
+            esac
+        }
+        if [[ -n "${UR_NO_SETPRIV:-}" ]]; then
+            # shellcheck disable=SC2123 # no setpriv anywhere on the search path
+            PATH=/nonexistent
+        else
+            setpriv() {
+                echo "$*" >> "$ur_tmp/setpriv.log"
+                [[ "$1" == "--reuid=chsvc" && "$2 $3" == "${UR_EXPECT:---regid=chgrp --groups=2002,5005}" ]] || return 1
+                shift 3
+                [[ "$1" == "true" ]] && return 0
+                [[ "$1 $2" == "test -r" && "$3" != *unreadable* ]]
+            }
+        fi
+        CLICKHOUSE_USERS_DIR="$ur_tmp/users.d"
+        clickhouse_unreadable_files 2>"$ur_tmp/note"
+    )
+}
+ur_note() { cat "$ur_tmp/note"; }
+ur_ran() { # ur_ran OUTPUT — "yes" when the check ran and found the unreadable files
+    if [[ "$1" == *unreadable-a.xml* ]]; then echo yes; else echo no; fi
+}
+ur_out=$(ur_run chsvc chgrp)
+for ur_name in config.d/unreadable-a.xml config.d/unreadable-b.yml users.d/unreadable-c.conf users.d/unreadable-d.yaml \
+    conf.d/unreadable-g.xml users.d/unreadable-h.XML config.d/unreadable-i.YAML users.d/unreadable-j.Conf; do
+    assert_contains "unreadable: names $ur_name" "$ur_tmp/$ur_name" "$ur_out"
+done
+assert_not_contains "unreadable: leaves a readable file out" "fine" "$ur_out"
+assert_not_contains "unreadable: ignores a file ClickHouse does not load" ".bak" "$ur_out"
+assert_not_contains "unreadable: ignores a hidden file" ".unreadable-f" "$ur_out"
+assert_eq "unreadable: a check that runs adds no note" "" "$(ur_note)"
+assert_not_contains "unreadable: the main group is left out when the user is not its member" "3003" "$(cat "$ur_tmp/setpriv.log")"
+rm -f "$ur_tmp/setpriv.log"
+assert_eq "unreadable: a user listed in its main group keeps it" "yes" \
+    "$(ur_ran "$(UR_MEMBERS="3003 5005" UR_EXPECT="--regid=chgrp --groups=2002,3003,5005" ur_run chsvc chgrp)")"
+assert_eq "unreadable: with no unit group, the main group counts" "yes" \
+    "$(ur_ran "$(UR_EXPECT="--regid=chmain --groups=3003,5005" ur_run chsvc "")")"
+assert_eq "unreadable: group 0 adds no member groups" "yes" \
+    "$(ur_ran "$(UR_EXPECT="--regid=root --groups=0" ur_run chsvc root)")"
+assert_eq "unreadable: SupplementaryGroups= counts, by name or number" "yes" \
+    "$(ur_ran "$(UR_EXPECT="--regid=chgrp --groups=2002,5005,4004,4242" ur_run chsvc chgrp "suppx 4242")")"
+assert_eq "unreadable: group 0 still counts SupplementaryGroups=" "yes" \
+    "$(ur_ran "$(UR_EXPECT="--regid=root --groups=0,4004" ur_run chsvc root suppx)")"
+assert_eq "unreadable: a group listed twice counts once" "yes" \
+    "$(ur_ran "$(UR_MEMBERS="2002 5005" ur_run chsvc chgrp)")"
+assert_eq "unreadable: a user with no member groups" "yes" \
+    "$(ur_ran "$(UR_MEMBERS="" UR_EXPECT="--regid=chgrp --groups=2002" ur_run chsvc chgrp)")"
+assert_eq "unreadable: a numeric User= becomes its name" "yes" "$(ur_ran "$(ur_run 1001 chgrp)")"
+assert_eq "unreadable: a numeric Group= becomes its name" "yes" "$(ur_ran "$(ur_run chsvc 2002)")"
+rm -f "$ur_tmp/setpriv.log"
+
+assert_eq "unreadable: no unit user, no check" "" "$(ur_run "" chgrp)"
+assert_contains "unreadable: no unit user, says so" "systemd names no user for clickhouse-server" "$(ur_note)"
+assert_eq "unreadable: a group it cannot find, no check" "" "$(ur_run nogrp "")"
+assert_contains "unreadable: a group it cannot find, says so" "cannot find the group clickhouse-server runs as" "$(ur_note)"
+assert_eq "unreadable: no user or group, setpriv never runs" "no" "$([[ -e "$ur_tmp/setpriv.log" ]] && echo yes || echo no)"
+assert_eq "unreadable: an unknown numeric User=, no check" "" "$(ur_run 4242 chgrp)"
+assert_eq "unreadable: an unknown SupplementaryGroups= entry, no check" "" "$(ur_run chsvc chgrp nosuch)"
+assert_contains "unreadable: an unknown SupplementaryGroups= entry, says so" "cannot find every group clickhouse-server starts with" "$(ur_note)"
+assert_eq "unreadable: a SupplementaryGroups= entry with no ID, no check" "" "$(ur_run chsvc chgrp blankgid)"
+assert_contains "unreadable: a SupplementaryGroups= entry with no ID, says so" "cannot find every group" "$(ur_note)"
+assert_eq "unreadable: a unit group with no ID, no check" "" "$(ur_run chsvc blankgid)"
+assert_contains "unreadable: a unit group with no ID, says so" "cannot find every group" "$(ur_note)"
+assert_eq "unreadable: no setpriv, no check" "" "$(UR_NO_SETPRIV=1 ur_run chsvc chgrp)"
+assert_contains "unreadable: no setpriv, says so" "setpriv is not installed" "$(ur_note)"
+assert_eq "unreadable: a setpriv that fails, no check" "" "$(UR_EXPECT="never" ur_run chsvc chgrp)"
+assert_contains "unreadable: a setpriv that fails, says so" "setpriv cannot run as chsvc" "$(ur_note)"
+assert_contains "unreadable: the note says what was skipped" "cannot check that ClickHouse can read its config files" "$(ur_note)"
+
+echo ""
+echo "=== check_clickhouse_files ==="
+
+cc_tmp=$(make_temp_dir)
+TEST_TEMP_DIRS+=("$cc_tmp")
+mkdir -p "$cc_tmp/users.d"
+# cc_run UNREADABLE GROUP — prints the output, then the status.
+cc_run() {
+    (
+        cc_unreadable="$1" cc_group="$2"
+        clickhouse_unreadable_files() { [[ -z "$cc_unreadable" ]] || echo "$cc_unreadable"; }
+        clickhouse_server_group() { echo "$cc_group"; }
+        # shellcheck disable=SC2034 # read by the eval'd function
+        CLICKHOUSE_USERS_DIR="$cc_tmp/users.d"
+        rc=0
+        check_clickhouse_files 2>&1 || rc=$?
+        echo "status=$rc"
+    )
+}
+assert_eq "clean: nothing stops the guide" "status=0" "$(cc_run "" chgrp)"
+cc_out=$(cc_run "/etc/x/a.xml" chgrp)
+assert_contains "an unreadable file stops the guide" "status=1" "$cc_out"
+assert_contains "an unreadable file is named" "/etc/x/a.xml" "$cc_out"
+assert_contains "the fix uses the server's group" "chown root:chgrp FILE && chmod 640 FILE" "$cc_out"
+cc_out=$(cc_run "/etc/x/a.xml" "")
+assert_contains "with no group, the fix is world-readable" "chmod 644 FILE" "$cc_out"
+assert_not_contains "with no group, no chown" "chown" "$cc_out"
+
+echo '<query>GRANT SELECT ON system.query_log TO mon</query>' > "$cc_tmp/users.d/click-dog-any-name.xml"
+cc_out=$(cc_run "$cc_tmp/users.d/click-dog-any-name.xml" chgrp)
+assert_contains "a grantee stops the guide" "status=1" "$cc_out"
+assert_contains "a grantee file is named" "$cc_tmp/users.d/click-dog-any-name.xml" "$cc_out"
+assert_contains "the fix is to delete it" "rm FILE" "$cc_out"
+assert_contains "the guide says it never loaded" "never loaded" "$cc_out"
+assert_not_contains "a chown cannot fix a grantee" "chown" "$cc_out"
+echo '<query>grant select on system.query_log to mon</query>' > "$cc_tmp/users.d/click-dog-any-name.xml"
+assert_contains "a grantee in lower case stops the guide" "status=1" "$(cc_run "" chgrp)"
+rm -f "$cc_tmp/users.d/click-dog-any-name.xml"
+echo '<query>GRANT SELECT ON system.query_log</query>' > "$cc_tmp/users.d/click-dog-mon.xml"
+assert_eq "a grant with no grantee is fine" "status=0" "$(cc_run "" chgrp)"
+printf '%s\n' '<!-- <query>GRANT SELECT ON system.query_log TO mon</query> -->' '<query>GRANT SELECT ON system.query_log</query>' > "$cc_tmp/users.d/click-dog-mon.xml"
+assert_eq "a grantee in a comment is fine" "status=0" "$(cc_run "" chgrp)"
+printf '%s\n' '<!--' '<query>GRANT SELECT ON system.query_log TO mon</query>' '-->' > "$cc_tmp/users.d/click-dog-mon.xml"
+assert_eq "a grantee in a comment over lines is fine" "status=0" "$(cc_run "" chgrp)"
+printf '%s\n' '<!-- old --> <query>GRANT SELECT ON system.query_log TO mon</query> <!-- x -->' > "$cc_tmp/users.d/click-dog-mon.xml"
+assert_contains "a grantee between comments stops the guide" "status=1" "$(cc_run "" chgrp)"
+printf '%s\n' '<!-- a' 'b -->' '<query>GRANT SELECT ON system.query_log TO mon</query>' > "$cc_tmp/users.d/click-dog-mon.xml"
+assert_contains "a grantee after a comment over lines stops the guide" "status=1" "$(cc_run "" chgrp)"
+printf '%s\n' '<query>GRANT SELECT ON system.query_log</query>' > "$cc_tmp/users.d/click-dog-mon.xml"
+echo '<query>GRANT SELECT ON system.query_log TO mon</query>' > "$cc_tmp/users.d/ops.xml"
+assert_eq "an operator's own file is left to the unreadable check" "status=0" "$(cc_run "" chgrp)"
+
+echo ""
+echo "=== docker render output ==="
+
+dr_tmp="$(make_temp_dir)"
+TEST_TEMP_DIRS+=("$dr_tmp")
+mkdir -p "$dr_tmp/out#a&b"
+dr_out=$(
+    docker_run_mounted() { echo "Wrote /work/click-dog.yaml and /work/other"; echo "no path here"; }
+    VERSION=1 CLICKHOUSE_TLS=false KEEPER_HOSTS="" OTEL_SECURE=""
+    render_click_dog_config_via_docker "$dr_tmp/out#a&b/click-dog.yaml"
+)
+dr_dir=$(cd "$dr_tmp/out#a&b" && pwd)
+assert_eq "a # or & in the output path prints as typed" \
+    "Wrote $dr_dir/click-dog.yaml and $dr_dir/other
+no path here" "$dr_out"
+dr_rc=0
+(
+    docker_run_mounted() { return 7; }
+    VERSION=1 CLICKHOUSE_TLS=false KEEPER_HOSTS="" OTEL_SECURE=""
+    render_click_dog_config_via_docker "$dr_tmp/out#a&b/click-dog.yaml"
+) >/dev/null || dr_rc=$?
+assert_eq "a failed render keeps its status" "7" "$dr_rc"
+assert_eq "a render leaves no temp file" "0" "$(find "$TMPDIR" -maxdepth 1 -name 'click-dog-render*' | wc -l | tr -d ' ')"
+
+echo ""
+echo "=== guide_read_secret ==="
+
+# shellcheck disable=SC2154 # guide_read_secret sets it
+grs_value=$(guide_read_secret grs_answer "" <<<"  with spaces  " >/dev/null; printf '%s' "$grs_answer")
+assert_eq "a typed password keeps its spaces" "  with spaces  " "$grs_value"
+assert_contains "a typed password does not echo" 'IFS= read -rsp' "$(awk '/^guide_read_secret\(\)/,/^}/' deploy/install.sh)"
+
+echo ""
+echo "=== run_sql_file ==="
+
+rs_tmp=$(make_temp_dir)
+TEST_TEMP_DIRS+=("$rs_tmp")
+echo "SELECT 1;" > "$rs_tmp/sql"
+rs_answers() { sed -n "s/^SELECT '\(.*\)';/\1/p"; }
+rs_runs() { rs_answers; }
+rs_no_stdin() { :; }
+rs_fails() { echo "Code: 516" >&2; return 4; }
+rs_rc=0; rs_err=$(run_sql_file "$rs_tmp/sql" rs_runs 2>&1) || rs_rc=$?
+assert_eq "SQL that came back succeeds" "0" "$rs_rc"
+rs_rc=0; rs_err=$(run_sql_file "$rs_tmp/sql" rs_no_stdin 2>&1) || rs_rc=$?
+assert_eq "a client without stdin fails" "1" "$rs_rc"
+assert_contains "a client without stdin says so" "did not reach the client" "$rs_err"
+rs_rc=0; rs_err=$(run_sql_file "$rs_tmp/sql" rs_fails 2>&1) || rs_rc=$?
+assert_eq "a failing client keeps its status" "4" "$rs_rc"
+assert_contains "a failing client's error shows" "Code: 516" "$rs_err"
+
+echo ""
+echo "=== setup_monitoring_user against a fake ClickHouse ==="
+
+# Users live in files, as hash + storage. Like the real server: an overlay in
+# users.d wins over a SQL user of the same name, an overlay naming a grantee does
+# not load, SQL cannot change an XML user, CREATE USER IF NOT EXISTS leaves an
+# existing user alone, a repeated --user is a usage error, and a password in the
+# client's config beats CLICKHOUSE_PASSWORD.
+mu_tmp=$(make_temp_dir)
+TEST_TEMP_DIRS+=("$mu_tmp")
+cat > "$mu_tmp/clickhouse-client" <<'FAKE'
+#!/usr/bin/env bash
+echo "$*" >> "$FAKE_CH_STATE/argv"
+[[ -z "${FAKE_CH_DOWN:-}" ]] || { echo "Code: 210. Connection refused" >&2; exit 210; }
+user="" query="" multi="false" config="" connection=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -u|--user)
+            if [[ -n "$user" ]]; then
+                echo "Bad arguments: option '--user' cannot be specified more than once" >&2
+                exit 1
+            fi
+            user="$2"
+            shift 2
+            ;;
+        --config-file|--config|-c|-C) config="$2"; shift 2 ;;
+        --config-file=*|--config=*) config="${1#*=}"; shift ;;
+        -c*|-C*) config="${1:2}"; shift ;;
+        --connection) connection="$2"; shift 2 ;;
+        --password|--host|--port) shift 2 ;;
+        -q) query="$2"; shift 2 ;;
+        --multiquery) multi="true"; shift ;;
+        *) shift ;;
+    esac
+done
+[[ -n "$config" ]] || config="$HOME/.clickhouse-client/config.xml"
+# Any password element, even an empty one, beats the environment.
+if [[ -f "$config" ]] && grep -q '<password' "$config"; then
+    CLICKHOUSE_PASSWORD=$(sed -n 's|.*<password[^>]*>\([^<]*\)</password>.*|\1|p' "$config")
+fi
+[[ -z "$connection" ]] || CLICKHOUSE_PASSWORD="connection-password"
+sha() {
+    if command -v sha256sum >/dev/null; then
+        printf '%s' "$1" | sha256sum | awk '{print $1}'
+    else
+        printf '%s' "$1" | shasum -a 256 | awk '{print $1}'
+    fi
+}
+overlay() { echo "$FAKE_CH_USERS_DIR/click-dog-$1.xml"; }
+overlay_loaded() {
+    [[ -z "${FAKE_CH_IGNORE_OVERLAY:-}" && -f "$(overlay "$1")" ]] && ! grep -q ' TO ' "$(overlay "$1")"
+}
+stored_hash() {
+    if overlay_loaded "$1"; then
+        sed -n 's|.*<password_sha256_hex>\(.*\)</password_sha256_hex>.*|\1|p' "$(overlay "$1")"
+    elif [[ -f "$FAKE_CH_STATE/$1.xml-hash" ]]; then
+        cat "$FAKE_CH_STATE/$1.xml-hash"
+    elif [[ -f "$FAKE_CH_STATE/$1.hash" ]]; then
+        cat "$FAKE_CH_STATE/$1.hash"
+    fi
+}
+may_read() {
+    if overlay_loaded "$1"; then
+        grep -q GRANT "$(overlay "$1")"
+    else
+        [[ -f "$FAKE_CH_STATE/$1.grants" ]]
+    fi
+}
+# The monitoring user, reached through the same client.
+if [[ -n "$user" && "$user" != "admin" && "$user" != "default" ]]; then
+    if [[ -n "${FAKE_CH_LOGIN_FAILS:-}" ]]; then
+        logins=$(cat "$FAKE_CH_STATE/logins" 2>/dev/null || echo 0)
+        echo $((logins + 1)) > "$FAKE_CH_STATE/logins"
+        if ((logins < FAKE_CH_LOGIN_FAILS)); then
+            echo "Code: 516. Authentication failed" >&2
+            exit 4
+        fi
+    fi
+    if [[ "$(stored_hash "$user")" != "$(sha "${CLICKHOUSE_PASSWORD:-}")" ]]; then
+        echo "Code: 516. Authentication failed" >&2
+        exit 4
+    fi
+    if [[ "$multi" == "true" ]]; then
+        [[ -z "${FAKE_CH_NO_STDIN:-}" ]] || exit 0
+        if [[ -n "${FAKE_CH_NO_SPAN_TABLE:-}" ]]; then
+            echo "Code: 60. Unknown table expression identifier 'system.opentelemetry_span_log'. (UNKNOWN_TABLE)" >&2
+            exit 60
+        fi
+        if [[ -n "${FAKE_CH_NO_QUERY_LOG:-}" ]]; then
+            echo "Code: 60. Unknown table expression identifier 'system.query_log'. (UNKNOWN_TABLE)" >&2
+            exit 60
+        fi
+        if ! may_read "$user"; then
+            echo "Code: 497. Not enough privileges" >&2
+            exit 1
+        fi
+        echo click-dog-sql-ran
+    fi
+    exit 0
+fi
+# The administrator.
+if [[ -n "${FAKE_CH_ADMIN_BLANK_ONLY:-}" && "$multi" == "true" && -n "${CLICKHOUSE_PASSWORD:-}" ]]; then
+    echo "Code: 516. Authentication failed" >&2
+    exit 4
+fi
+if [[ -n "${FAKE_CH_ADMIN_NEEDS_PASSWORD:-}" && "${CLICKHOUSE_PASSWORD:-}" != "$FAKE_CH_ADMIN_NEEDS_PASSWORD" ]]; then
+    echo "Code: 516. Authentication failed" >&2
+    exit 4
+fi
+if [[ "$query" == *system.users* ]]; then
+    if [[ -n "${FAKE_CH_NO_SHOW_USERS:-}" ]]; then
+        echo "Code: 497. Not enough privileges" >&2
+        exit 1
+    fi
+    # A file ClickHouse has yet to poll: this many answers leave it out.
+    if [[ -n "${FAKE_CH_SLOW_LOAD:-}" ]]; then
+        polls=$(cat "$FAKE_CH_STATE/polls" 2>/dev/null || echo 0)
+        echo $((polls + 1)) > "$FAKE_CH_STATE/polls"
+        ((polls >= FAKE_CH_SLOW_LOAD)) || exit 0
+    fi
+    if overlay_loaded "$FAKE_CH_USER" || [[ -f "$FAKE_CH_STATE/$FAKE_CH_USER.xml-hash" ]]; then
+        echo "users_xml"
+    fi
+    if [[ -f "$FAKE_CH_STATE/$FAKE_CH_USER.hash" ]]; then
+        echo "local_directory"
+    fi
+    exit 0
+fi
+if [[ "$multi" == "true" ]]; then
+    [[ -z "${FAKE_CH_NO_STDIN:-}" ]] || exit 0
+    while IFS= read -r line; do
+        hash=$(sed -n "s/.* BY '\(.*\)';/\1/p" <<<"$line")
+        case "$line" in
+            "CREATE USER IF NOT EXISTS "*)
+                [[ -f "$FAKE_CH_STATE/$FAKE_CH_USER.hash" ]] || echo "$hash" > "$FAKE_CH_STATE/$FAKE_CH_USER.hash"
+                ;;
+            "ALTER USER "*)
+                if [[ -n "${FAKE_CH_ALTER_DENIED:-}" ]]; then
+                    echo "Code: 497. Not enough privileges" >&2
+                    exit 1
+                fi
+                echo "$hash" > "$FAKE_CH_STATE/$FAKE_CH_USER.hash"
+                echo altered >> "$FAKE_CH_STATE/log"
+                ;;
+            "GRANT "*) : > "$FAKE_CH_STATE/$FAKE_CH_USER.grants" ;;
+            "SELECT 'click-dog-sql-ran';") echo click-dog-sql-ran ;;
+        esac
+    done
+fi
+exit 0
+FAKE
+chmod +x "$mu_tmp/clickhouse-client"
+
+export FAKE_CH_STATE="$mu_tmp/state" FAKE_CH_USERS_DIR="$mu_tmp/users.d" FAKE_CH_USER="click_dog_monitor"
+mu_hash() { monitor_password_hash "$1"; }
+mu_file="$FAKE_CH_USERS_DIR/click-dog-$FAKE_CH_USER.xml"
+# mu_reset: no users, no overlay, no .secret, an administrator who can do anything.
+mu_reset() {
+    rm -rf "$FAKE_CH_STATE" "$FAKE_CH_USERS_DIR" "${mu_tmp:?}/.secret" "${mu_tmp:?}/final" "${mu_tmp:?}/home" "${mu_tmp:?}/setup_sql" "${mu_tmp:?}/password_kept" "${mu_tmp:?}/chown" "${mu_tmp:?}/conf.d"
+    mkdir -p "$FAKE_CH_STATE" "$FAKE_CH_USERS_DIR" "$mu_tmp/home/.clickhouse-client"
+}
+mu_sql_user() { mu_hash "$1" > "$FAKE_CH_STATE/$FAKE_CH_USER.hash"; : > "$FAKE_CH_STATE/$FAKE_CH_USER.grants"; }
+mu_overlay() { generate_user_setup_xml "$FAKE_CH_USER" "$(mu_hash "$1")" > "$mu_file"; }
+# mu_overlay_no_grants: as a file edited by hand, without the two GRANTs.
+mu_overlay_no_grants() { mu_overlay "$1"; sed -i.bak '/GRANT/d' "$mu_file"; rm -f "$mu_file.bak"; }
+# mu_broken_overlay: a file ClickHouse refuses to load.
+mu_broken_overlay() { mu_overlay "$1"; sed -i.bak 's|<grants>|<grants><query>GRANT SELECT ON system.query_log TO x</query>|' "$mu_file"; rm -f "$mu_file.bak"; }
+# mu_xml_user: another XML file defines the user, as an operator might.
+mu_xml_user() {
+    mu_hash "$1" > "$FAKE_CH_STATE/$FAKE_CH_USER.xml-hash"
+    echo "<clickhouse><users><$FAKE_CH_USER></$FAKE_CH_USER></users></clickhouse>" > "$FAKE_CH_USERS_DIR/ops.xml"
+}
+# mu_client_config: root's client config carries an admin's credentials.
+mu_client_config() {
+    echo '<config><user>admin</user><password>adminpw</password></config>' > "$mu_tmp/home/.clickhouse-client/config.xml"
+}
+# mu_auth PASSWORD — would click-dog connect with this password now?
+mu_auth() {
+    if CLICKHOUSE_PASSWORD="$1" "$mu_tmp/clickhouse-client" -u "$FAKE_CH_USER" -q "SELECT 1" 2>/dev/null; then
+        echo yes
+    else
+        echo no
+    fi
+}
+# mu_run ANSWER... — run the setup with these answers on stdin. Sets mu_out and
+# mu_rc; the password it settled on, the one step 3 writes, lands in mu_final.
+mu_run() {
+    mu_rc=0
+    mu_out=$(
+        # The eval'd setup appends to this.
+        # shellcheck disable=SC2034
+        clickhouse_setup_tempfiles=()
+        clickhouse_file_install_cmd() { echo "${MU_INSTALL_CMD:-cp}"; }
+        sleep() { :; }
+        docker() { return 1; }
+        chown() { echo "$*" >> "$mu_tmp/chown"; }
+        # The globals go to the eval'd functions.
+        # shellcheck disable=SC2034
+        CLICKHOUSE_CLIENT="${MU_CLIENT:-$mu_tmp/clickhouse-client}" CLICKHOUSE_USER="$FAKE_CH_USER" \
+            CLICKHOUSE_PASSWORD="" SECRET_FILE="$mu_tmp/.secret" CLICKHOUSE_USERS_DIR="$FAKE_CH_USERS_DIR" \
+            HOME="$mu_tmp/home"
+        if [[ -n "${MU_EXPORT_PASSWORD:-}" ]]; then
+            export CLICKHOUSE_PASSWORD
+        fi
+        if [[ -n "${MU_STOP_IN_WAIT:-}" ]]; then
+            wait_for_monitor_user() { exit 130; }
+        fi
+        setup_monitoring_user <<<"$(printf '%s\n' "$@")" 2>&1
+        printf '%s' "$CLICKHOUSE_PASSWORD" > "$mu_tmp/final"
+        printf '%s' "${MONITOR_SETUP_SQL:-}" > "$mu_tmp/setup_sql"
+        printf '%s' "${MONITOR_PASSWORD_KEPT:-}" > "$mu_tmp/password_kept"
+    ) || mu_rc=$?
+    mu_final=$(cat "$mu_tmp/final" 2>/dev/null || true)
+}
+mu_exists() { if [[ -e "$1" ]]; then echo yes; else echo no; fi; }
+
+# No user at all: the same password lands on both sides.
+mu_reset
+mu_run r
+assert_eq "a new user: setup succeeds" "0" "$mu_rc"
+assert_contains "a new user: the copy says the guide sets the password" "The guide sets the same password" "$mu_out"
+assert_not_contains "a new user: nothing asks about an existing one" "already exists" "$mu_out"
+assert_eq "a new user: the generated password connects" "yes" "$(mu_auth "$mu_final")"
+assert_eq "a new user: the password is saved at once" "$mu_final" "$(cat "$mu_tmp/.secret")"
+# shellcheck disable=SC2012 # one known file
+assert_eq "a new user: the saved password is private" "-rw-------" "$(ls -l "$mu_tmp/.secret" | cut -c1-10)"
+assert_eq "a new user: the not-running ending can name the SQL" "yes" "$(mu_exists "$(cat "$mu_tmp/setup_sql")")"
+assert_contains "a new user: the saved password goes to click-dog's user" "click-dog:click-dog $mu_tmp/.secret" "$(cat "$mu_tmp/chown")"
+
+# SQL cannot change a user the overlay defines.
+mu_reset
+mu_run x
+assert_eq "a new user, [x]: the not-running ending offers no SQL" "" "$(cat "$mu_tmp/setup_sql")"
+
+# A closed stdin stops the guide instead of looping.
+mu_reset
+mu_run
+assert_eq "closed stdin: the guide stops" "1" "$mu_rc"
+assert_contains "closed stdin: says why" "stdin closed" "$mu_out"
+
+# The reinstall: `deploy uninstall` removed .secret and left the SQL user.
+mu_reset; mu_sql_user "oldpass"
+mu_run e wrongpass e oldpass
+assert_eq "reinstall: entering the password succeeds" "0" "$mu_rc"
+assert_contains "reinstall: names the cause" "already exists, and this host has no" "$mu_out"
+assert_not_contains "reinstall: never says it sets the password" "The guide sets the same password" "$mu_out"
+assert_contains "reinstall: a wrong password is refused" "did not authenticate" "$mu_out"
+assert_eq "reinstall: step 3 gets the entered password" "oldpass" "$mu_final"
+assert_contains "reinstall: nothing further to do" "nothing to do" "$mu_out"
+assert_eq "reinstall: entering a password changes nothing in ClickHouse" "" "$(cat "$FAKE_CH_STATE/log" 2>/dev/null || true)"
+
+mu_reset; mu_sql_user "oldpass"
+mu_run n r
+assert_eq "reinstall: a new password succeeds" "0" "$mu_rc"
+assert_contains "reinstall: the ALTER is shown before it runs" "ALTER USER click_dog_monitor" "$mu_out"
+assert_eq "reinstall: the new password connects" "yes" "$(mu_auth "$mu_final")"
+assert_eq "reinstall: the old password stops" "no" "$(mu_auth "oldpass")"
+assert_eq "reinstall: the new password is saved at once" "$mu_final" "$(cat "$mu_tmp/.secret")"
+
+# [n] replaces a password that just failed.
+mu_reset; mu_sql_user "current"
+printf 'stale' > "$mu_tmp/.secret"
+mu_run n r
+assert_eq "stale secret, [n]: the password is new" "no" "$([[ "$mu_final" == "stale" ]] && echo yes || echo no)"
+assert_eq "stale secret, [n]: the new password connects" "yes" "$(mu_auth "$mu_final")"
+assert_eq "stale secret, [n]: the new password is saved" "$mu_final" "$(cat "$mu_tmp/.secret")"
+assert_not_contains "stale secret, [n]: claims no reuse" "Reusing password from" "$mu_out"
+
+mu_reset; mu_sql_user "current"
+printf 'stale' > "$mu_tmp/.secret"
+MU_CLIENT="/nonexistent/clickhouse-client"
+mu_run r "$mu_tmp/clickhouse-client" n
+assert_eq "stale secret, [n] after the SQL: the password is new" "no" "$([[ "$mu_final" == "stale" ]] && echo yes || echo no)"
+assert_eq "stale secret, [n] after the SQL: the new password connects" "yes" "$(mu_auth "$mu_final")"
+unset MU_CLIENT
+
+# After [e], the password in use is the one typed.
+mu_reset; mu_sql_user "current"
+rm -f "$FAKE_CH_STATE/$FAKE_CH_USER.grants"
+printf 'stale' > "$mu_tmp/.secret"
+mu_run e current r
+assert_not_contains "stale secret, [e]: claims no reuse" "Reusing password from" "$mu_out"
+
+mu_reset; mu_sql_user "oldpass"
+mu_run n s
+assert_contains "reinstall: skipping after [n] says nothing changed" "did not change" "$mu_out"
+assert_eq "reinstall: skipping after [n] leaves the password" "yes" "$(mu_auth "oldpass")"
+assert_eq "reinstall: skipping after [n] saves nothing" "no" "$(mu_exists "$mu_tmp/.secret")"
+assert_not_contains "reinstall: skipping after [n] leaves no ALTER for the ending" "ALTER USER click_dog_monitor" "$(cat "$(cat "$mu_tmp/setup_sql")")"
+
+# The client's config password beats the saved one on another host, so a correct
+# saved password looks wrong. [n] then [s] must not replace it.
+mu_reset; mu_sql_user "stored"; mu_client_config
+printf 'stored' > "$mu_tmp/.secret"
+MU_CLIENT="$mu_tmp/clickhouse-client --host ch1.example.com --secure"
+mu_run n s
+assert_contains "another host, config password: says the saved one can be right" "the saved"$'\n'"  password can be right" "$mu_out"
+assert_eq "another host, config password: [n] then [s] keeps the saved password" "stored" "$mu_final"
+assert_contains "another host, config password: says .secret keeps it" "keeps the password it had" "$mu_out"
+assert_eq "another host, config password: the saved password still works" "yes" "$(mu_auth "$mu_final")"
+assert_contains "another host, config password: the ending's SQL holds the saved password" \
+    "$(mu_hash "stored")" "$(cat "$(cat "$mu_tmp/setup_sql")")"
+unset MU_CLIENT
+
+mu_reset; mu_sql_user "current"
+printf 'stale' > "$mu_tmp/.secret"
+mu_run k s
+assert_not_contains "this host: no note about the client config" "can be right" "$mu_out"
+
+mu_reset; mu_sql_user "oldpass"
+mu_run k r
+assert_eq "reinstall: keeping the user succeeds" "0" "$mu_rc"
+assert_contains "reinstall: keeping says what is left to do" "cannot connect until" "$mu_out"
+assert_eq "reinstall: keeping leaves the password" "yes" "$(mu_auth "oldpass")"
+assert_eq "reinstall: keeping runs no ALTER" "" "$(cat "$FAKE_CH_STATE/log" 2>/dev/null || true)"
+assert_not_contains "reinstall: keeping withdraws the overlay" "[x] Write XML config (no" "$mu_out"
+assert_eq "reinstall: keeping saves nothing" "no" "$(mu_exists "$mu_tmp/.secret")"
+assert_eq "reinstall: keeping is noted for the ending" "true" "$(cat "$mu_tmp/password_kept")"
+assert_eq "reinstall: keeping leaves no SQL for the ending" "" "$(cat "$mu_tmp/setup_sql")"
+
+# A SQL user never gets the overlay: it would hide the user's settings and grants.
+mu_reset; mu_sql_user "oldpass"
+rm -f "$FAKE_CH_STATE/$FAKE_CH_USER.grants"
+mu_run e oldpass x r
+assert_eq "SQL user: setup succeeds" "0" "$mu_rc"
+assert_not_contains "SQL user: the menu has no overlay" "[x] Write XML config" "$mu_out"
+assert_contains "SQL user: [x] is refused" "[x] is not available" "$mu_out"
+assert_eq "SQL user: no overlay appears" "no" "$(mu_exists "$mu_file")"
+assert_eq "SQL user: [r] adds the grants" "yes" "$(mu_exists "$FAKE_CH_STATE/$FAKE_CH_USER.grants")"
+
+mu_reset; mu_sql_user "oldpass"
+mu_run n x r
+assert_contains "SQL user, new password: [x] is refused" "[x] is not available" "$mu_out"
+assert_eq "SQL user, new password: no overlay appears" "no" "$(mu_exists "$mu_file")"
+assert_eq "SQL user, new password: [r] sets it" "yes" "$(mu_auth "$mu_final")"
+
+# Another XML file defines the user. A second definition stops ClickHouse.
+mu_reset; mu_xml_user "oppass"
+mu_run n k
+assert_eq "operator XML: keeping succeeds" "0" "$mu_rc"
+assert_contains "operator XML: names the file" "ops.xml defines it" "$mu_out"
+assert_not_contains "operator XML: no new password on offer" "[n] Set a new password" "$mu_out"
+assert_contains "operator XML: [n] is refused" "Please enter one of e/k" "$mu_out"
+assert_not_contains "operator XML: no overlay on offer" "[x] Write XML config" "$mu_out"
+assert_not_contains "operator XML: no SQL on offer" "[r] Run SQL" "$mu_out"
+assert_eq "operator XML: no overlay appears" "no" "$(mu_exists "$mu_file")"
+assert_eq "operator XML: the password stands" "yes" "$(mu_auth "oppass")"
+assert_eq "operator XML: the ending offers no SQL" "" "$(cat "$mu_tmp/setup_sql")"
+
+mu_reset; mu_xml_user "oppass"
+: > "$FAKE_CH_STATE/$FAKE_CH_USER.grants"
+mu_run e oppass
+assert_contains "operator XML with grants: nothing to do" "nothing to do" "$mu_out"
+assert_eq "operator XML with grants: step 3 gets the password" "oppass" "$mu_final"
+
+mu_reset; mu_xml_user "oppass"
+mu_run e oppass
+assert_eq "operator XML without grants: succeeds with no menu" "0" "$mu_rc"
+assert_contains "operator XML without grants: says so" "MISSING SELECT" "$mu_out"
+assert_contains "operator XML without grants: says what to add" "add these lines" "$mu_out"
+assert_contains "operator XML without grants: gives the grant" "GRANT SELECT ON system.query_log" "$mu_out"
+assert_not_contains "operator XML without grants: promises no SQL" "The setup SQL adds" "$mu_out"
+assert_eq "operator XML without grants: no overlay appears" "no" "$(mu_exists "$mu_file")"
+
+mu_reset; mu_xml_user "oppass"
+export FAKE_CH_NO_SHOW_USERS=1
+mu_run k
+assert_eq "operator XML, unreadable system.users: the file shows it" "0" "$mu_rc"
+assert_contains "operator XML, unreadable system.users: names the file" "ops.xml defines it" "$mu_out"
+assert_eq "operator XML, unreadable system.users: no overlay appears" "no" "$(mu_exists "$mu_file")"
+unset FAKE_CH_NO_SHOW_USERS
+
+# The guide's own file exists and ClickHouse does not report it. The guide warns
+# and leaves it: it cannot tell a broken file from a healthy one it reads wrongly.
+mu_reset; mu_broken_overlay "oldpass"
+mu_run r
+assert_eq "file not loaded: setup succeeds" "0" "$mu_rc"
+assert_contains "file not loaded: warns" "WARNING: ClickHouse does not report" "$mu_out"
+assert_contains "file not loaded: says what it risks" "does not start with a users.d file it cannot load" "$mu_out"
+assert_not_contains "file not loaded: offers no delete" "Delete $mu_file" "$mu_out"
+assert_eq "file not loaded: the file stays" "yes" "$(mu_exists "$mu_file")"
+assert_not_contains "file not loaded: no claim the user exists" "already exists" "$mu_out"
+assert_eq "file not loaded: the new user connects" "yes" "$(mu_auth "$mu_final")"
+
+mu_reset; mu_broken_overlay "oldpass"
+mu_run x
+assert_eq "file not loaded, [x]: setup succeeds" "0" "$mu_rc"
+assert_contains "file not loaded, [x]: says it replaces the whole file" "This replaces the whole of" "$mu_out"
+assert_contains "file not loaded, [x]: names what else goes" "anything else in it" "$mu_out"
+assert_not_contains "file not loaded, [x]: leaves no grantee" " TO " "$(cat "$mu_file")"
+assert_eq "file not loaded, [x]: connects" "yes" "$(mu_auth "$mu_final")"
+
+mu_reset; mu_broken_overlay "oldpass"; mu_sql_user "sqlpass"
+mu_run e sqlpass
+assert_contains "file not loaded, SQL user: the SQL user is found" "already exists" "$mu_out"
+assert_eq "file not loaded, SQL user: step 3 gets its password" "sqlpass" "$mu_final"
+assert_eq "file not loaded, SQL user: the setup SQL can still help" "yes" "$(mu_exists "$(cat "$mu_tmp/setup_sql")")"
+
+# A healthy file ClickHouse has yet to poll is not reported as broken.
+mu_reset; mu_overlay "oldpass"
+export FAKE_CH_SLOW_LOAD=3
+mu_run e oldpass
+assert_not_contains "a file just written: no warning" "does not report" "$mu_out"
+assert_contains "a file just written: found once loaded" "nothing to do" "$mu_out"
+assert_eq "a file just written: asks until it shows" "4" "$(cat "$FAKE_CH_STATE/polls")"
+unset FAKE_CH_SLOW_LOAD
+
+# A client aimed at another server says nothing about a file on this host.
+mu_reset; mu_overlay "oldpass"
+export FAKE_CH_IGNORE_OVERLAY=1
+MU_CLIENT="$mu_tmp/clickhouse-client --host otherhost"
+mu_run s
+assert_not_contains "another server: no warning about this host's file" "does not report" "$mu_out"
+assert_eq "another server: the file stays" "yes" "$(mu_exists "$mu_file")"
+assert_contains "the state query asks for the directory's type" "system.user_directories" "$(cat "$FAKE_CH_STATE/argv")"
+unset MU_CLIENT FAKE_CH_IGNORE_OVERLAY
+
+# Every file ClickHouse loads from users.d counts, in any spelling of the key.
+# shellcheck disable=SC2034 # read by the eval'd function
+mu_scan() { CLICKHOUSE_USERS_DIR="$FAKE_CH_USERS_DIR" CLICKHOUSE_USER="$FAKE_CH_USER"; monitor_user_xml_file; }
+for mu_case in "ops.xml|<$FAKE_CH_USER></$FAKE_CH_USER>" "ops.conf|<$FAKE_CH_USER></$FAKE_CH_USER>" \
+    "ops.yaml|  $FAKE_CH_USER:" "ops.yml|  $FAKE_CH_USER:" \
+    "double.yml|  \"$FAKE_CH_USER\":" "single.yaml|  '$FAKE_CH_USER':"; do
+    mu_reset
+    printf '%s\n' "${mu_case#*|}" > "$FAKE_CH_USERS_DIR/${mu_case%%|*}"
+    assert_eq "the scan finds a user in ${mu_case%%|*}: ${mu_case#*|}" "$FAKE_CH_USERS_DIR/${mu_case%%|*}" "$(mu_scan)"
+done
+for mu_case in users.xml users.yaml users.yml; do
+    mu_reset
+    echo "  $FAKE_CH_USER:" > "$mu_tmp/$mu_case"
+    assert_eq "the scan finds a user in $mu_case" "$mu_tmp/$mu_case" "$(mu_scan)"
+    rm -f "${mu_tmp:?}/$mu_case"
+done
+mu_reset
+echo "<$FAKE_CH_USER></$FAKE_CH_USER>" > "$FAKE_CH_USERS_DIR/ops.xml.bak"
+assert_eq "the scan skips a file ClickHouse does not load" "" "$(mu_scan)"
+mu_reset
+mkdir -p "$mu_tmp/conf.d"
+echo "<$FAKE_CH_USER></$FAKE_CH_USER>" > "$mu_tmp/conf.d/ops.xml"
+assert_eq "the scan finds a user in conf.d" "$mu_tmp/conf.d/ops.xml" "$(mu_scan)"
+mu_reset
+echo "<$FAKE_CH_USER></$FAKE_CH_USER>" > "$FAKE_CH_USERS_DIR/OPS.XML"
+assert_eq "the scan finds a user in an upper-case extension" "$FAKE_CH_USERS_DIR/OPS.XML" "$(mu_scan)"
+mu_reset
+mu_overlay "x"
+assert_eq "the scan skips the guide's own file" "" "$(mu_scan)"
+
+# A client that cannot connect says nothing about the password.
+mu_reset; mu_sql_user "stored"
+printf 'stored' > "$mu_tmp/.secret"
+export FAKE_CH_DOWN=1
+mu_run s
+assert_eq "server down: setup succeeds" "0" "$mu_rc"
+assert_contains "server down: says it could not connect" "could not connect" "$mu_out"
+assert_not_contains "server down: blames no password" "did NOT authenticate" "$mu_out"
+assert_not_contains "server down: no second login" "--config-file" "$(cat "$FAKE_CH_STATE/argv")"
+unset FAKE_CH_DOWN
+
+# The client may not read system.users, so the mismatch only shows after the SQL.
+mu_reset; mu_sql_user "oldpass"
+export FAKE_CH_NO_SHOW_USERS=1
+mu_run r n
+assert_eq "unknown state: setup succeeds" "0" "$mu_rc"
+assert_not_contains "unknown state: no false promise" "The guide sets the same password" "$mu_out"
+assert_contains "unknown state: says it could not tell" "cannot read system.users" "$mu_out"
+assert_contains "unknown state: the check after the SQL finds it" "the user already existed" "$mu_out"
+assert_eq "unknown state: the new password connects" "yes" "$(mu_auth "$mu_final")"
+
+mu_reset; mu_sql_user "oldpass"
+mu_run r e oldpass
+assert_eq "unknown state: entering the password succeeds" "0" "$mu_rc"
+assert_eq "unknown state: step 3 gets the entered password" "oldpass" "$mu_final"
+assert_eq "unknown state: entering runs no ALTER" "" "$(cat "$FAKE_CH_STATE/log" 2>/dev/null || true)"
+
+mu_reset
+mu_run r
+assert_eq "unknown state, no user: setup succeeds" "0" "$mu_rc"
+assert_not_contains "unknown state, no user: the check stays quiet" "the user already existed" "$mu_out"
+assert_eq "unknown state, no user: the password connects" "yes" "$(mu_auth "$mu_final")"
+
+# [x] in the unknown state may replace a user nobody can see, so it asks first.
+mu_reset; mu_sql_user "oldpass"
+mu_run x n s
+assert_contains "unknown state, [x]: says what it replaces" "[x] replaces that user's password" "$mu_out"
+assert_eq "unknown state, [x] declined: no overlay appears" "no" "$(mu_exists "$mu_file")"
+assert_eq "unknown state, [x] declined: the password stands" "yes" "$(mu_auth "oldpass")"
+assert_eq "unknown state, [x] declined: nothing is saved" "no" "$(mu_exists "$mu_tmp/.secret")"
+
+mu_reset; mu_sql_user "oldpass"
+mu_run x y
+assert_eq "unknown state, [x] accepted: writes the overlay" "yes" "$(mu_exists "$mu_file")"
+assert_eq "unknown state, [x] accepted: the new password connects" "yes" "$(mu_auth "$mu_final")"
+assert_eq "unknown state, [x] accepted: the password is saved" "$mu_final" "$(cat "$mu_tmp/.secret")"
+
+# The guide's own file, and a client that cannot read system.users.
+mu_reset; mu_overlay "oldpass"
+mu_run n x
+assert_eq "unknown state, own file: setup succeeds" "0" "$mu_rc"
+assert_not_contains "unknown state, own file: no warning" "does not report" "$mu_out"
+assert_eq "unknown state, own file: asks once, with nothing to wait for" "1" "$(grep -c 'system.users' "$FAKE_CH_STATE/argv")"
+assert_not_contains "unknown state, own file: SQL cannot change it" "[r] Run SQL" "$mu_out"
+
+# After the SQL shows a mismatch, the choice works the same way.
+mu_reset; mu_sql_user "oldpass"
+mu_run r n
+assert_eq "unknown state, [n] after the SQL: the password is saved" "$mu_final" "$(cat "$mu_tmp/.secret")"
+mu_reset; mu_sql_user "oldpass"
+mu_run r e oldpass
+assert_contains "unknown state, [e] after the SQL: the SQL holds the entered password" \
+    "$(mu_hash "oldpass")" "$(cat "$(cat "$mu_tmp/setup_sql")")"
+mu_reset; mu_sql_user "oldpass"
+mu_run r k
+assert_eq "unknown state, [k] after the SQL: noted for the ending" "true" "$(cat "$mu_tmp/password_kept")"
+assert_eq "unknown state, [k] after the SQL: no SQL for the ending" "" "$(cat "$mu_tmp/setup_sql")"
+
+# A stale .secret is evidence of a user when ClickHouse cannot say.
+mu_reset; mu_sql_user "current"
+printf 'stale' > "$mu_tmp/.secret"
+mu_run k s
+assert_contains "unknown state, stale secret: asks about the password" "did NOT authenticate" "$mu_out"
+assert_not_contains "unknown state, stale secret: keeping withdraws the overlay" "[x] Write XML config" "$mu_out"
+unset FAKE_CH_NO_SHOW_USERS
+
+# A user defined by the installer's own overlay: SQL cannot touch it.
+mu_reset; mu_overlay "oldpass"
+mu_run n x
+assert_eq "overlay: a new password succeeds" "0" "$mu_rc"
+# read shows no prompt without a terminal, so the menu's lines are the evidence.
+assert_contains "overlay: the menu offers the overlay" "[x] Write XML config" "$mu_out"
+assert_not_contains "overlay: the menu drops SQL, which cannot change it" "[r] Run SQL" "$mu_out"
+assert_not_contains "overlay: no SQL to review" "Manual SQL" "$mu_out"
+assert_contains "overlay: the install waits for it to load" "Waiting for ClickHouse to load it... ok" "$mu_out"
+assert_contains "overlay: says [x] sets the new password" "[x] below writes the new password" "$mu_out"
+assert_not_contains "overlay: no ALTER on offer" "[r] below runs" "$mu_out"
+assert_contains "overlay: [x] says it replaces the whole file" "This replaces the whole of" "$mu_out"
+assert_eq "overlay: the new password connects" "yes" "$(mu_auth "$mu_final")"
+assert_eq "overlay: the old password stops" "no" "$(mu_auth "oldpass")"
+assert_eq "overlay: the new password is saved at once" "$mu_final" "$(cat "$mu_tmp/.secret")"
+assert_eq "overlay: the ending offers no SQL, which cannot change it" "" "$(cat "$mu_tmp/setup_sql")"
+
+mu_reset; mu_overlay "oldpass"
+mu_run n r x
+assert_contains "overlay: [r] is refused" "[r] is not available" "$mu_out"
+assert_not_contains "overlay: [r] runs no SQL" "--multiquery" "$(cat "$FAKE_CH_STATE/argv")"
+
+mu_reset; mu_overlay "oldpass"
+mu_overlay_before=$(cat "$mu_file")
+mu_run k
+assert_eq "overlay: keeping needs no menu" "0" "$mu_rc"
+assert_not_contains "overlay: keeping shows no menu" "[s] Skip" "$mu_out"
+assert_eq "overlay: keeping leaves the file" "$mu_overlay_before" "$(cat "$mu_file")"
+
+mu_reset; mu_overlay "oldpass"
+mu_run e oldpass
+assert_eq "overlay: entering the password succeeds" "0" "$mu_rc"
+assert_eq "overlay: step 3 gets the entered password" "oldpass" "$mu_final"
+assert_contains "overlay: nothing further to do" "nothing to do" "$mu_out"
+
+# [x] after [e] writes the entered password, not the generated one.
+mu_reset; mu_overlay_no_grants "oldpass"
+mu_run e oldpass x
+assert_eq "overlay without grants: setup succeeds" "0" "$mu_rc"
+assert_contains "overlay without grants: says [x] fixes it" "[x] rewrites" "$mu_out"
+assert_contains "overlay without grants: [x] adds the grants" "GRANT SELECT" "$(cat "$mu_file")"
+assert_eq "overlay without grants: the entered password still connects" "yes" "$(mu_auth "oldpass")"
+assert_eq "overlay without grants: step 3 gets the entered password" "oldpass" "$mu_final"
+
+# ClickHouse takes a few polls to load the file.
+mu_reset
+export FAKE_CH_LOGIN_FAILS=5
+mu_run x
+assert_contains "[x] waits for the file to load" "Waiting for ClickHouse to load it... ok" "$mu_out"
+unset FAKE_CH_LOGIN_FAILS
+
+# No users.d to write to: the operator copies the file, and the password is saved.
+mu_reset
+rmdir "$FAKE_CH_USERS_DIR"
+mu_run x x
+assert_contains "no users.d: says to copy the file" "Copy this file manually" "$mu_out"
+assert_eq "no users.d: the password is saved" "$mu_final" "$(cat "$mu_tmp/.secret")"
+
+# A blank answer to [e] is no password.
+mu_reset; mu_sql_user ""
+rm -f "$mu_tmp/.secret"
+mu_run e "" k
+assert_contains "[e] with a blank password is refused" "did not authenticate" "$mu_out"
+
+# A wrapper that drops the password is warned about.
+mu_reset
+MU_CLIENT="docker exec c clickhouse-client"
+mu_run s
+assert_contains "the guide warns about a wrapper" "WARNING: -C uses docker" "$mu_out"
+unset MU_CLIENT
+
+# A file that does not load after [x]: reported, and the operator decides.
+mu_reset
+export FAKE_CH_IGNORE_OVERLAY=1
+mu_run x y
+assert_contains "[x] not loading: reports it" "Waiting for ClickHouse to load it... FAILED" "$mu_out"
+assert_contains "[x] not loading: says what it risks" "does not start with a users.d file it cannot load" "$mu_out"
+assert_eq "[x] not loading, delete: the file is gone" "no" "$(mu_exists "$mu_file")"
+assert_eq "[x] not loading, delete: the next run reuses the password" "$mu_final" "$(cat "$mu_tmp/.secret")"
+
+mu_reset
+mu_run x n
+assert_eq "[x] not loading, keep: the file stays" "yes" "$(mu_exists "$mu_file")"
+assert_eq "[x] not loading, keep: the password is saved" "$mu_final" "$(cat "$mu_tmp/.secret")"
+
+# Stopping during the wait keeps the password the file already holds.
+mu_reset
+MU_STOP_IN_WAIT=1
+mu_run x
+assert_eq "[x] stopped in the wait: stops" "130" "$mu_rc"
+assert_contains "[x] stopped in the wait: the saved password is the file's" "$(mu_hash "$(cat "$mu_tmp/.secret")")" "$(cat "$mu_file")"
+unset MU_STOP_IN_WAIT FAKE_CH_IGNORE_OVERLAY
+
+# A password in root's client config beats CLICKHOUSE_PASSWORD.
+mu_reset; mu_sql_user "stored"; mu_client_config
+printf 'stored' > "$mu_tmp/.secret"
+mu_run
+assert_contains "client config: a correct saved password works" "nothing to do" "$mu_out"
+assert_contains "client config: the login after the refusal uses an empty config" "--config-file" "$(cat "$FAKE_CH_STATE/argv")"
+
+# The form of the password does not matter: the guide does not read the config.
+for mu_shape in '<password/>' '<password></password>' '<password replace="1">adminpw</password>' '<password >adminpw</password>'; do
+    mu_reset; mu_sql_user "stored"
+    printf 'stored' > "$mu_tmp/.secret"
+    echo "<config>$mu_shape</config>" > "$mu_tmp/home/.clickhouse-client/config.xml"
+    mu_run
+    assert_contains "client config $mu_shape: a correct saved password works" "nothing to do" "$mu_out"
+done
+for mu_flag in "-c $mu_tmp/named.xml" "-C $mu_tmp/named.xml" "--config $mu_tmp/named.xml" "--config-file=$mu_tmp/named.xml" "-c$mu_tmp/named.xml"; do
+    mu_reset; mu_sql_user "stored"
+    printf 'stored' > "$mu_tmp/.secret"
+    echo '<config><password>adminpw</password></config>' > "$mu_tmp/named.xml"
+    MU_CLIENT="$mu_tmp/clickhouse-client $mu_flag"
+    mu_run
+    assert_contains "client config in -C, $mu_flag: a correct saved password works" "nothing to do" "$mu_out"
+done
+unset MU_CLIENT
+
+# A named connection can point anywhere, so a refused login stays refused.
+mu_reset; mu_sql_user "stored"
+printf 'stored' > "$mu_tmp/.secret"
+MU_CLIENT="$mu_tmp/clickhouse-client --connection prod"
+mu_run k s
+assert_contains "--connection: a refused login gets no second try" "did NOT authenticate" "$mu_out"
+assert_not_contains "--connection: the config stays" "--config-file" "$(cat "$FAKE_CH_STATE/argv")"
+unset MU_CLIENT
+
+# The empty config does not turn a wrong password into a right one.
+mu_reset; mu_sql_user "stored"; mu_client_config
+printf 'stale' > "$mu_tmp/.secret"
+mu_run k s
+assert_contains "client config: a wrong password stays wrong" "did NOT authenticate" "$mu_out"
+assert_eq "client config: keeping is noted for the ending" "true" "$(cat "$mu_tmp/password_kept")"
+
+# A wrapper's client reads its own config, which this host cannot change.
+mu_reset; mu_sql_user "stored"; mu_client_config
+printf 'stored' > "$mu_tmp/.secret"
+MU_CLIENT="env $mu_tmp/clickhouse-client"
+mu_run k s
+assert_not_contains "wrapped client: no second login" "--config-file" "$(cat "$FAKE_CH_STATE/argv")"
+unset MU_CLIENT
+
+# A password in the client's config beats the one typed at the retry. The guide
+# says so and keeps the config, which can carry TLS.
+mu_reset
+echo '<config><password>stale</password></config>' > "$mu_tmp/home/.clickhouse-client/config.xml"
+export FAKE_CH_ADMIN_NEEDS_PASSWORD="adminpw"
+mu_run r "" "" adminpw "" "" adminpw x
+assert_contains "client config, retry: says the config's password wins" "beats the one typed here" "$mu_out"
+assert_contains "client config, retry: gives the manual command" "Run the SQL manually" "$mu_out"
+assert_not_contains "client config, retry: keeps the config" "--config-file" "$(grep -e '-u default' "$FAKE_CH_STATE/argv")"
+unset FAKE_CH_ADMIN_NEEDS_PASSWORD
+
+mu_reset; mu_sql_user "oldpass"; mu_client_config
+mu_run e oldpass
+assert_eq "client config: [e] accepts the right password" "oldpass" "$mu_final"
+
+mu_reset; mu_client_config
+mu_run r
+assert_contains "client config: [r] uses the config's admin" "Done." "$mu_out"
+assert_not_contains "client config: a new user is no mismatch" "the user already existed" "$mu_out"
+assert_eq "client config: the new user connects" "yes" "$(mu_auth "$mu_final")"
+
+# A wrapper without stdin runs nothing and exits 0. That is no success.
+mu_reset
+export FAKE_CH_NO_STDIN=1
+mu_run r ""
+assert_contains "no stdin: [r] says the SQL did not run" "did not reach the client" "$mu_out"
+assert_not_contains "no stdin: [r] claims nothing" "Done." "$mu_out"
+assert_not_contains "no stdin: [r] asks for no admin details" "Enter connection" "$mu_out"
+assert_contains "no stdin: [r] gives the manual command" "Run the SQL manually" "$mu_out"
+mu_reset; mu_sql_user "stored"
+printf 'stored' > "$mu_tmp/.secret"
+rm -f "$FAKE_CH_STATE/$FAKE_CH_USER.grants"
+mu_run s
+assert_contains "no stdin: the access check says it could not run" "could not" "$mu_out"
+assert_not_contains "no stdin: the access check claims nothing" "nothing to do" "$mu_out"
+unset FAKE_CH_NO_STDIN
+
+# ClickHouse creates the span log at its first span, which is not a missing grant.
+mu_reset; mu_sql_user "oldpass"
+export FAKE_CH_NO_SPAN_TABLE=1
+mu_run e oldpass s
+assert_eq "no span table yet: setup succeeds" "0" "$mu_rc"
+assert_contains "no span table yet: says why it cannot check" "when it records its first span" "$mu_out"
+assert_contains "no span table yet: names it" "access to system.opentelemetry_span_log yet" "$mu_out"
+assert_not_contains "no span table yet: blames no grant" "MISSING SELECT" "$mu_out"
+unset FAKE_CH_NO_SPAN_TABLE
+
+mu_reset; mu_sql_user "oldpass"
+export FAKE_CH_NO_QUERY_LOG=1
+mu_run e oldpass s
+assert_contains "no query log yet: names it" "access to system.query_log yet" "$mu_out"
+assert_contains "no query log yet: says when ClickHouse creates it" "when it logs its first query" "$mu_out"
+assert_not_contains "no query log yet: leaves the span log out" "opentelemetry_span_log yet" "$mu_out"
+unset FAKE_CH_NO_QUERY_LOG
+
+# A real missing grant is still reported.
+mu_reset; mu_sql_user "oldpass"
+rm -f "$FAKE_CH_STATE/$FAKE_CH_USER.grants"
+mu_run e oldpass r
+assert_eq "missing grant: setup succeeds" "0" "$mu_rc"
+assert_contains "missing grant: says so" "MISSING SELECT" "$mu_out"
+assert_eq "missing grant: [r] adds it" "yes" "$(mu_exists "$FAKE_CH_STATE/$FAKE_CH_USER.grants")"
+
+# A stored password still works: the normal re-run.
+mu_reset; mu_sql_user "stored"
+printf 'stored' > "$mu_tmp/.secret"
+mu_run
+assert_eq "re-run: succeeds with no questions" "0" "$mu_rc"
+assert_contains "re-run: nothing to do" "nothing to do" "$mu_out"
+assert_eq "re-run: keeps the stored password" "stored" "$mu_final"
+
+# -C carries the admin's auth: probing as the monitoring user must replace it.
+mu_reset; mu_sql_user "stored"
+printf 'stored' > "$mu_tmp/.secret"
+MU_CLIENT="$mu_tmp/clickhouse-client -u admin --password adminpw"
+mu_run
+assert_contains "-C auth: the probe replaces the client's user" "nothing to do" "$mu_out"
+
+# -C's password never reaches the screen.
+mu_reset
+mu_run s
+assert_contains "-C auth: the SQL's command still shows" "Run with: clickhouse-client --multiquery <" "$mu_out"
+assert_not_contains "-C auth: the password does not show" "adminpw" "$mu_out"
+export FAKE_CH_ADMIN_NEEDS_PASSWORD="adminpw"
+for mu_secret_client in "$mu_tmp/clickhouse-client --password -hunter2" "$mu_tmp/clickhouse-client --jwt hunter2" \
+    "$mu_tmp/clickhouse-client --ssh-key-passphrase hunter2" "sshpass -p hunter2 clickhouse-client" \
+    "CLICKHOUSE_PASSWORD=hunter2 clickhouse-client" "$mu_tmp/clickhouse-client --password 'with hunter2'"; do
+    for mu_answers in "s" "r"; do
+        mu_reset
+        MU_CLIENT="$mu_secret_client"
+        mu_run $mu_answers "" "" "" "" "" "" ""
+        assert_not_contains "-C never prints: $mu_secret_client [$mu_answers]" "hunter2" "$mu_out"
+    done
+done
+unset MU_CLIENT FAKE_CH_ADMIN_NEEDS_PASSWORD
+
+# A stale .secret: the password fails, the operator picks what to do.
+mu_reset; mu_sql_user "current"
+printf 'stale' > "$mu_tmp/.secret"
+mu_run e current
+assert_contains "stale secret: names the stored password" "stored in /etc/click-dog/.secret" "$mu_out"
+assert_eq "stale secret: step 3 gets the entered password" "current" "$mu_final"
+
+# .secret kept, user dropped by hand: ClickHouse's answer beats the file.
+mu_reset
+printf 'stored-after-drop' > "$mu_tmp/.secret"
+mu_run r
+assert_not_contains "dropped user: nothing asks about an existing one" "[e] Enter" "$mu_out"
+assert_eq "dropped user: recreated with the stored password" "yes" "$(mu_auth "stored-after-drop")"
+
+# The bare client needs admin details, which the retry collects.
+mu_reset
+export FAKE_CH_ADMIN_NEEDS_PASSWORD="adminpw"
+mu_run r "" "" adminpw
+assert_eq "admin retry: succeeds" "0" "$mu_rc"
+assert_contains "admin retry: shows why the bare client failed" "Authentication failed" "$mu_out"
+assert_contains "admin retry: runs the SQL" "Done." "$mu_out"
+assert_eq "admin retry: the password connects" "yes" "$(mu_auth "$mu_final")"
+assert_not_contains "admin retry: the typed password does not show" "adminpw" "$mu_out"
+
+# A blank admin password is a password: the exported monitoring one must not stand in.
+unset FAKE_CH_ADMIN_NEEDS_PASSWORD
+mu_reset
+export FAKE_CH_ADMIN_BLANK_ONLY=1 MU_EXPORT_PASSWORD=1
+mu_run r "" "" "" x
+assert_contains "admin retry, blank password: runs the SQL" "Done." "$mu_out"
+assert_not_contains "admin retry, blank password: first try works" "That did not work" "$mu_out"
+unset FAKE_CH_ADMIN_BLANK_ONLY MU_EXPORT_PASSWORD
+export FAKE_CH_ADMIN_NEEDS_PASSWORD="adminpw"
+
+# Both retries fail: each shows the server's error, then the manual SQL.
+mu_reset
+mu_run r "" "" wrong "" "" wrong x
+assert_contains "admin retry failing: says it did not work" "That did not work:" "$mu_out"
+assert_not_contains "admin retry: the password stays off the command line" "--password" "$(grep -e '-u default' "$FAKE_CH_STATE/argv")"
+assert_eq "admin retry failing: each attempt shows the server's error" "3" \
+    "$(grep -c 'Authentication failed' <<<"$mu_out")"
+assert_contains "admin retry failing: gives the manual command" "Run with: CLICKHOUSE_PASSWORD=..." "$mu_out"
+assert_eq "admin retry failing: finishes" "0" "$mu_rc"
+assert_eq "admin retry failing: the password the SQL sets is saved" "$mu_final" "$(cat "$mu_tmp/.secret")"
+
+# The retry keeps -C's connection flags, drops its user, and the check uses them.
+mu_reset
+MU_CLIENT="$mu_tmp/clickhouse-client --secure -u admin --password stale"
+mu_run r dbhost:9001 "" adminpw
+assert_eq "admin retry with -C flags: succeeds" "0" "$mu_rc"
+assert_contains "admin retry with -C flags: keeps them" "--secure --host dbhost --port 9001 -u default" "$(cat "$FAKE_CH_STATE/argv")"
+assert_contains "admin retry with -C flags: the check after it uses them" \
+    "--secure --host dbhost --port 9001 -u click_dog_monitor" "$(cat "$FAKE_CH_STATE/argv")"
+
+# clickhouse-client uses the first --host, so -C's must go.
+mu_reset
+MU_CLIENT="$mu_tmp/clickhouse-client --host oldhost --port 1 -u admin --password stale"
+mu_run r newhost:9001 "" adminpw
+assert_eq "admin retry over -C's host: succeeds" "0" "$mu_rc"
+assert_contains "admin retry over -C's host: uses the typed one" "--host newhost --port 9001 -u default" "$(cat "$FAKE_CH_STATE/argv")"
+assert_not_contains "admin retry over -C's host: drops -C's" "--host oldhost" "$(grep -e '-u default' "$FAKE_CH_STATE/argv")"
+mu_reset
+mu_run r newhost "" adminpw
+assert_contains "admin retry, host only: keeps -C's port" "--port 1 --host newhost -u default" "$(cat "$FAKE_CH_STATE/argv")"
+unset MU_CLIENT FAKE_CH_ADMIN_NEEDS_PASSWORD
+
+# No client at all, even after asking: the printed SQL still sets this password.
+mu_reset
+MU_CLIENT="/nonexistent/clickhouse-client"
+mu_run r "/also/nonexistent" x
+assert_contains "no client: says so" "Still not found" "$mu_out"
+assert_eq "no client: the password the SQL sets is saved" "$mu_final" "$(cat "$mu_tmp/.secret")"
+unset MU_CLIENT
+
+# A client typed at the prompt is the one the check uses.
+mu_reset
+MU_CLIENT="/nonexistent/clickhouse-client"
+mu_run r "$mu_tmp/clickhouse-client"
+assert_eq "typed client: setup succeeds" "0" "$mu_rc"
+assert_contains "typed client: runs the SQL" "Done." "$mu_out"
+assert_not_contains "typed client: the check reaches the user" "the user already existed" "$mu_out"
+assert_eq "typed client: the password connects" "yes" "$(mu_auth "$mu_final")"
+unset MU_CLIENT
+
+# ALTER fails after the check: the server's error and the statement both show.
+mu_reset; mu_sql_user "oldpass"
+export FAKE_CH_NO_SHOW_USERS=1 FAKE_CH_ALTER_DENIED=1
+mu_run r n
+assert_contains "ALTER denied: says so" "Could not set it:" "$mu_out"
+assert_contains "ALTER denied: shows the server's error" "Not enough privileges" "$mu_out"
+assert_contains "ALTER denied: gives the statement" "Run this as a ClickHouse administrator" "$mu_out"
+unset FAKE_CH_NO_SHOW_USERS FAKE_CH_ALTER_DENIED
+
+# An overlay that never authenticates is reported, not assumed.
+mu_reset
+MU_INSTALL_CMD="true"
+mu_run x
+assert_contains "an overlay that does not load is reported" "Waiting for ClickHouse to load it... FAILED" "$mu_out"
+unset MU_INSTALL_CMD
+
+unset FAKE_CH_STATE FAKE_CH_USERS_DIR FAKE_CH_USER
 
 echo ""
 echo "════════════════════════════════════════════"
 echo "  Results: $PASS passed, $FAIL failed"
 echo "════════════════════════════════════════════"
 
+SUITE_FINISHED="true"
 [[ $FAIL -eq 0 ]] || exit 1

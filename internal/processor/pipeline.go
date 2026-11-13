@@ -27,12 +27,25 @@ type LiveReader interface {
 	// every span. A cycle that does not commit is read again by the next one.
 	FetchLiveSpans(ctx context.Context, minTraceDurationMs int, lookback time.Duration, limit int, opts clickhouse.FetchOpts) ([]model.OpenTelemetrySpan, error)
 	CommitLiveSpans()
-	FetchQueryLogByQueryIDs(ctx context.Context, queryIDs []string, lookbackDays int) (map[string]model.QueryLog, error)
-	// FetchTraceQueryIDs returns the clickhouse.query_id values recorded in the
-	// span log for each trace. The IP whitelist uses it when a span page holds
-	// a trace but none of its query spans, so resolution does not depend on
-	// which page the root landed in.
-	FetchTraceQueryIDs(ctx context.Context, traceIDs []uuid.UUID, lookbackDays int) (map[uuid.UUID][]string, error)
+	// FetchQueryLogByQueryIDs returns the query_log finish rows of the given
+	// queries. earliestStartUs, the earliest start of the caller's spans of
+	// those queries, bounds how far back query_log is read.
+	FetchQueryLogByQueryIDs(ctx context.Context, queryIDs []string, lookbackDays int, earliestStartUs uint64) (map[string]model.QueryLog, error)
+	TraceQueryReader
+}
+
+// TraceQueryReader is the read surface FilteredTraces decides on.
+// FetchTraceNodes returns the spans the span log records for each trace that
+// carry a query ID (with the statement) plus the ancestors asked for, each
+// with its span tree links, read back to shortly before earliestStartUs, the
+// earliest start of the caller's spans of those traces. FetchQueryOrigins
+// returns each query's users and client addresses from query_log, unfiltered
+// by the user whitelist, read from the same point. The trace-scoped filters
+// decide on them, so a trace's decision does not depend on which page its
+// queries landed in.
+type TraceQueryReader interface {
+	FetchTraceNodes(ctx context.Context, traceIDs []uuid.UUID, lookbackDays int, earliestStartUs uint64, ancestors model.AncestorRead) (map[uuid.UUID][]model.TraceNode, error)
+	FetchQueryOrigins(ctx context.Context, queryIDs []string, lookbackDays int, earliestStartUs uint64) (map[string]model.QueryOrigin, error)
 }
 
 // Pipeline owns the live fetch → filter → enrich → export path plus its
@@ -62,6 +75,11 @@ type Pipeline struct {
 	// with the server being read. Written and read on the single cycle
 	// goroutine.
 	serverVersion serverVersionStamp
+
+	// lastCycleCanary records that the previous cycle ran the canary instead
+	// of a fetch, so an elevated backoff alternates canaries with the real
+	// fetches that alone can show recovery. Single cycle goroutine.
+	lastCycleCanary bool
 }
 
 func NewPipeline(p Pipeline) (*Pipeline, error) {
@@ -116,7 +134,8 @@ func (p *Pipeline) Process(ctx context.Context) error {
 	// ClickHouse upgrade is the likeliest cause of the outage. Clear the stamp
 	// rather than let those spans carry the pre-upgrade version.
 	if p.CircuitBreaker != nil && !p.CircuitBreaker.Allow() {
-		p.serverVersion.Clear(p.Exporter)
+		p.serverVersion.Clear(p.Exporter, clearReasonBreakerOpen)
+		p.lastCycleCanary = p.Config.Monitor.Canary.Enabled && p.CanaryQuerier != nil
 		return handleCircuitOpen(ctx, p.Exporter, p.Config, p.Filter, p.CircuitBreaker, p.Heartbeat, p.CanaryQuerier, p.Metrics, p.Webhook, cycleStart)
 	}
 
@@ -126,13 +145,13 @@ func (p *Pipeline) Process(ctx context.Context) error {
 	}
 
 	// Check if backoff is elevated and canary should run instead of full fetch.
-	if ran, canaryErr := p.handleElevatedBackoff(ctx, p.Exporter, p.Config, p.Filter, p.CircuitBreaker, p.Heartbeat, p.Poller, p.CanaryQuerier, p.Metrics, p.Webhook, cycleStart); ran {
+	if ran, canaryErr := p.handleElevatedBackoff(ctx, p.Exporter, p.Config, p.Filter, p.CircuitBreaker, p.Heartbeat, p.Poller, p.CanaryQuerier, p.Metrics, cycleStart); ran {
 		return canaryErr
 	}
 
 	// Health check before running queries - helps detect stale connections early
 	if !p.Reader.IsHealthy(ctx) {
-		p.serverVersion.Clear(p.Exporter)
+		p.serverVersion.Clear(p.Exporter, clearReasonHealthCheck)
 		return handleHealthCheckFailure(p.CircuitBreaker, p.Metrics, p.Webhook, cycleStart)
 	}
 

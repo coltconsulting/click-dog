@@ -19,6 +19,7 @@ import (
 	"github.com/coltconsulting/click-dog/internal/clickhouse"
 	"github.com/coltconsulting/click-dog/internal/config"
 	"github.com/coltconsulting/click-dog/internal/datadog"
+	"github.com/coltconsulting/click-dog/internal/filter"
 	"github.com/coltconsulting/click-dog/internal/model"
 	"github.com/coltconsulting/click-dog/internal/processor"
 	"github.com/coltconsulting/click-dog/internal/queryfamily"
@@ -101,7 +102,7 @@ func runAnalyzeQueries(args []string, out, errOut io.Writer) int {
 	redact := fs.Bool("redact-dimensions", false, "Redact user/client/host dimension values in reports")
 	minExecutions := fs.Uint64("min-executions", 3, "Minimum executions for exact query-family groups")
 	familyLimit := fs.Int("family-limit", 200, "Exact normalized groups fetched before rollup")
-	spanSampleLimit := fs.Int("span-sample-limit", 0, "Max spans sampled for attribution and coverage (0 = auto)")
+	spanSampleLimit := fs.Int("span-sample-limit", 0, "Max query spans sampled for attribution and coverage (0 = auto)")
 	previewLength := fs.Int("query-preview-length", 500, "Max normalized-query preview length")
 	baselinePath := fs.String("baseline", "", "Compare this window with an analysis.baseline.v1 artifact")
 	saveBaselinePath := fs.String("save-baseline", "", "Atomically save this window as an analysis.baseline.v1 artifact")
@@ -138,6 +139,10 @@ Flags:
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
+		return 2
+	}
+	if err := rejectLeftoverArgs("click-dog analyze queries", fs, args); err != nil {
+		_, _ = fmt.Fprintln(errOut, err)
 		return 2
 	}
 	if *format != "table" && *format != "json" {
@@ -250,7 +255,7 @@ func analyzeQueriesWithSourceAndDestinations(src queryAnalysisSource, cfg *confi
 		_, _ = fmt.Fprintf(errOut, "baseline %s saved to %s\n", baseline.BaselineID, opts.SaveBaselinePath)
 	}
 
-	warnings := append(append(append([]string{}, cfg.DeprecationWarnings...), cfg.EnvWarnings...), cfg.ValidationWarnings...)
+	warnings := append(append([]string{}, cfg.EnvWarnings...), cfg.ValidationWarnings...)
 	registry := analysis.NewRegistry()
 	if input.Comparison != nil {
 		registry = analysis.NewRegistryWithRegression()
@@ -263,7 +268,7 @@ func analyzeQueriesWithSourceAndDestinations(src queryAnalysisSource, cfg *confi
 		return 1
 	}
 
-	// Env/deprecation warnings print above human table output; JSON already
+	// Env and validation warnings print above human table output; JSON already
 	// carries them in report metadata. With --output, stdout stays quiet, so
 	// the warnings go to stderr instead.
 	if format == "table" && len(report.Warnings) > 0 {
@@ -444,8 +449,9 @@ type queryAnalysisSource interface {
 	QueryLogNormalizedSupported() bool
 	FetchQueryFamilyRollups(ctx context.Context, opts clickhouse.QueryFamilyRollupOptions) ([]model.QueryFamilyRollup, error)
 	FetchOpenTelemetrySpansWithOpts(ctx context.Context, minTraceDurationMs int, lookback time.Duration, limit int, opts clickhouse.FetchOpts) ([]model.OpenTelemetrySpan, error)
-	FetchQueryLogByQueryIDs(ctx context.Context, queryIDs []string, lookbackDays int) (map[string]model.QueryLog, error)
+	FetchQueryLogByQueryIDs(ctx context.Context, queryIDs []string, lookbackDays int, earliestStartUs uint64) (map[string]model.QueryLog, error)
 	FetchQueryFamilyDimensionCounts(ctx context.Context, opts clickhouse.QueryFamilyDimensionCountOptions) ([]clickhouse.QueryFamilyDimensionCount, error)
+	processor.TraceQueryReader
 }
 
 // buildAnalysisInput translates concrete reader calls into the pure
@@ -485,12 +491,24 @@ func buildAnalysisInput(ctx context.Context, src queryAnalysisSource, cfg *confi
 	lookbackDays := analysisQueryLogLookbackDays(opts.Lookback)
 	cov.QueryLogByIDLookbackDays = lookbackDays
 
+	// The sample holds only `query` spans. They alone carry
+	// clickhouse.query_id and log_comment, and with dozens of child spans per
+	// query a limit spent on every span would leave a few dozen queries from
+	// the newest traces: too few for the query-ID ratio's 50-span minimum or
+	// for attribution to reach older families in the window.
 	spans, err := src.FetchOpenTelemetrySpansWithOpts(ctx, cfg.Monitor.MinTraceDurationMs, opts.Lookback, spanLimit, clickhouse.FetchOpts{
 		MaxTraceDurationMs:  cfg.Monitor.MaxTraceDurationMs,
 		MinSpanDurationMs:   cfg.Monitor.MinSpanDurationMs,
 		MaxSpanDurationMs:   cfg.Monitor.MaxSpanDurationMs,
 		BlacklistOperations: cfg.Filters.BlacklistOperations,
+		QuerySpansOnly:      true,
 	})
+	if err == nil {
+		// The ClickHouse reader applies the query-log filters in SQL; the span
+		// sample needs the same per-trace decision scheduled export makes, so
+		// attribution never counts a span the filters would withhold.
+		spans, err = allowedAnalysisSpans(ctx, src, cfg, spans, lookbackDays)
+	}
 	if err != nil {
 		// The core family/resource report remains useful without span
 		// samples; record the gap and skip attribution.
@@ -536,6 +554,19 @@ func buildAnalysisInput(ctx context.Context, src queryAnalysisSource, cfg *confi
 	return input, nil
 }
 
+// allowedAnalysisSpans keeps the sampled spans scheduled export would keep.
+func allowedAnalysisSpans(ctx context.Context, src queryAnalysisSource, cfg *config.Config, spans []model.OpenTelemetrySpan, lookbackDays int) ([]model.OpenTelemetrySpan, error) {
+	f, err := filter.NewQueryFilter(cfg.Filters)
+	if err != nil {
+		return nil, fmt.Errorf("filters: %w", err)
+	}
+	allowed, err := processor.AllowedSpans(ctx, src, spans, f, lookbackDays)
+	if err != nil {
+		return nil, fmt.Errorf("trace filters could not resolve the sample's queries: %w", err)
+	}
+	return allowed, nil
+}
+
 func buildAnalysisReportConfig(cfg *config.Config, resolvedPath string, opts analyzeQueriesOptions) analysis.ReportConfig {
 	return analysis.ReportConfig{
 		ConfigPath:         resolvedPath,
@@ -572,7 +603,7 @@ func buildBaselineCompatibility(cfg *config.Config, opts analyzeQueriesOptions, 
 	return analysis.BaselineCompatibility{
 		FamilyAlgorithmVersion:    queryfamily.AlgorithmVersion,
 		SimilarityThreshold:       queryfamily.DefaultSimilarityThreshold,
-		FilterFingerprint:         analysisUserFilterFingerprint(cfg.Filters.WhitelistUsers, cfg.Filters.BlacklistUsers),
+		FilterFingerprint:         analysisFilterFingerprint(cfg.Filters),
 		MinExecutions:             minExecutions,
 		FamilyLimit:               familyLimit,
 		QueryPreviewLength:        previewLength,
@@ -581,13 +612,28 @@ func buildBaselineCompatibility(cfg *config.Config, opts analyzeQueriesOptions, 
 	}
 }
 
-func analysisUserFilterFingerprint(whitelist, blacklist []string) string {
-	whitelist = sortedUniqueAnalysisFilters(whitelist)
-	blacklist = sortedUniqueAnalysisFilters(blacklist)
+// analysisFilterFingerprint digests the filters that decide which queries an
+// analysis counts: both user lists, blacklist_queries, and whitelist_ips (as
+// normalized prefixes). Each is a set, so order and duplicates do not change
+// it, and no filter value enters the artifact.
+func analysisFilterFingerprint(filters config.FiltersConfig) string {
+	clients := make([]string, 0, len(filters.WhitelistIPs))
+	for _, entry := range filters.WhitelistIPs {
+		if prefix, err := config.ClientPrefix(entry); err == nil {
+			clients = append(clients, prefix.String())
+		}
+	}
 	canonical, _ := json.Marshal(struct {
-		Whitelist []string `json:"whitelist"`
-		Blacklist []string `json:"blacklist"`
-	}{Whitelist: whitelist, Blacklist: blacklist})
+		WhitelistUsers   []string `json:"whitelist_users"`
+		BlacklistUsers   []string `json:"blacklist_users"`
+		BlacklistQueries []string `json:"blacklist_queries"`
+		WhitelistIPs     []string `json:"whitelist_ips"`
+	}{
+		WhitelistUsers:   sortedUniqueAnalysisFilters(filters.WhitelistUsers),
+		BlacklistUsers:   sortedUniqueAnalysisFilters(filters.BlacklistUsers),
+		BlacklistQueries: sortedUniqueAnalysisFilters(filters.BlacklistQueries),
+		WhitelistIPs:     sortedUniqueAnalysisFilters(clients),
+	})
 	sum := sha256.Sum256(canonical)
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
@@ -619,8 +665,9 @@ func resolveAnalysisSpanSampleLimit(flagLimit, maxSpansPerCycle int) int {
 }
 
 // analysisQueryLogLookbackDays rounds the command lookback up to whole days,
-// floored at 1, for FetchQueryLogByQueryIDs partition pruning. This can
-// over-read query-log partitions for a one-hour report, but the query-id set
+// floored at 1, for FetchQueryLogByQueryIDs partition pruning. The day count
+// only selects partitions: the read itself starts shortly before the earliest
+// start of the sampled spans (or the drilldown window), and the query-id set
 // came from the bounded span sample, so the analysis window is unchanged.
 func analysisQueryLogLookbackDays(lookback time.Duration) int {
 	days := int(math.Ceil(lookback.Hours() / 24))
@@ -642,7 +689,7 @@ func buildAttributionCoverage(ctx context.Context, src queryAnalysisSource, span
 	if len(queryIDs) == 0 {
 		return nil, ""
 	}
-	queryLogMap, err := src.FetchQueryLogByQueryIDs(ctx, queryIDs, lookbackDays)
+	queryLogMap, err := src.FetchQueryLogByQueryIDs(ctx, queryIDs, lookbackDays, processor.EarliestQueryStartUs(spans))
 	if err != nil {
 		return nil, fmt.Sprintf("query_log enrichment unavailable, attribution analysis skipped: %v", err)
 	}

@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/coltconsulting/click-dog/internal/analysis"
 	"github.com/coltconsulting/click-dog/internal/clickhouse"
 	"github.com/coltconsulting/click-dog/internal/config"
@@ -32,6 +34,15 @@ type fakeAnalysisSource struct {
 	queryLogErr     error
 	dimensionCounts []clickhouse.QueryFamilyDimensionCount
 	dimensionErr    error
+	// traceQueriesErr and originsErr fail the trace-filter lookups behind
+	// the span sample; otherwise both derive from spans and queryLog.
+	traceQueriesErr error
+	originsErr      error
+
+	queryLogStartUs uint64
+	// spanFetchOpts and spanFetchLimit record the span sample request.
+	spanFetchOpts  clickhouse.FetchOpts
+	spanFetchLimit int
 }
 
 func (f *fakeAnalysisSource) QueryLogNormalizedSupported() bool { return f.normalized }
@@ -40,16 +51,85 @@ func (f *fakeAnalysisSource) FetchQueryFamilyRollups(_ context.Context, _ clickh
 	return f.families, f.familiesErr
 }
 
-func (f *fakeAnalysisSource) FetchOpenTelemetrySpansWithOpts(_ context.Context, _ int, _ time.Duration, _ int, _ clickhouse.FetchOpts) ([]model.OpenTelemetrySpan, error) {
-	return f.spans, f.spansErr
+func (f *fakeAnalysisSource) FetchOpenTelemetrySpansWithOpts(_ context.Context, _ int, _ time.Duration, limit int, opts clickhouse.FetchOpts) ([]model.OpenTelemetrySpan, error) {
+	f.spanFetchOpts = opts
+	f.spanFetchLimit = limit
+	return sampleSpans(f.spans, limit, opts), f.spansErr
 }
 
-func (f *fakeAnalysisSource) FetchQueryLogByQueryIDs(_ context.Context, _ []string, _ int) (map[string]model.QueryLog, error) {
+// sampleSpans models the reader's span page: QuerySpansOnly keeps only `query`
+// spans, and the limit then caps what is left.
+func sampleSpans(spans []model.OpenTelemetrySpan, limit int, opts clickhouse.FetchOpts) []model.OpenTelemetrySpan {
+	if spans == nil {
+		return nil
+	}
+	out := make([]model.OpenTelemetrySpan, 0, len(spans))
+	for _, span := range spans {
+		if opts.QuerySpansOnly && span.OperationName != "query" {
+			continue
+		}
+		out = append(out, span)
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+func (f *fakeAnalysisSource) FetchQueryLogByQueryIDs(_ context.Context, _ []string, _ int, earliestStartUs uint64) (map[string]model.QueryLog, error) {
+	f.queryLogStartUs = earliestStartUs
 	return f.queryLog, f.queryLogErr
 }
 
 func (f *fakeAnalysisSource) FetchQueryFamilyDimensionCounts(_ context.Context, _ clickhouse.QueryFamilyDimensionCountOptions) ([]clickhouse.QueryFamilyDimensionCount, error) {
 	return f.dimensionCounts, f.dimensionErr
+}
+
+func (f *fakeAnalysisSource) FetchTraceNodes(_ context.Context, traceIDs []uuid.UUID, _ int, _ uint64, _ model.AncestorRead) (map[uuid.UUID][]model.TraceNode, error) {
+	if f.traceQueriesErr != nil {
+		return nil, f.traceQueriesErr
+	}
+	return fakeTraceNodes(f.spans, traceIDs), nil
+}
+
+func (f *fakeAnalysisSource) FetchQueryOrigins(_ context.Context, queryIDs []string, _ int, _ uint64) (map[string]model.QueryOrigin, error) {
+	if f.originsErr != nil {
+		return nil, f.originsErr
+	}
+	return fakeQueryOrigins(f.queryLog, queryIDs), nil
+}
+
+// fakeTraceNodes answers FetchTraceNodes the way the span log would, with
+// every span of the asked traces: the ancestors asked for are among them.
+func fakeTraceNodes(spans []model.OpenTelemetrySpan, traceIDs []uuid.UUID) map[uuid.UUID][]model.TraceNode {
+	want := make(map[uuid.UUID]bool, len(traceIDs))
+	for _, id := range traceIDs {
+		want[id] = true
+	}
+	out := make(map[uuid.UUID][]model.TraceNode)
+	for _, span := range spans {
+		if !want[span.TraceID] {
+			continue
+		}
+		qid := span.Attributes["clickhouse.query_id"]
+		n := model.TraceNode{SpanID: span.SpanID, ParentSpanID: span.ParentSpanID, Query: span.OperationName == "query", QueryID: qid}
+		if qid != "" {
+			n.Statement = span.Attributes["db.statement"]
+		}
+		out[span.TraceID] = append(out[span.TraceID], n)
+	}
+	return out
+}
+
+// fakeQueryOrigins answers FetchQueryOrigins from query_log rows.
+func fakeQueryOrigins(queryLog map[string]model.QueryLog, queryIDs []string) map[string]model.QueryOrigin {
+	out := make(map[string]model.QueryOrigin)
+	for _, qid := range queryIDs {
+		if ql, ok := queryLog[qid]; ok {
+			out[qid] = model.QueryOrigin{User: ql.User, InitialUser: ql.InitialUser, Address: ql.ClientAddress, InitialAddress: ql.InitialAddress}
+		}
+	}
+	return out
 }
 
 func testAnalyzeConfig() *config.Config {
@@ -914,18 +994,219 @@ func TestAnalysisQueryLogLookbackDays(t *testing.T) {
 	}
 }
 
-func TestAnalysisUserFilterFingerprintUsesEffectiveSets(t *testing.T) {
-	a := analysisUserFilterFingerprint([]string{"worker", "api", "api"}, []string{"system", "backup"})
-	b := analysisUserFilterFingerprint([]string{"api", "worker"}, []string{"backup", "system", "system"})
-	if a != b {
+func TestAnalysisFilterFingerprintUsesEffectiveSets(t *testing.T) {
+	base := config.FiltersConfig{
+		WhitelistUsers:   []string{"worker", "api", "api"},
+		BlacklistUsers:   []string{"system", "backup"},
+		BlacklistQueries: []string{"secret", "(?i)password"},
+		WhitelistIPs:     []string{"10.0.0.0/8", "::ffff:192.168.1.5"},
+	}
+	equivalent := config.FiltersConfig{
+		WhitelistUsers:   []string{"api", "worker"},
+		BlacklistUsers:   []string{"backup", "system", "system"},
+		BlacklistQueries: []string{"(?i)password", "secret"},
+		WhitelistIPs:     []string{"192.168.1.5", "10.1.2.3/8"},
+	}
+	a := analysisFilterFingerprint(base)
+	if b := analysisFilterFingerprint(equivalent); a != b {
 		t.Fatalf("equivalent filter sets produced different fingerprints: %s != %s", a, b)
 	}
-	if strings.Contains(a, "api") || strings.Contains(a, "system") {
-		t.Fatalf("fingerprint exposed filter values: %s", a)
+	for _, value := range []string{"api", "system", "secret", "10.0.0.0"} {
+		if strings.Contains(a, value) {
+			t.Fatalf("fingerprint exposed filter value %q: %s", value, a)
+		}
 	}
-	c := analysisUserFilterFingerprint([]string{"different"}, []string{"backup", "system"})
-	if a == c {
-		t.Fatalf("meaningful filter change did not change fingerprint: %s", a)
+	changes := map[string]func(*config.FiltersConfig){
+		"whitelist_users":   func(f *config.FiltersConfig) { f.WhitelistUsers = []string{"different"} },
+		"blacklist_users":   func(f *config.FiltersConfig) { f.BlacklistUsers = nil },
+		"blacklist_queries": func(f *config.FiltersConfig) { f.BlacklistQueries = []string{"secret"} },
+		"whitelist_ips":     func(f *config.FiltersConfig) { f.WhitelistIPs = []string{"10.0.0.0/16"} },
+	}
+	for name, change := range changes {
+		changed := base
+		change(&changed)
+		if analysisFilterFingerprint(changed) == a {
+			t.Errorf("changing %s did not change the fingerprint", name)
+		}
+	}
+}
+
+// The span sample behind attribution gets the per-trace decision scheduled
+// export makes, so a filtered query's spans never reach the report or its
+// notification. Each trace is one query span plus a child span, which the
+// query-span sample leaves out; every query belongs to family qf_1.
+func TestBuildAnalysisInput_SpanSampleHonorsFilters(t *testing.T) {
+	type query struct{ user, addr, statement string }
+	queries := map[string]query{
+		"q1": {"app", "::ffff:10.0.0.1", "SELECT 1"},
+		"q2": {"app", "::ffff:10.0.0.2", "SELECT secret FROM vault"},
+		"q3": {"intruder", "::ffff:10.0.0.3", "SELECT 3"},
+		"q4": {"app", "::ffff:192.168.0.9", "SELECT 4"},
+	}
+	var spans []model.OpenTelemetrySpan
+	queryLog := make(map[string]model.QueryLog)
+	for _, qid := range []string{"q1", "q2", "q3", "q4"} {
+		q := queries[qid]
+		trace := uuid.New()
+		spans = append(spans,
+			model.OpenTelemetrySpan{TraceID: trace, OperationName: "query", Attributes: map[string]string{
+				"clickhouse.query_id": qid, "db.statement": q.statement, "log_comment": `{"app":"billing"}`,
+			}},
+			model.OpenTelemetrySpan{TraceID: trace, OperationName: "MergeTreeRead", Attributes: map[string]string{}},
+		)
+		queryLog[qid] = model.QueryLog{QueryID: qid, NormalizedQueryHash: 100, User: q.user, ClientAddress: q.addr}
+	}
+	families := []model.QueryFamilyRollup{{FamilyID: "qf_1", MemberHashesSorted: []uint64{100}}}
+
+	tests := []struct {
+		name        string
+		filters     config.FiltersConfig
+		wantSpans   int // sampled query spans kept
+		wantQueries int // query spans attributed to qf_1
+	}{
+		{"no filters", config.FiltersConfig{}, 4, 4},
+		{"blacklist_queries", config.FiltersConfig{BlacklistQueries: []string{"secret"}}, 3, 3},
+		{"whitelist_ips", config.FiltersConfig{WhitelistIPs: []string{"10.0.0.0/8"}}, 3, 3},
+		{"whitelist_users", config.FiltersConfig{WhitelistUsers: []string{"app"}}, 3, 3},
+		{"blacklist_users", config.FiltersConfig{BlacklistUsers: []string{"intruder"}}, 3, 3},
+		{"whitelist_operations", config.FiltersConfig{WhitelistOperations: []string{"query"}}, 4, 4},
+		{"combined", config.FiltersConfig{
+			BlacklistQueries: []string{"secret"},
+			WhitelistIPs:     []string{"10.0.0.0/8"},
+			WhitelistUsers:   []string{"app"},
+		}, 1, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := testAnalyzeConfig()
+			cfg.Filters = tt.filters
+			src := &fakeAnalysisSource{normalized: true, families: families, spans: spans, queryLog: queryLog}
+			input, err := buildAnalysisInput(context.Background(), src, cfg, "", defaultAnalyzeOptions(), analysis.AnalysisWindow{})
+			if err != nil {
+				t.Fatalf("buildAnalysisInput: %v", err)
+			}
+			if !input.Coverage.SpanSampleAvailable {
+				t.Fatalf("span sample unavailable: %v", input.Coverage.Warnings)
+			}
+			if input.Coverage.SpanSampleSize != tt.wantSpans {
+				t.Errorf("span sample size = %d, want %d", input.Coverage.SpanSampleSize, tt.wantSpans)
+			}
+			if input.Coverage.SpansWithQueryID != tt.wantQueries {
+				t.Errorf("spans with query_id = %d, want %d", input.Coverage.SpansWithQueryID, tt.wantQueries)
+			}
+			if got := input.AttributionByFamily["qf_1"].SampledSpans; got != tt.wantQueries {
+				t.Errorf("qf_1 attributed spans = %d, want %d", got, tt.wantQueries)
+			}
+		})
+	}
+}
+
+// querySpanMix builds a span sample shaped like real ClickHouse traces: each
+// trace is one `query` span plus children child spans, and only the query span
+// can carry clickhouse.query_id. The first withID traces carry it.
+func querySpanMix(traces, children, withID int) []model.OpenTelemetrySpan {
+	var spans []model.OpenTelemetrySpan
+	for i := 0; i < traces; i++ {
+		trace := uuid.New()
+		attrs := map[string]string{}
+		if i < withID {
+			attrs["clickhouse.query_id"] = fmt.Sprintf("q%d", i)
+		}
+		spans = append(spans, model.OpenTelemetrySpan{TraceID: trace, SpanID: 1, OperationName: "query", Attributes: attrs})
+		for c := 0; c < children; c++ {
+			spans = append(spans, model.OpenTelemetrySpan{TraceID: trace, SpanID: uint64(c + 2), ParentSpanID: 1, OperationName: "MergeTreeRangeReader::read()", Attributes: map[string]string{}})
+		}
+	}
+	return spans
+}
+
+// TestAnalyzeQueries_QueryIDCoverageCountsQuerySpans covers both halves of the
+// query-ID coverage fix. Release testing found the warning firing on healthy
+// data: the ratio was over every span, and child spans drove it to a few
+// percent. Counting only the sampled `query` spans then left the warning
+// unable to fire: at about 30 child spans per query, a default 1,000-span
+// sample held about 32 queries, under the 50-span minimum, even at 0%
+// coverage. The sample now holds only `query` spans, so the default limit
+// counts queries.
+func TestAnalyzeQueries_QueryIDCoverageCountsQuerySpans(t *testing.T) {
+	tests := []struct {
+		name        string
+		spans       []model.OpenTelemetrySpan
+		wantSample  int
+		wantWithID  int
+		wantRatio   float64
+		wantWarning bool
+		wantExit    int
+	}{
+		{"healthy: every query span carries the ID", querySpanMix(60, 30, 60), 60, 60, 1, false, 0},
+		{"healthy: no child spans", querySpanMix(60, 0, 60), 60, 60, 1, false, 0},
+		{"unhealthy: a third of query spans carry the ID", querySpanMix(60, 30, 20), 60, 20, 1.0 / 3, true, analysisPolicyExitCode},
+		{"too few query spans for a verdict", querySpanMix(40, 30, 0), 40, 0, 0, false, 0},
+		// 6,200 spans: an every-span sample at the default limit would hold
+		// about 32 queries and never warn.
+		{"no query span carries the ID, 30 child spans each", querySpanMix(200, 30, 0), 200, 0, 0, true, analysisPolicyExitCode},
+		{"default limit caps query spans, not child spans", querySpanMix(1500, 30, 1500), 1000, 1000, 1, false, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src := &fakeAnalysisSource{normalized: true, spans: tt.spans}
+			opts := defaultAnalyzeOptions() // default span sample limit: 1,000
+			opts.FailOn = failOnWarning
+			var out, errOut bytes.Buffer
+			code := analyzeQueriesWithSource(src, testAnalyzeConfig(), "", opts, "json", "", &out, &errOut)
+			if code != tt.wantExit {
+				t.Fatalf("exit = %d, want %d; stderr:\n%s", code, tt.wantExit, errOut.String())
+			}
+			var report analysis.AnalysisReport
+			if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+				t.Fatalf("invalid report JSON: %v", err)
+			}
+			if !src.spanFetchOpts.QuerySpansOnly || src.spanFetchLimit != defaultAnalysisSpanSampleLimit {
+				t.Errorf("span sample request = %+v limit %d, want query spans only, limit %d", src.spanFetchOpts, src.spanFetchLimit, defaultAnalysisSpanSampleLimit)
+			}
+			cov := report.Coverage
+			if cov.SpanSampleSize != tt.wantSample || cov.SpansWithQueryID != tt.wantWithID {
+				t.Errorf("coverage sizes = %d/%d, want %d/%d", cov.SpanSampleSize, cov.SpansWithQueryID, tt.wantSample, tt.wantWithID)
+			}
+			if diff := cov.QueryIDRatio - tt.wantRatio; diff > 1e-9 || diff < -1e-9 {
+				t.Errorf("query_id_ratio = %v, want %v", cov.QueryIDRatio, tt.wantRatio)
+			}
+			gotWarning := false
+			for _, f := range report.Findings {
+				if strings.HasPrefix(f.ID, "coverage:query_id_ratio:") {
+					gotWarning = true
+				}
+			}
+			if gotWarning != tt.wantWarning {
+				t.Errorf("query_id_ratio finding = %v, want %v; findings: %+v", gotWarning, tt.wantWarning, report.Findings)
+			}
+		})
+	}
+}
+
+// A failed trace-filter lookup withholds the whole span sample rather than
+// attributing spans the filters could not decide.
+func TestBuildAnalysisInput_SpanSampleFailsClosedOnFilterLookupError(t *testing.T) {
+	spans := []model.OpenTelemetrySpan{{TraceID: uuid.New(), OperationName: "query", Attributes: map[string]string{"clickhouse.query_id": "q1"}}}
+	families := []model.QueryFamilyRollup{{FamilyID: "qf_1", MemberHashesSorted: []uint64{100}}}
+	queryLog := map[string]model.QueryLog{"q1": {QueryID: "q1", NormalizedQueryHash: 100, User: "app"}}
+	for _, src := range []*fakeAnalysisSource{
+		{traceQueriesErr: errors.New("span log down")},
+		{originsErr: errors.New("query_log down")},
+	} {
+		src.normalized, src.families, src.spans, src.queryLog = true, families, spans, queryLog
+		cfg := testAnalyzeConfig()
+		cfg.Filters.WhitelistUsers = []string{"app"}
+		input, err := buildAnalysisInput(context.Background(), src, cfg, "", defaultAnalyzeOptions(), analysis.AnalysisWindow{})
+		if err != nil {
+			t.Fatalf("buildAnalysisInput: %v", err)
+		}
+		if input.Coverage.SpanSampleAvailable || input.AttributionByFamily != nil {
+			t.Errorf("span sample should be withheld, got available=%v attribution=%v", input.Coverage.SpanSampleAvailable, input.AttributionByFamily)
+		}
+		if !strings.Contains(strings.Join(input.Coverage.Warnings, "\n"), "trace filters could not resolve") {
+			t.Errorf("warnings should name the filter lookup, got %v", input.Coverage.Warnings)
+		}
 	}
 }
 
@@ -935,10 +1216,10 @@ func TestBuildAttributionCoverage_MapsSpansToFamilies(t *testing.T) {
 	}
 	spans := []model.OpenTelemetrySpan{
 		// Two spans map to qf_1 via query_id -> normalized hash 100.
-		{Attributes: map[string]string{"clickhouse.query_id": "q1", "log_comment": `{"app":"billing","query_name":"invoice"}`}},
-		{Attributes: map[string]string{"clickhouse.query_id": "q2", "log_comment": `{"app":"billing"}`}},
-		// No query_id — skipped.
-		{Attributes: map[string]string{}},
+		{StartTimeUs: 3_000_000, Attributes: map[string]string{"clickhouse.query_id": "q1", "log_comment": `{"app":"billing","query_name":"invoice"}`}},
+		{StartTimeUs: 2_000_000, Attributes: map[string]string{"clickhouse.query_id": "q2", "log_comment": `{"app":"billing"}`}},
+		// No query_id — skipped, and its earlier start does not widen the read.
+		{StartTimeUs: 1_000_000, Attributes: map[string]string{}},
 	}
 	src := &fakeAnalysisSource{
 		queryLog: map[string]model.QueryLog{
@@ -950,6 +1231,9 @@ func TestBuildAttributionCoverage_MapsSpansToFamilies(t *testing.T) {
 	attr, warning := buildAttributionCoverage(context.Background(), src, spans, families, 1)
 	if warning != "" {
 		t.Fatalf("unexpected warning: %s", warning)
+	}
+	if src.queryLogStartUs != 2_000_000 {
+		t.Errorf("query_log lookup start = %d, want 2000000, the earliest query span start", src.queryLogStartUs)
 	}
 	cov, ok := attr["qf_1"]
 	if !ok {

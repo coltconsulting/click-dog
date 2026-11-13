@@ -7,7 +7,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
 	lru "github.com/hashicorp/golang-lru/v2"
 
 	"github.com/coltconsulting/click-dog/internal/clickhouse"
@@ -43,9 +42,7 @@ func handleCircuitOpen(
 	cycleStart time.Time,
 ) error {
 	if cfg.Monitor.Canary.Enabled && canaryQuerier != nil {
-		prevState := circuitBreaker.State()
-		err := RunCanaryAndExport(ctx, canaryQuerier, exporter, cfg, f, circuitBreaker)
-		notifyOnRecovery(prevState, circuitBreaker, m, wh, "Circuit breaker closed — canary recovery successful")
+		err := RunCanaryAndExport(ctx, canaryQuerier, exporter, cfg, f, circuitBreaker, m, wh)
 		recordCanaryCycle(hb, m, err, cycleStart)
 		return err
 	}
@@ -60,12 +57,13 @@ func handleCircuitOpen(
 }
 
 // handleElevatedBackoff checks if backoff is elevated (> 2x base) and canary is enabled.
-// If so, it runs a canary query instead of the full span fetch.
+// If so, it runs a canary query instead of the full span fetch, alternating
+// with real fetches: a cycle after a canary always runs the real fetch, since
+// only a real fetch can show recovery and reset the backoff.
 // Returns (true, err) if canary ran, or (false, nil) if the caller should proceed normally.
 //
 // Hardcoded 2x threshold: with default BackoffFactor 2.0, canary triggers
-// after a single failure. This is intentional — canary is cheap and we want
-// early degraded-mode visibility. A future config knob could override this.
+// after two consecutive failures. A future config knob could override this.
 func (p *Pipeline) handleElevatedBackoff(
 	ctx context.Context,
 	exporter model.SpanExporter,
@@ -76,9 +74,10 @@ func (p *Pipeline) handleElevatedBackoff(
 	poller *resilience.AdaptivePoller,
 	canaryQuerier model.CanaryQuerier,
 	m *metrics.Metrics,
-	wh *webhook.WebhookNotifier,
 	cycleStart time.Time,
 ) (bool, error) {
+	canaryRanLast := p.lastCycleCanary
+	p.lastCycleCanary = false
 	if poller == nil || !cfg.Monitor.Canary.Enabled || canaryQuerier == nil {
 		return false, nil
 	}
@@ -87,20 +86,18 @@ func (p *Pipeline) handleElevatedBackoff(
 	if currentInterval <= 2*baseInterval {
 		return false, nil
 	}
+	if canaryRanLast {
+		clicklog.Debug("Backoff elevated (%v > 2x base), running a real fetch after the canary", currentInterval)
+		return false, nil
+	}
 
 	// The canary exports before this helper returns. Clear the cached version
 	// now so the first degraded span cannot carry the previous healthy stamp.
-	p.serverVersion.Clear(exporter)
+	p.serverVersion.Clear(exporter, clearReasonCanary)
 
 	clicklog.Debug("Backoff elevated (%v > 2x base), running canary", currentInterval)
-	var prevState resilience.CircuitState
-	if circuitBreaker != nil {
-		prevState = circuitBreaker.State()
-	}
-	err := RunCanaryAndExport(ctx, canaryQuerier, exporter, cfg, f, circuitBreaker)
-	if circuitBreaker != nil {
-		notifyOnRecovery(prevState, circuitBreaker, m, wh, "Circuit breaker closed — canary recovery successful")
-	}
+	err := RunCanaryAndExport(ctx, canaryQuerier, exporter, cfg, f, circuitBreaker, m, p.Webhook)
+	p.lastCycleCanary = true
 	recordCanaryCycle(hb, m, err, cycleStart)
 	return true, err
 }
@@ -109,60 +106,81 @@ func (p *Pipeline) handleElevatedBackoff(
 // a circuit breaker failure and returning ErrHealthCheck.
 func handleHealthCheckFailure(circuitBreaker *resilience.CircuitBreaker, m *metrics.Metrics, wh *webhook.WebhookNotifier, cycleStart time.Time) error {
 	clicklog.Debug("ClickHouse connection unhealthy, skipping this cycle")
-	if circuitBreaker != nil {
-		prevState := circuitBreaker.State()
-		circuitBreaker.RecordFailure()
-		if prevState != resilience.CircuitOpen && circuitBreaker.State() == resilience.CircuitOpen {
-			m.SetCircuitBreakerState("open")
-			wh.Notify(webhook.EventCircuitBreakerOpened, "Circuit breaker opened — ClickHouse health check failed")
-			wh.Notify(webhook.EventErrorSpike, fmt.Sprintf("Error spike: %d consecutive failures triggered circuit breaker", circuitBreaker.Failures()))
-		}
-	}
+	recordBreakerFailure(circuitBreaker, m, wh, "ClickHouse health check failed")
 	m.RecordCycle(0, 0, 0, time.Since(cycleStart).Milliseconds(), ErrHealthCheck)
 	return ErrHealthCheck
 }
 
-// updateCircuitBreakerState records success or failure on the circuit breaker
-// and fires appropriate webhook/metrics notifications on state transitions.
+// updateCircuitBreakerState records a cycle's outcome on the circuit breaker.
 func updateCircuitBreakerState(circuitBreaker *resilience.CircuitBreaker, err error, m *metrics.Metrics, wh *webhook.WebhookNotifier) {
-	if circuitBreaker == nil {
+	if err != nil {
+		recordBreakerFailure(circuitBreaker, m, wh, "cycle failed")
 		return
 	}
-	prevState := circuitBreaker.State()
-	if err != nil {
-		circuitBreaker.RecordFailure()
-		if prevState != resilience.CircuitOpen && circuitBreaker.State() == resilience.CircuitOpen {
-			m.SetCircuitBreakerState("open")
-			wh.Notify(webhook.EventCircuitBreakerOpened, fmt.Sprintf("Circuit breaker opened after %d failures", circuitBreaker.Failures()))
-			wh.Notify(webhook.EventErrorSpike, fmt.Sprintf("Error spike: %d consecutive failures triggered circuit breaker", circuitBreaker.Failures()))
-		}
-	} else {
-		circuitBreaker.RecordSuccess()
-		notifyOnRecovery(prevState, circuitBreaker, m, wh, "Circuit breaker closed — recovery successful")
-	}
+	recordBreakerSuccess(circuitBreaker, m, wh)
 }
 
-// notifyOnRecovery checks if the circuit breaker transitioned from open/half-open
-// to closed, and if so, updates metrics and sends a webhook notification.
-func notifyOnRecovery(prevState resilience.CircuitState, cb *resilience.CircuitBreaker, m *metrics.Metrics, wh *webhook.WebhookNotifier, message string) {
-	newState := cb.State()
-	if (prevState == resilience.CircuitOpen || prevState == resilience.CircuitHalfOpen) && newState == resilience.CircuitClosed {
-		m.SetCircuitBreakerState("closed")
-		wh.Notify(webhook.EventCircuitBreakerClosed, message)
+// recordBreakerFailure records a failure on the circuit breaker. When that
+// failure opens the breaker, it publishes the change: the state gauge that
+// /readyz, /status, and /metrics read, and the circuit_breaker_opened and
+// error_spike webhooks. Every path that records a breaker failure calls this,
+// so none of them can open the breaker while health and metrics still say
+// closed. cause names the failing step in the webhook text.
+func recordBreakerFailure(cb *resilience.CircuitBreaker, m *metrics.Metrics, wh *webhook.WebhookNotifier, cause string) {
+	if cb == nil {
+		return
 	}
+	prev := cb.State()
+	cb.RecordFailure()
+	if prev == resilience.CircuitOpen || cb.State() != resilience.CircuitOpen {
+		return
+	}
+	if m != nil {
+		m.SetCircuitBreakerState("open")
+	}
+	failures := cb.Failures()
+	wh.Notify(webhook.EventCircuitBreakerOpened, fmt.Sprintf("Circuit breaker opened after %d failures (%s)", failures, cause))
+	wh.Notify(webhook.EventErrorSpike, fmt.Sprintf("Error spike: %d consecutive failures triggered circuit breaker", failures))
+}
+
+// recordBreakerSuccess records a success on the circuit breaker and, when that
+// success closes it, publishes the change the same way recordBreakerFailure
+// publishes an opening.
+func recordBreakerSuccess(cb *resilience.CircuitBreaker, m *metrics.Metrics, wh *webhook.WebhookNotifier) {
+	if cb == nil {
+		return
+	}
+	prev := cb.State()
+	cb.RecordSuccess()
+	if prev == resilience.CircuitClosed || cb.State() != resilience.CircuitClosed {
+		return
+	}
+	if m != nil {
+		m.SetCircuitBreakerState("closed")
+	}
+	wh.Notify(webhook.EventCircuitBreakerClosed, "Circuit breaker closed — recovery successful")
 }
 
 // recordCanaryCycle records heartbeat and metrics for a canary cycle.
-// ErrCanaryRan is a sentinel, not a real error — it is not counted as a failure.
+//
+// A failed canary is an error cycle. A successful one (the ErrCanaryRan
+// sentinel) is neither a failure nor evidence of health: it counts as a
+// skipped cycle, leaves the last cycle as the cycle recorded before it, and
+// does not advance last success. Recording it as a successful cycle would make
+// /status report ClickHouse healthy, and drop the fetch's error, on every
+// canary while real fetches keep failing.
 func recordCanaryCycle(hb *Heartbeat, m *metrics.Metrics, err error, cycleStart time.Time) {
-	realErr := err
 	if errors.Is(err, ErrCanaryRan) {
-		realErr = nil
+		if hb != nil {
+			hb.Record(0, 0, 0, nil)
+		}
+		m.RecordCanaryCycle()
+		return
 	}
 	if hb != nil {
-		hb.Record(0, 0, 0, realErr)
+		hb.Record(0, 0, 0, err)
 	}
-	m.RecordCycle(0, 0, 0, time.Since(cycleStart).Milliseconds(), realErr)
+	m.RecordCycle(0, 0, 0, time.Since(cycleStart).Milliseconds(), err)
 }
 
 // recordSpanLogObservation pushes the per-cycle ClickHouse data-plane
@@ -253,11 +271,6 @@ func fetchAndProcessSpans(
 	// Extracted so a unit test can drive it without a real reader.
 	recordSpanLogObservation(m, spans)
 
-	// A strict whitelist drops every span it cannot resolve. When that is
-	// because a lookup failed rather than because the span is not allowed,
-	// the page is left uncommitted so the next cycle judges it again.
-	resolveFailed := false
-
 	// Enrich spans with query_log metadata (user, client, tables, stats).
 	var queryLogMap map[string]model.QueryLog
 	lookbackDays := int(cfg.GetLookback().Hours()/24) + 1
@@ -268,7 +281,7 @@ func fetchAndProcessSpans(
 		queryIDs := UniqueQueryIDs(spans)
 		if len(queryIDs) > 0 {
 			var enrichErr error
-			queryLogMap, enrichErr = chReader.FetchQueryLogByQueryIDs(ctx, queryIDs, lookbackDays)
+			queryLogMap, enrichErr = chReader.FetchQueryLogByQueryIDs(ctx, queryIDs, lookbackDays, EarliestQueryStartUs(spans))
 			// Record dashboard-facing enrichment metrics (#183). The attempt
 			// counter increments on both branches; matched/total seeds the
 			// last-cycle match-ratio gauge on success. queryIDs is non-empty
@@ -281,9 +294,9 @@ func fetchAndProcessSpans(
 				if n == 1 || (n >= 10 && n%(ipow10(ilog10(n))) == 0) {
 					clicklog.Warn("query_log enrichment failed (%d consecutive): %v", n, enrichErr)
 				}
-				// Non-fatal — continue without enrichment
+				// Non-fatal — continue without enrichment. No filter decides
+				// on these rows; they only add metadata to exported spans.
 				queryLogMap = nil
-				resolveFailed = true
 			} else {
 				enrichFailCount.Store(0) // reset on success
 				if len(queryLogMap) > 0 {
@@ -300,33 +313,22 @@ func fetchAndProcessSpans(
 	duplicate := 0
 	seenThisCycle := make(map[model.SpanKey]struct{}, len(spans))
 
-	// Resolved per trace across the whole cycle, before batching: only the
-	// query root carries clickhouse.query_id and it may sit in a different
-	// batch from its children.
-	var traceAddrs map[uuid.UUID]string
-	if f.HasIPWhitelist() {
-		traceAddrs = TraceClientAddresses(spans, queryLogMap)
-		// A page can hold a trace's children without its query root — the
-		// reader splits a trace across cycles at max_spans_per_cycle — so the
-		// page alone cannot decide those traces. Resolve them through the span
-		// log's own record of the trace's query IDs; a lookup failure leaves
-		// them unresolved, which the strict whitelist then drops.
-		if missing := UnresolvedTraceIDs(spans, traceAddrs); len(missing) > 0 {
-			resolved, err := ResolveTraceAddressesFromSpanLog(ctx, chReader, missing, lookbackDays)
-			if err != nil {
-				clicklog.Warn("IP whitelist could not resolve %d trace(s) whose query root is outside this page: %v", len(missing), err)
-				resolveFailed = true
+	// The filters that need a query's client, user, or statement are decided
+	// per trace across the whole cycle, before batching: only a trace's query
+	// spans carry those, and they may sit in another page. A failed lookup
+	// fails the cycle before anything is exported, so the page is read again
+	// and the breaker and backoff see a persistent failure.
+	var traceDecision TraceDecision
+	if len(spans) > 0 {
+		var traceErr error
+		traceDecision, traceErr = FilteredTraces(ctx, chReader, spans, f, lookbackDays)
+		if traceErr != nil {
+			err := fmt.Errorf("trace filters could not resolve this page's queries, withholding it: %w", traceErr)
+			clicklog.Error("%v", err)
+			if hb != nil {
+				hb.Record(0, 0, 0, err)
 			}
-			for id, addr := range resolved {
-				traceAddrs[id] = addr
-			}
-		}
-		// Config validation rejects an IP whitelist without enrichment, so
-		// reaching this with nothing resolved means enrichment failed at
-		// runtime — which is non-fatal, and would otherwise drop the cycle
-		// with no signal beyond the filtered counter.
-		if len(traceAddrs) == 0 && len(spans) > 0 {
-			clicklog.Warn("IP whitelist is active but no client address could be resolved for any of %d spans; query_log enrichment is unavailable, so every span will be filtered", len(spans))
+			return 0, 0, 0, err
 		}
 	}
 
@@ -366,23 +368,7 @@ func fetchAndProcessSpans(
 			// Later rows with the same span identity should not get a second pass.
 			seenThisCycle[key] = struct{}{}
 
-			// The client address comes from query_log enrichment: ClickHouse
-			// does not put client.address on span_log rows.
-			queryText := span.Attributes["db.statement"]
-			var clientAddr string
-			if f.HasIPWhitelist() {
-				clientAddr = ResolveSpanClientAddress(span, queryLogMap, traceAddrs)
-			}
-			if f.ShouldFilter(span.OperationName, queryText, clientAddr) {
-				filtered++
-				continue
-			}
-
-			// User-based filter. The SQL-level filter on queryLogEnrichSelectSQL
-			// has already removed enrichment rows for filtered users; this
-			// per-span check enforces the same policy on the spans themselves
-			// so an enriched-out user's data can't slip through.
-			if ShouldFilterSpanByUser(span, f, queryLogMap) {
+			if traceDecision.Withholds(&span) || !f.AllowsOperation(span.OperationName) {
 				filtered++
 				continue
 			}
@@ -437,20 +423,16 @@ func fetchAndProcessSpans(
 	} else {
 		clicklog.Debug("Exported: 0, Filtered: 0, Duplicates: %d", duplicate)
 	}
-	total := exported + filtered + duplicate
-	if total > 0 && duplicate > total/2 {
-		clicklog.Info("High duplicate ratio: %d/%d spans (%d%%) — consider increasing dedup_cache_size if this persists",
-			duplicate, total, duplicate*100/total)
-	}
+	// No duplicate-ratio warning: every duplicate here is a span the walk
+	// read again on purpose (the late-flush rescan, a retried page, or a
+	// trace read again after its query span landed) and the dedup cache
+	// caught. A cache too small for that overlap shows up as spans exported
+	// twice, never as duplicates, so a high ratio is a healthy cycle.
+	//
 	// Every export in the page succeeded, so the walk may move past it. An
 	// early return above leaves it uncommitted, and the next cycle re-reads
 	// the page; spans a sink already accepted are then dedup-cache hits.
-	if resolveFailed && (f.HasIPWhitelist() || f.HasUserWhitelist()) {
-		// The failed lookup already logged at Warn with its own throttling.
-		clicklog.Debug("Not advancing past this page: a whitelist lookup failed, so its %d filtered spans are re-read next cycle", filtered)
-	} else {
-		chReader.CommitLiveSpans()
-	}
+	chReader.CommitLiveSpans()
 	if hb != nil {
 		hb.Record(exported, filtered, duplicate, nil)
 	}
@@ -463,11 +445,12 @@ func UpdatePollerState(poller *resilience.AdaptivePoller, err error, ticker *tim
 		return
 	}
 
-	// When the circuit breaker blocked the cycle, a canary ran, or a cluster
-	// standby skipped, don't touch the poller — neither penalise (RecordFailure)
-	// nor reward (RecordSuccess). None of these did real fetch/export work, so
-	// the existing backoff state must carry over unchanged.
-	if errors.Is(err, ErrCircuitOpen) || errors.Is(err, ErrCanaryRan) || errors.Is(err, ErrLeaderStandby) {
+	// When the circuit breaker blocked the cycle, a cluster standby skipped,
+	// or a canary ran in place of the fetch, don't touch the poller — neither
+	// penalise (RecordFailure) nor reward (RecordSuccess). None did real
+	// fetch/export work, so the existing backoff state must carry over
+	// unchanged; the cycle after a canary runs the real fetch that decides it.
+	if errors.Is(err, ErrCircuitOpen) || errors.Is(err, ErrLeaderStandby) || errors.Is(err, ErrCanaryRan) {
 		return
 	}
 

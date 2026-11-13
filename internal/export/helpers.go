@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
+
+	"github.com/coltconsulting/click-dog/internal/model"
 )
 
 const (
@@ -20,17 +22,19 @@ func liveSpanSource(attributes map[string]string) string {
 }
 
 // liveSpanAttributesForHEC returns the nested attributes serialized by Splunk
-// HEC. The effective source is promoted to click_dog_source on the event, so it
-// is omitted here to avoid two representations that can disagree. Copying also
-// lets the exporter truncate SQL without mutating the span shared by other
-// exporters in a MultiExporter fan-out.
-func liveSpanAttributesForHEC(attributes map[string]string, maxQueryLength int) map[string]string {
-	if attributes == nil {
+// HEC: string attributes as strings and string-array attributes as JSON arrays.
+// An array replaces a string attribute of the same name, as in the OTLP exporter.
+// The effective source is promoted to click_dog_source on the event, so it is
+// omitted here to avoid two representations that can disagree. Copying also lets
+// the exporter truncate SQL without mutating the span shared by other exporters
+// in a MultiExporter fan-out.
+func liveSpanAttributesForHEC(span model.OpenTelemetrySpan, maxQueryLength int) map[string]interface{} {
+	if span.Attributes == nil && span.StringSliceAttributes == nil {
 		return nil
 	}
 
-	exported := make(map[string]string, len(attributes))
-	for key, value := range attributes {
+	exported := make(map[string]interface{}, len(span.Attributes)+len(span.StringSliceAttributes))
+	for key, value := range span.Attributes {
 		if key == liveSpanSourceKey {
 			continue
 		}
@@ -38,6 +42,12 @@ func liveSpanAttributesForHEC(attributes map[string]string, maxQueryLength int) 
 			value = TruncateQuery(value, maxQueryLength)
 		}
 		exported[key] = value
+	}
+	for key, values := range span.StringSliceAttributes {
+		if key == liveSpanSourceKey {
+			continue
+		}
+		exported[key] = values
 	}
 	return exported
 }

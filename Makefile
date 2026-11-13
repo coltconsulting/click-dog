@@ -17,8 +17,13 @@
 include scripts/tool-versions.env
 
 PUBLIC_REPO ?= coltconsulting/click-dog
+# The published image name. Only build-docker-multiarch and
+# release-docker-manual use it; build-docker tags DOCKER_LOCAL_IMAGE instead,
+# because a local image under the published name shadows the registry one for
+# every `docker run` that does not pull.
 DOCKER_REPO ?= ghcr.io/coltconsulting/click-dog
 DOCKER_TAG  ?= latest
+DOCKER_LOCAL_IMAGE ?= click-dog:local
 DOCKER_MULTIARCH_OUTPUT ?= type=oci,dest=click-dog-$(DOCKER_TAG).oci.tar
 RSVG_CONVERT ?= rsvg-convert
 AGENT_CACHE_DIR ?= $(CURDIR)/.agent-cache

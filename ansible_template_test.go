@@ -150,7 +150,6 @@ func TestAnsibleTemplate_MatchesProductionProfile(t *testing.T) {
 	got.ClickHouse.Password = want.ClickHouse.Password
 	got.ClickHouse.PasswordFile = want.ClickHouse.PasswordFile
 	got.EnvWarnings, want.EnvWarnings = nil, nil
-	got.DeprecationWarnings, want.DeprecationWarnings = nil, nil
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Ansible template and production profile diverge:\nansible:    %+v\nproduction: %+v", got, want)
 	}

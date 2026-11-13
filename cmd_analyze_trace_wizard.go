@@ -67,6 +67,10 @@ func runAnalyzeTraceWizard(in io.Reader, out, errOut io.Writer, src traceDrilldo
 		// the operator was shown why. A truncated stdin is the only path that
 		// should fail the command; a "no candidate" stop already printed its
 		// guidance and is a clean exit.
+		if w.lineTooLong {
+			_, _ = fmt.Fprintf(errOut, "click-dog analyze trace: %v; not running the drilldown\n", errPromptLineTooLong)
+			return 1
+		}
 		if w.sawEOF {
 			_, _ = fmt.Fprintln(errOut, "click-dog analyze trace: stdin closed before the wizard finished; not running the drilldown")
 			return 1
@@ -168,6 +172,22 @@ func collectTraceWizardOther(w *wizPrompter, out, errOut io.Writer) (analyzeTrac
 			// Empty + EOF: stdin closed. Empty without EOF cannot happen because
 			// promptTraceNonEmpty re-prompts on a blank line.
 			return analyzeTraceWizardInput{}, false
+		}
+		// Same checks as the flags: a malformed value can match nothing, so
+		// ask again rather than run an empty drilldown.
+		var invalid error
+		switch kind {
+		case "trace-id":
+			invalid = validateTraceIDFlag(value)
+		case "normalized-query-hash":
+			invalid = validateNormalizedHashFlag(value)
+		}
+		if invalid != nil {
+			_, _ = fmt.Fprintln(errOut, invalid)
+			if w.sawEOF {
+				return analyzeTraceWizardInput{}, false
+			}
+			continue
 		}
 
 		in := analyzeTraceWizardInput{Source: "other", Fanout: fanoutSet{Trace: true}}

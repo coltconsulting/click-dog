@@ -26,12 +26,19 @@ func newSpanFetchTestReader(rowsFn func(string) (driver.Rows, error)) (*ClickHou
 
 func TestFetchOpenTelemetrySpansWithOpts_BuildsAndExecutesTwoStepQueries(t *testing.T) {
 	traceID := uuid.MustParse("550e8400-e29b-41d4-a716-446655440000")
+	olderTraceID := uuid.MustParse("550e8400-e29b-41d4-a716-446655440002")
 	finishDate := time.Date(2026, time.September, 3, 0, 0, 0, 0, time.UTC)
+	// The span page is floored one minute before the earliest qualifying start
+	// in the trace page, whichever row carries it.
+	const earliestStartUs = uint64(1_793_642_769_881_118)
 	queryCall := 0
 	reader, conn := newSpanFetchTestReader(func(string) (driver.Rows, error) {
 		queryCall++
 		if queryCall == 1 {
-			return newFakeRows([]any{traceID, uint64(200)}), nil
+			return newFakeRows(
+				[]any{traceID, uint64(earliestStartUs + 9_000_000), uint64(earliestStartUs + 5_000_000)},
+				[]any{olderTraceID, uint64(earliestStartUs + 8_000_000), earliestStartUs},
+			), nil
 		}
 		return newFakeRows([]any{
 			"clickhouse-1",
@@ -88,6 +95,7 @@ func TestFetchOpenTelemetrySpansWithOpts_BuildsAndExecutesTwoStepQueries(t *test
 		"FROM system.opentelemetry_span_log",
 		"(finish_time_us - start_time_us) >= ? * 1000",
 		"(finish_time_us - start_time_us) <= ? * 1000",
+		"min(start_time) as min_start_time",
 		"GROUP BY trace_id",
 		"ORDER BY max_finish_time DESC",
 		"LIMIT ?",
@@ -108,6 +116,7 @@ func TestFetchOpenTelemetrySpansWithOpts_BuildsAndExecutesTwoStepQueries(t *test
 	for _, want := range []string{
 		"FROM system.opentelemetry_span_log",
 		"trace_id IN ?",
+		"finish_time_us >= ?",
 		"(finish_time_us - start_time_us) >= ? * 1000",
 		"(finish_time_us - start_time_us) <= ? * 1000",
 		"operation_name NOT LIKE ?",
@@ -121,8 +130,9 @@ func TestFetchOpenTelemetrySpansWithOpts_BuildsAndExecutesTwoStepQueries(t *test
 		t.Errorf("operation blacklist clauses = %d, want 2 (empty patterns must be ignored)", got)
 	}
 	wantSpanArgs := []any{
-		[]uuid.UUID{traceID},
+		[]uuid.UUID{traceID, olderTraceID},
 		2,
+		earliestStartUs - 60_000_000,
 		100,
 		3000,
 		"%MergeTreeIndex%",
@@ -140,7 +150,7 @@ func TestFetchOpenTelemetrySpansWithOpts_ZeroOptionsOmitOptionalFilters(t *testi
 	reader, conn := newSpanFetchTestReader(func(string) (driver.Rows, error) {
 		queryCall++
 		if queryCall == 1 {
-			return newFakeRows([]any{traceID, uint64(200)}), nil
+			return newFakeRows([]any{traceID, uint64(200), uint64(100)}), nil
 		}
 		return newFakeRows([]any{
 			"clickhouse-1", traceID, uint64(1), uint64(0), "query", "server",
@@ -180,9 +190,45 @@ func TestFetchOpenTelemetrySpansWithOpts_ZeroOptionsOmitOptionalFilters(t *testi
 			t.Errorf("zero options emitted optional clause %q:\n%s", unwanted, spanSQL)
 		}
 	}
-	wantSpanArgs := []any{[]uuid.UUID{traceID}, 1, limit}
+	// A start inside the first minute of the epoch floors at zero rather than
+	// wrapping.
+	wantSpanArgs := []any{[]uuid.UUID{traceID}, 1, uint64(0), limit}
 	if !reflect.DeepEqual(conn.queries[1], wantSpanArgs) {
 		t.Errorf("span-fetch args = %#v, want %#v", conn.queries[1], wantSpanArgs)
+	}
+	if strings.Contains(spanSQL, "operation_name = 'query'") {
+		t.Errorf("zero options limited the span page to query spans:\n%s", spanSQL)
+	}
+}
+
+// TestFetchOpenTelemetrySpansWithOpts_QuerySpansOnly pins the analysis sample:
+// the span page keeps only `query` spans, so its limit counts queries rather
+// than their child spans, while the trace page still selects traces by every
+// qualifying span.
+func TestFetchOpenTelemetrySpansWithOpts_QuerySpansOnly(t *testing.T) {
+	traceID := uuid.MustParse("550e8400-e29b-41d4-a716-446655440003")
+	queryCall := 0
+	reader, conn := newSpanFetchTestReader(func(string) (driver.Rows, error) {
+		queryCall++
+		if queryCall == 1 {
+			return newFakeRows([]any{traceID, uint64(200), uint64(100)}), nil
+		}
+		return newFakeRows([]any{
+			"clickhouse-1", traceID, uint64(1), uint64(0), "query", "server",
+			uint64(100), uint64(200), time.Unix(0, 0).UTC(), map[string]string{},
+		}), nil
+	})
+	if _, err := reader.FetchOpenTelemetrySpansWithOpts(context.Background(), 1000, time.Hour, 100, FetchOpts{QuerySpansOnly: true}); err != nil {
+		t.Fatalf("FetchOpenTelemetrySpansWithOpts: %v", err)
+	}
+	if len(conn.sqls) != 2 {
+		t.Fatalf("queries = %d, want trace selection followed by span fetch", len(conn.sqls))
+	}
+	if strings.Contains(conn.sqls[0], "operation_name") {
+		t.Errorf("trace-selection SQL must not filter by operation:\n%s", conn.sqls[0])
+	}
+	if !strings.Contains(conn.sqls[1], "AND operation_name = 'query'") {
+		t.Errorf("span-fetch SQL missing the query-span filter:\n%s", conn.sqls[1])
 	}
 }
 
@@ -220,7 +266,7 @@ func TestFetchOpenTelemetrySpansWithOpts_ReportsQueryStage(t *testing.T) {
 		reader, _ := newSpanFetchTestReader(func(string) (driver.Rows, error) {
 			queryCall++
 			if queryCall == 1 {
-				return newFakeRows([]any{traceID, uint64(200)}), nil
+				return newFakeRows([]any{traceID, uint64(200), uint64(100)}), nil
 			}
 			return nil, errors.New("span query failed")
 		})

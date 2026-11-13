@@ -12,18 +12,23 @@ import (
 	"github.com/coltconsulting/click-dog/internal/clicklog"
 	"github.com/coltconsulting/click-dog/internal/config"
 	"github.com/coltconsulting/click-dog/internal/filter"
+	"github.com/coltconsulting/click-dog/internal/metrics"
 	"github.com/coltconsulting/click-dog/internal/model"
 	"github.com/coltconsulting/click-dog/internal/resilience"
+	"github.com/coltconsulting/click-dog/internal/webhook"
 )
 
 // RunCanaryAndExport executes a lightweight canary query during degraded mode
-// and exports a synthetic span with the results. On success it records a
-// circuit breaker success (helping recovery) and returns ErrCanaryRan.
+// and exports a synthetic span with the results, returning ErrCanaryRan on
+// success.
 //
-// Note: the canary queries ClickHouse only. If the circuit breaker was tripped
-// by OTEL export failures (not ClickHouse), a successful canary will still
-// call RecordSuccess — this is acceptable because the canary export also
-// exercises the export path, confirming both sides are healthy.
+// A successful canary is visibility, not evidence of recovery: one count()
+// and one exported span cannot show that a full span fetch, query_log
+// enrichment, or a large batch export would now succeed. It therefore leaves
+// the circuit breaker and the backoff alone; only a real cycle's outcome moves
+// them. A failed canary is real evidence of trouble and records a breaker
+// failure; when that failure opens the breaker, m and wh publish the change
+// as any other opening does.
 func RunCanaryAndExport(
 	ctx context.Context,
 	querier model.CanaryQuerier,
@@ -31,14 +36,14 @@ func RunCanaryAndExport(
 	cfg *config.Config,
 	f *filter.QueryFilter,
 	circuitBreaker *resilience.CircuitBreaker,
+	m *metrics.Metrics,
+	wh *webhook.WebhookNotifier,
 ) error {
 	canaryStart := time.Now()
 	result, err := querier.RunCanaryQuery(ctx, cfg.Monitor.Canary.ThresholdDurationMs)
 	if err != nil {
 		clicklog.Warn("Canary query failed: %v", err)
-		if circuitBreaker != nil {
-			circuitBreaker.RecordFailure()
-		}
+		recordBreakerFailure(circuitBreaker, m, wh, "canary query failed")
 		return fmt.Errorf("canary query failed: %w", err) // real error — triggers backoff
 	}
 
@@ -50,16 +55,11 @@ func RunCanaryAndExport(
 	_, exportErr := ExportSpansWithDeadline(ctx, cfg, exporter, f, []model.OpenTelemetrySpan{canarySpan})
 	if exportErr != nil {
 		clicklog.Warn("Canary span export failed: %v", exportErr)
-		if circuitBreaker != nil {
-			circuitBreaker.RecordFailure()
-		}
+		recordBreakerFailure(circuitBreaker, m, wh, "canary span export failed")
 		return fmt.Errorf("canary span export failed: %w", exportErr) // real error — triggers backoff
 	}
 
-	if circuitBreaker != nil {
-		circuitBreaker.RecordSuccess()
-	}
-	return ErrCanaryRan // sentinel — suppresses backoff adjustment
+	return ErrCanaryRan // sentinel — not a failure, and not a recovery
 }
 
 // BuildCanarySpan creates a synthetic OpenTelemetrySpan representing a canary

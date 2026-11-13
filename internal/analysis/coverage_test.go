@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -164,5 +165,27 @@ func TestCoverageAnalyzer_HealthyInputNoFindings(t *testing.T) {
 	})
 	if len(findings) != 0 {
 		t.Errorf("healthy coverage produced findings: %+v", findings)
+	}
+}
+
+// TestRenderTable_QueryIDCoverageLine pins each form of the table's coverage
+// line, which counts sampled query spans.
+func TestRenderTable_QueryIDCoverageLine(t *testing.T) {
+	tests := []struct {
+		name string
+		cov  CoverageSummary
+		want string
+	}{
+		{"unavailable", CoverageSummary{}, "  span query_id coverage: unavailable\n"},
+		{"no query spans", CoverageSummary{SpanSampleAvailable: true}, "  span query_id coverage: no query spans sampled\n"},
+		{"sampled", CoverageSummary{SpanSampleAvailable: true, SpanSampleSize: 182, SpansWithQueryID: 182, QueryIDRatio: 1}, "  span query_id coverage: 100.0% (182/182 query spans)\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := RenderTable(AnalysisReport{Window: testWindow(), Coverage: tt.cov})
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("table missing %q:\n%s", tt.want, got)
+			}
+		})
 	}
 }

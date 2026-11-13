@@ -13,7 +13,6 @@ import (
 // failure_test.go.
 type MockClickHouseReader struct {
 	spans       []model.OpenTelemetrySpan
-	queries     []model.QueryLog
 	fetchErr    error
 	healthy     bool
 	fetchCalled int
@@ -30,10 +29,6 @@ func (m *MockClickHouseReader) SetSpans(spans []model.OpenTelemetrySpan) {
 	m.spans = spans
 }
 
-func (m *MockClickHouseReader) SetQueries(queries []model.QueryLog) {
-	m.queries = queries
-}
-
 func (m *MockClickHouseReader) SetFetchError(err error) {
 	m.fetchErr = err
 }
@@ -48,14 +43,6 @@ func (m *MockClickHouseReader) FetchOpenTelemetrySpans(_ context.Context, _, _, 
 		return nil, m.fetchErr
 	}
 	return m.spans, nil
-}
-
-func (m *MockClickHouseReader) FetchSlowQueriesInRange(_ context.Context, _, _, _ int, _, _ time.Time, _ int) ([]model.QueryLog, error) {
-	m.fetchCalled++
-	if m.fetchErr != nil {
-		return nil, m.fetchErr
-	}
-	return m.queries, nil
 }
 
 func (m *MockClickHouseReader) IsHealthy(_ context.Context) bool {

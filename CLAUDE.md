@@ -22,7 +22,7 @@ make test-integration      # Full integration suite (requires Docker)
 make check-release    # Pre-tag gate: clean master + full local verification
 ```
 
-- Go 1.26+ required for compiling (`go` directive; `golang.org/x/net` v0.60.0 and the other `golang.org/x` modules require it); CI and releases pin Go 1.26.10 so the govulncheck gate runs on the reviewed toolchain. Go 1.26.5 cleared GO-2026-5856 in `crypto/tls`, Go 1.26.6 cleared GO-2026-6218/6091/6090/6089/5972/5026 across `net/url`, `html/template`, `crypto/tls`, `net/http`, and `encoding/asn1`, Go 1.26.9 cleared GO-2026-6617/6613/6612/6611/6610/6608/6607/6605/6603/6600/6599 across `net/http`, `net/textproto`, `mime/multipart`, `crypto/tls`, and `html/template` (the HTTP/2 ones also need `golang.org/x/net` v0.60.0), and Go 1.26.10 additionally clears GO-2026-6809 in `crypto/x509`
+- Go 1.26+ required for compiling (`go` directive; `golang.org/x/net` v0.60.0 and the other `golang.org/x` modules require it); CI and releases pin Go 1.26.11 so the govulncheck gate runs on the reviewed toolchain. Go 1.26.5 cleared GO-2026-5856 in `crypto/tls`, Go 1.26.6 cleared GO-2026-6218/6091/6090/6089/5972/5026 across `net/url`, `html/template`, `crypto/tls`, `net/http`, and `encoding/asn1`, Go 1.26.9 cleared GO-2026-6617/6613/6612/6611/6610/6608/6607/6605/6603/6600/6599 across `net/http`, `net/textproto`, `mime/multipart`, `crypto/tls`, and `html/template` (the HTTP/2 ones also need `golang.org/x/net` v0.60.0), Go 1.26.10 additionally clears GO-2026-6809 in `crypto/x509`, and Go 1.26.11 clears GO-2026-6859 in `net/http`
 - Integration tests use Docker Compose with a 3-node ClickHouse cluster
 - `make dev-setup` installs pinned repo-managed tools under `.agent-cache/`;
   versions are sourced from `scripts/tool-versions.env`. The gates refuse a
@@ -35,7 +35,7 @@ make check-release    # Pre-tag gate: clean master + full local verification
   parts could not run and why — do not report a partial run as a passing gate.
   `make doctor` reports both constraints
 - Integration tests are tagged: `// +build integration`
-- CI runs test, lint, and linux/amd64 build on eligible non-draft PRs and non-PR events; PR tests omit `-race`, while master/tag/manual/scheduled runs use it. Integration tests also run on non-draft PRs that touch ClickHouse, processor, leader, health, exporter, analysis, query-family, filtering, config, resilience, integration-fixture, command, dependency (including `third_party/`), integration-test, or CI-workflow paths; `govulncheck` still skips PRs, and the linux/arm64 cross-build runs on `v*` tags only. PRs whose changes all match `docs/**`, `mkdocs.yml`, or `**/*.md` skip full CI; `docs.yml` separately validates its `docs/**`/`mkdocs.yml` paths
+- CI runs test, lint, and linux/amd64 build on eligible non-draft PRs and non-PR events; PR tests omit `-race`, while master/tag/manual/scheduled runs use it. Integration tests also run on non-draft PRs that touch ClickHouse, processor, leader, health, exporter, analysis, query-family, filtering, config, resilience, integration-fixture, command, dependency (including `third_party/`), integration-test, or CI-workflow paths; `govulncheck` runs on non-draft PRs that change `go.mod` or `go.sum` and skips all other PRs, and the linux/arm64 cross-build runs on `v*` tags only. PRs whose changes all match `docs/**`, `mkdocs.yml`, or `**/*.md` skip full CI; `docs.yml` separately validates its `docs/**`/`mkdocs.yml` paths. While the org variable `CI_RUNNER` is set, test, lint, build, govulncheck and docs.yml's jobs run on the self-hosted `colt-laptop` runner (Linux arm64 containers on the owner's MacBook) instead of GitHub's, except on tags; integration tests need Docker and stay on GitHub's. A job sitting queued means the laptop is asleep
 - `govulncheck ./...` is enforced both in CI and `make check-release`; install with `go install golang.org/x/vuln/cmd/govulncheck@v1.3.0` (CI pin). Both run it through `scripts/lib/vulncheck.sh`, which also scans the upstream release of every module `go.mod` replaces with a `third_party/` copy, because govulncheck cannot match advisories against a local replacement
 
 ## Agent Workflow
@@ -49,7 +49,7 @@ Before changing files:
 1. Read the task source and identify its acceptance criteria, scope, and
    explicit do-not-touch boundaries.
 2. Run `git status --short --branch` and inspect the `origin` URL. Preserve all
-   unrelated changes; never discard, stash, or rewrite work you did not create.
+   unrelated changes; never discard, stash, or rewrite someone else's work.
 3. Run `make doctor` when the environment or available verification tools are
    unknown. Use `docs/development/change-map.md` to find companion surfaces.
 
@@ -104,7 +104,7 @@ Makefile.internal  publishing and docs-site targets; export-ignored, so the
 
 Targets are prefixed by what they do — `test-` runs tests, `check-` runs tests
 plus linting and analysis, `build-` produces artifacts, `release-` ships
-something, `print-` only tells you something. The gates form a strict
+something, `print-` only reports information. The gates form a strict
 escalation: `check-fast` → `check` → `check-deep` → `check-release`. A target
 in `Makefile.internal` may add itself to a shared gate by declaring a
 prerequisite (`check-deep: check-public`), which merges with the shared rule.
@@ -121,13 +121,12 @@ health_adapter.go            Wires the processor's runtime state into internal/h
 cmd_init.go                  `click-dog init` — generate starter config
 cmd_init_wizard.go           Guided `click-dog init --wizard` prompts + shared renderer
 cmd_check.go                 `click-dog check` — validate config + connectivity
-cmd_validate.go              `click-dog validate` — offline config validation (also backs the deprecated -validate flag)
-cmd_backfill.go              `click-dog backfill` — arg surface only; rewrites onto main.go's mode flags
+cmd_validate.go              `click-dog validate` — offline config validation
+cmd_backfill.go              `click-dog backfill` — arg surface only; hands main.go its run options
 cmd_test_command.go          `click-dog test` — smoke-test command family
 cmd_test_export.go           `click-dog test export` — synthetic span sender
 cmd_test_tls.go              `click-dog test tls` — OTLP receiver TLS verdict (the installer's TLS check)
 cmd_test_tracing.go          `click-dog test tracing` — native trace propagation smoke test
-cmd_test_span.go             Deprecated `click-dog test-span` compatibility alias
 cmd_flush.go                 `click-dog flush` — signal a running instance to export
 cmd_selfupdate.go            `click-dog self-update` — in-place binary update
 cmd_create_dashboards.go     `click-dog create-dashboards` — Datadog dashboard provisioner
@@ -154,13 +153,13 @@ Internal packages (`internal/`):
 analysis/     Query-analysis and trace-drilldown report contracts + deterministic analyzers
 clickhouse/   ClickHouse span/query reader (enforces readonly=2)
 clicklog/     Custom leveled logging + rotating file writer
-config/       YAML config loading, validation, defaults, env expansion, deprecation compat
+config/       YAML config loading, validation, defaults, env expansion
 deploy/       Templates used by `deploy kubernetes` and `deploy docker`
 export/       OTEL gRPC + Splunk HEC exporters; MultiExporter fan-out
 filter/       Query/IP/operation filtering + SQL redaction
 health/       /healthz, /readyz, /status probe server (separate listener from metrics)
 leader/       Leader election via ClickHouse Keeper (HA mode)
-metrics/      Prometheus metrics + scrape HTTP server (also serves legacy /health)
+metrics/      Prometheus metrics + scrape HTTP server
 model/        Shared types: spans, queries, exporter interfaces
 processor/    Span fetch/filter/export pipeline + circuit-breaker/canary orchestration
 queryfamily/  Normalized-query rollup family computation
@@ -204,6 +203,12 @@ the commit being deployed. Details: `docs/development/docs-publishing.md`.
   UI/marketing copy (`behavior`, `license`, `defense`, `gray`, `normalize`,
   `labeled`, `artifact`; never
   `behaviour`/`licence`/`defence`/`grey`/`normalise`/`labelled`/`artefact`)
+- **Published prose**: Plain, direct wording in active voice, with no second
+  person (`you`, `your`) in anything that ships: docs, site copy, examples,
+  CLI and installer output, and public repository files. Exempt: legal text
+  (`LICENSE`, `TRADEMARKS.md`, and the DCO and license lines in
+  `CONTRIBUTING.md`) and code comments only developers read. Reviews check
+  for this; no test does.
 - **Domain language**: Prefer the concept names and boundaries in
   `docs/development/domain-language.md`; avoid promoting implementation
   patterns like the two-step fetch into user-facing nouns.
@@ -213,7 +218,6 @@ the commit being deployed. Details: `docs/development/docs-publishing.md`.
 - **Scheduled** (default): Continuous polling loop with circuit breaker + adaptive backoff
 - **Backfill** (`click-dog backfill --start/--end`): One-time historical export between timestamps, then exit
 - **Validate** (`click-dog validate`): Load config, print parsed settings, exit
-- The pre-subcommand spellings `-validate` and `-backfill-start`/`-backfill-end` still work as deprecated aliases
 
 ## Repository Split & Publishing
 

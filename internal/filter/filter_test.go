@@ -30,18 +30,15 @@ func TestQueryFilter_NewQueryFilter_EmptyConfig(t *testing.T) {
 	}
 }
 
-func TestQueryFilter_NewQueryFilter_IgnoresInertRulesInStricterModes(t *testing.T) {
-	for _, mode := range []config.QueryTextMode{config.QueryTextModeNormalizedOnly, config.QueryTextModeNone} {
-		t.Run(string(mode), func(t *testing.T) {
-			qf, err := NewQueryFilter(config.FiltersConfig{
+func TestQueryFilter_NewQueryFilter_RejectsRulesOutsideRedactedMode(t *testing.T) {
+	for _, mode := range []config.QueryTextMode{"", config.QueryTextModeRaw, config.QueryTextModeNormalizedOnly, config.QueryTextModeNone} {
+		t.Run("mode="+string(mode), func(t *testing.T) {
+			_, err := NewQueryFilter(config.FiltersConfig{
 				QueryTextMode: mode,
-				RedactQueries: []config.RedactionRule{{Pattern: "[invalid("}},
+				RedactQueries: []config.RedactionRule{{Pattern: "x"}},
 			})
-			if err != nil {
-				t.Fatalf("NewQueryFilter: %v", err)
-			}
-			if len(qf.redactionRules) != 0 {
-				t.Fatalf("compiled %d inert redaction rules", len(qf.redactionRules))
+			if err == nil || !strings.Contains(err.Error(), "require query_text_mode redacted") {
+				t.Fatalf("NewQueryFilter err = %v, want a redacted-mode requirement", err)
 			}
 		})
 	}
@@ -166,9 +163,9 @@ func TestQueryFilter_WildcardConversion(t *testing.T) {
 				t.Fatalf("Failed to create filter: %v", err)
 			}
 
-			// ShouldFilter returns true if we should EXCLUDE the operation
-			// So if operation matches whitelist, ShouldFilter returns false
-			shouldFilter := filter.ShouldFilter(tt.operationName, "", "")
+			// rejectsSpan returns true if we should EXCLUDE the operation
+			// So if operation matches whitelist, rejectsSpan returns false
+			shouldFilter := rejectsSpan(filter, tt.operationName, "", "")
 			matched := !shouldFilter
 
 			if matched != tt.shouldMatch {
@@ -221,7 +218,7 @@ func TestQueryFilter_WhitelistOperations(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.operationName, func(t *testing.T) {
-			result := filter.ShouldFilter(tt.operationName, "", "")
+			result := rejectsSpan(filter, tt.operationName, "", "")
 			if result != tt.shouldFilter {
 				t.Errorf("%s: expected shouldFilter=%v, got %v",
 					tt.description, tt.shouldFilter, result)
@@ -274,7 +271,7 @@ func TestQueryFilter_WhitelistIPs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.clientIP, func(t *testing.T) {
-			result := filter.ShouldFilter("", "", tt.clientIP)
+			result := rejectsSpan(filter, "", "", tt.clientIP)
 			if result != tt.shouldFilter {
 				t.Errorf("%s: expected shouldFilter=%v, got %v",
 					tt.description, tt.shouldFilter, result)
@@ -337,7 +334,7 @@ func TestQueryFilter_WhitelistIPs_CIDR(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.clientIP, func(t *testing.T) {
-			result := filter.ShouldFilter("", "", tt.clientIP)
+			result := rejectsSpan(filter, "", "", tt.clientIP)
 			if result != tt.shouldFilter {
 				t.Errorf("%s: expected shouldFilter=%v, got %v",
 					tt.description, tt.shouldFilter, result)
@@ -368,17 +365,17 @@ func TestQueryFilter_WhitelistIPs_MixedExactAndCIDR(t *testing.T) {
 	}
 
 	// Exact match
-	if filter.ShouldFilter("", "", "192.168.1.100") {
+	if rejectsSpan(filter, "", "", "192.168.1.100") {
 		t.Error("Exact IP match should not be filtered")
 	}
 
 	// CIDR match
-	if filter.ShouldFilter("", "", "10.5.5.5") {
+	if rejectsSpan(filter, "", "", "10.5.5.5") {
 		t.Error("IP within CIDR should not be filtered")
 	}
 
 	// Neither
-	if !filter.ShouldFilter("", "", "172.16.0.1") {
+	if !rejectsSpan(filter, "", "", "172.16.0.1") {
 		t.Error("IP outside both exact and CIDR should be filtered")
 	}
 }
@@ -409,7 +406,7 @@ func TestQueryFilter_WhitelistIPs_MatchesClickHouseAddressForms(t *testing.T) {
 		{"", false},
 		{"not-an-ip", false},
 	} {
-		if got := !filter.ShouldFilter("", "", tc.clientIP); got != tc.allowed {
+		if got := !rejectsSpan(filter, "", "", tc.clientIP); got != tc.allowed {
 			t.Errorf("client %q allowed = %t, want %t", tc.clientIP, got, tc.allowed)
 		}
 	}
@@ -426,6 +423,8 @@ func TestQueryFilter_BlacklistQueries(t *testing.T) {
 			"SYSTEM",                     // Contains SYSTEM
 			"(?i)healthcheck",            // Case insensitive
 			"^SELECT \\* FROM system\\.", // System tables
+			"INSERT INTO.*_staging",      // Spans a line break, as ClickHouse's match() does
+			"(?-s)^DELETE.*audit",        // Opts out of . matching a line break
 		},
 	}
 
@@ -443,6 +442,21 @@ func TestQueryFilter_BlacklistQueries(t *testing.T) {
 			queryText:    "SELECT 1",
 			shouldFilter: true,
 			description:  "Exact match should be filtered",
+		},
+		{
+			queryText:    "INSERT INTO\n  events_staging VALUES",
+			shouldFilter: true,
+			description:  ". matches a line break, as in ClickHouse match()",
+		},
+		{
+			queryText:    "DELETE FROM t\nWHERE audit = 1",
+			shouldFilter: false,
+			description:  "(?-s) keeps . from matching a line break",
+		},
+		{
+			queryText:    "DELETE FROM audit",
+			shouldFilter: true,
+			description:  "(?-s) pattern still matches on one line",
 		},
 		{
 			queryText:    "SELECT 1 + 1",
@@ -478,7 +492,7 @@ func TestQueryFilter_BlacklistQueries(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.description, func(t *testing.T) {
-			result := filter.ShouldFilter("", tt.queryText, "")
+			result := rejectsSpan(filter, "", tt.queryText, "")
 			if result != tt.shouldFilter {
 				t.Errorf("Query %q: expected shouldFilter=%v, got %v",
 					tt.queryText, tt.shouldFilter, result)
@@ -545,7 +559,7 @@ func TestQueryFilter_CombinedFilters(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := filter.ShouldFilter(tt.operationName, tt.queryText, tt.clientIP)
+			result := rejectsSpan(filter, tt.operationName, tt.queryText, tt.clientIP)
 			if result != tt.shouldFilter {
 				t.Errorf("Expected shouldFilter=%v, got %v", tt.shouldFilter, result)
 			}
@@ -573,25 +587,25 @@ func TestQueryFilter_FilterOrder(t *testing.T) {
 	}
 
 	// Test 1: Bad IP should be filtered immediately (before checking operation)
-	result := filter.ShouldFilter("AllowedOp", "normal query", "bad.ip.address")
+	result := rejectsSpan(filter, "AllowedOp", "normal query", "bad.ip.address")
 	if !result {
 		t.Error("Bad IP should be filtered even with allowed operation")
 	}
 
 	// Test 2: Bad operation should be filtered (after IP check passes)
-	result = filter.ShouldFilter("BadOp", "normal query", "192.168.1.100")
+	result = rejectsSpan(filter, "BadOp", "normal query", "192.168.1.100")
 	if !result {
 		t.Error("Bad operation should be filtered with good IP")
 	}
 
 	// Test 3: Blacklisted query should be filtered (after IP and operation pass)
-	result = filter.ShouldFilter("AllowedOp", "BLOCKED query", "192.168.1.100")
+	result = rejectsSpan(filter, "AllowedOp", "BLOCKED query", "192.168.1.100")
 	if !result {
 		t.Error("Blacklisted query should be filtered with good IP and operation")
 	}
 
 	// Test 4: All pass
-	result = filter.ShouldFilter("AllowedOp", "normal query", "192.168.1.100")
+	result = rejectsSpan(filter, "AllowedOp", "normal query", "192.168.1.100")
 	if result {
 		t.Error("Valid request should not be filtered")
 	}
@@ -609,13 +623,13 @@ func TestQueryFilter_NoWhitelists(t *testing.T) {
 	}
 
 	// Any IP should be allowed
-	result := filter.ShouldFilter("AnyOp", "normal query", "any.ip.address")
+	result := rejectsSpan(filter, "AnyOp", "normal query", "any.ip.address")
 	if result {
 		t.Error("Without whitelists, any IP/operation should be allowed")
 	}
 
 	// But blacklist still applies
-	result = filter.ShouldFilter("AnyOp", "BLOCKED query", "any.ip.address")
+	result = rejectsSpan(filter, "AnyOp", "BLOCKED query", "any.ip.address")
 	if !result {
 		t.Error("Blacklist should still apply without whitelists")
 	}
@@ -643,6 +657,7 @@ func TestRedactQueryForExport_NoRules(t *testing.T) {
 
 func TestRedactQueryForExport_SingleRule(t *testing.T) {
 	filter, err := NewQueryFilter(config.FiltersConfig{
+		QueryTextMode: config.QueryTextModeRedacted,
 		RedactQueries: []config.RedactionRule{
 			{Pattern: `(?i)identified\s+by\s+'[^']*'`, Replacement: "IDENTIFIED BY '[REDACTED]'"},
 		},
@@ -664,6 +679,7 @@ func TestRedactQueryForExport_SingleRule(t *testing.T) {
 
 func TestRedactQueryForExport_MultipleRules(t *testing.T) {
 	filter, err := NewQueryFilter(config.FiltersConfig{
+		QueryTextMode: config.QueryTextModeRedacted,
 		RedactQueries: []config.RedactionRule{
 			{Pattern: `(?i)identified\s+by\s+'[^']*'`, Replacement: "IDENTIFIED BY '[REDACTED]'"},
 			{Pattern: `(?i)password\s*=\s*'[^']*'`, Replacement: "password='[REDACTED]'"},
@@ -688,6 +704,7 @@ func TestRedactQueryForExport_MultipleRules(t *testing.T) {
 
 func TestRedactQueryForExport_DefaultReplacement(t *testing.T) {
 	filter, err := NewQueryFilter(config.FiltersConfig{
+		QueryTextMode: config.QueryTextModeRedacted,
 		RedactQueries: []config.RedactionRule{
 			{Pattern: `secret_value`}, // empty replacement -> default [REDACTED]
 		},
@@ -709,6 +726,7 @@ func TestRedactQueryForExport_DefaultReplacement(t *testing.T) {
 
 func TestRedactQueryForExport_NoMatch(t *testing.T) {
 	filter, err := NewQueryFilter(config.FiltersConfig{
+		QueryTextMode: config.QueryTextModeRedacted,
 		RedactQueries: []config.RedactionRule{
 			{Pattern: `IDENTIFIED BY`, Replacement: "***"},
 		},
@@ -730,6 +748,7 @@ func TestRedactQueryForExport_NoMatch(t *testing.T) {
 func TestRedactQueryForExport_WhitespaceTrimmed(t *testing.T) {
 	// Simulates YAML block scalar with trailing newline
 	filter, err := NewQueryFilter(config.FiltersConfig{
+		QueryTextMode: config.QueryTextModeRedacted,
 		RedactQueries: []config.RedactionRule{
 			{Pattern: "  redacted_regex\n", Replacement: "***"},
 		},
@@ -749,7 +768,7 @@ func TestRedactQueryForExport_WhitespaceTrimmed(t *testing.T) {
 	}
 }
 
-func TestQueryFilter_ShouldFilterUser_NoFilter(t *testing.T) {
+func TestQueryFilter_UserLists_NoFilter(t *testing.T) {
 	qf, err := NewQueryFilter(config.FiltersConfig{})
 	if err != nil {
 		t.Fatalf("NewQueryFilter failed: %v", err)
@@ -758,13 +777,13 @@ func TestQueryFilter_ShouldFilterUser_NoFilter(t *testing.T) {
 		t.Error("HasUserFilter should be false with empty config")
 	}
 	for _, u := range []string{"", "alice", "bob"} {
-		if qf.ShouldFilterUser(u) {
+		if !qf.AllowsQueryUsers(u, "") {
 			t.Errorf("Unfiltered config should not filter user %q", u)
 		}
 	}
 }
 
-func TestQueryFilter_ShouldFilterUser_WhitelistOnly(t *testing.T) {
+func TestQueryFilter_UserLists_WhitelistOnly(t *testing.T) {
 	qf, err := NewQueryFilter(config.FiltersConfig{
 		WhitelistUsers: []string{"app_frontend", "app_analytics"},
 	})
@@ -784,13 +803,13 @@ func TestQueryFilter_ShouldFilterUser_WhitelistOnly(t *testing.T) {
 		{"", true}, // unknown user dropped under strict whitelist
 	}
 	for _, tt := range tests {
-		if got := qf.ShouldFilterUser(tt.user); got != tt.shouldFilter {
-			t.Errorf("ShouldFilterUser(%q) = %v, want %v", tt.user, got, tt.shouldFilter)
+		if got := !qf.AllowsQueryUsers(tt.user, ""); got != tt.shouldFilter {
+			t.Errorf("rejects user %q = %v, want %v", tt.user, got, tt.shouldFilter)
 		}
 	}
 }
 
-func TestQueryFilter_ShouldFilterUser_BlacklistOnly(t *testing.T) {
+func TestQueryFilter_UserLists_BlacklistOnly(t *testing.T) {
 	qf, err := NewQueryFilter(config.FiltersConfig{
 		BlacklistUsers: []string{"patient_records", "ml_training"},
 	})
@@ -810,13 +829,13 @@ func TestQueryFilter_ShouldFilterUser_BlacklistOnly(t *testing.T) {
 		{"", false}, // unknown user passes when only a blacklist is set
 	}
 	for _, tt := range tests {
-		if got := qf.ShouldFilterUser(tt.user); got != tt.shouldFilter {
-			t.Errorf("ShouldFilterUser(%q) = %v, want %v", tt.user, got, tt.shouldFilter)
+		if got := !qf.AllowsQueryUsers(tt.user, ""); got != tt.shouldFilter {
+			t.Errorf("rejects user %q = %v, want %v", tt.user, got, tt.shouldFilter)
 		}
 	}
 }
 
-func TestQueryFilter_ShouldFilterUser_BothLists(t *testing.T) {
+func TestQueryFilter_UserLists_BothLists(t *testing.T) {
 	// Whitelist and blacklist together: whitelist gates entry, blacklist
 	// removes specific names from within the allowed set.
 	qf, err := NewQueryFilter(config.FiltersConfig{
@@ -837,14 +856,15 @@ func TestQueryFilter_ShouldFilterUser_BothLists(t *testing.T) {
 		{"", true},                // unknown user dropped by whitelist
 	}
 	for _, tt := range tests {
-		if got := qf.ShouldFilterUser(tt.user); got != tt.shouldFilter {
-			t.Errorf("ShouldFilterUser(%q) = %v, want %v", tt.user, got, tt.shouldFilter)
+		if got := !qf.AllowsQueryUsers(tt.user, ""); got != tt.shouldFilter {
+			t.Errorf("rejects user %q = %v, want %v", tt.user, got, tt.shouldFilter)
 		}
 	}
 }
 
 func TestNewQueryFilter_InvalidRedactRegex(t *testing.T) {
 	_, err := NewQueryFilter(config.FiltersConfig{
+		QueryTextMode: config.QueryTextModeRedacted,
 		RedactQueries: []config.RedactionRule{
 			{Pattern: "[invalid(regex"},
 		},
@@ -866,13 +886,13 @@ func TestQueryFilter_EmptyStrings(t *testing.T) {
 	}
 
 	// Empty operation name with whitelist configured
-	result := filter.ShouldFilter("", "normal query", "192.168.1.1")
+	result := rejectsSpan(filter, "", "normal query", "192.168.1.1")
 	if !result {
 		t.Error("Empty operation should be filtered when whitelist is configured")
 	}
 
 	// Empty query text should not match blacklist
-	result = filter.ShouldFilter("ValidOp", "", "192.168.1.1")
+	result = rejectsSpan(filter, "ValidOp", "", "192.168.1.1")
 	if result {
 		t.Error("Empty query should not match blacklist patterns")
 	}
@@ -1042,7 +1062,7 @@ func TestQueryFilter_ShapeSpanForExport_RemovesExceptionText(t *testing.T) {
 	}
 }
 
-func TestQueryFilter_ShapeSpanForExport_RemovesRawQueryURIAttributes(t *testing.T) {
+func TestQueryFilter_ShapeSpanForExport_RemovesURIAttributes(t *testing.T) {
 	unsafeURL := `/?query=SELECT%20*%20FROM%20users%20WHERE%20email%3D%27a%40b.com%27&log_comment=x`
 	unsafeEncodedName := `/?foo=1&%71uery=SELECT+secret`
 	unsafeBareComponent := `query=SELECT * FROM t WHERE msg = 'why?'`
@@ -1051,15 +1071,24 @@ func TestQueryFilter_ShapeSpanForExport_RemovesRawQueryURIAttributes(t *testing.
 			"db.statement":         "SELECT * FROM users WHERE email = 'a@b.com'",
 			"http.url":             unsafeURL,
 			"http.target":          unsafeEncodedName,
-			"clickhouse.uri":       `/?query=SELECT+secret`,
 			"url.query":            unsafeBareComponent,
 			"http.query":           unsafeBareComponent,
 			"http.query_string":    unsafeBareComponent,
 			"request.query_string": unsafeBareComponent,
-			"safe.url":             `/?foo=1&log_comment=x`,
+			// A bound value, as ClickHouse records it for
+			// POST /?param_tok=PLANT with SELECT {tok:String} in the body.
+			"clickhouse.uri": `/?param_tok=PLANT&database=default`,
+			// ClickHouse records the Referer, which repeats the page URL.
+			"http.referer": `http://localhost:8123/play?query=SELECT+%27PLANT%27`,
+			// Settings in the URL that are not the statement are still dropped.
+			"other.url":    `/?foo=1&log_comment=x`,
+			"fragment.url": `/play#PLANT`,
+			// A predefined HTTP handler can turn path segments into bound values.
+			"path.url":    `/users/PLANT`,
+			"Request.URI": `/?param_x=PLANT`,
 		},
 		StringSliceAttributes: map[string][]string{
-			"http.urls": {unsafeURL, `/?foo=1`},
+			"http.urls": {unsafeURL, `/?foo=1`, `/`},
 		},
 	}
 
@@ -1081,23 +1110,30 @@ func TestQueryFilter_ShapeSpanForExport_RemovesRawQueryURIAttributes(t *testing.
 			for _, key := range []string{
 				"http.url",
 				"http.target",
-				"clickhouse.uri",
 				"url.query",
 				"http.query",
 				"http.query_string",
 				"request.query_string",
+				"clickhouse.uri",
+				"http.referer",
+				"other.url",
+				"fragment.url",
+				"path.url",
+				"Request.URI",
 			} {
 				if _, ok := got.Attributes[key]; ok {
-					t.Errorf("%s retained a URI carrying raw query text", key)
+					t.Errorf("%s retained a URI", key)
 				}
 			}
-			if got.Attributes["safe.url"] != `/?foo=1&log_comment=x` {
-				t.Errorf("safe URI changed: %q", got.Attributes["safe.url"])
+			for key, value := range got.Attributes {
+				if strings.Contains(value, "PLANT") {
+					t.Errorf("%s = %q leaks a planted value", key, value)
+				}
 			}
-			if values := got.StringSliceAttributes["http.urls"]; len(values) != 1 || values[0] != `/?foo=1` {
-				t.Errorf("URI slice = %v, want only safe value", values)
+			if values, ok := got.StringSliceAttributes["http.urls"]; ok {
+				t.Errorf("URI slice = %v, want it dropped", values)
 			}
-			if original.Attributes["http.url"] != unsafeURL || len(original.StringSliceAttributes["http.urls"]) != 2 {
+			if original.Attributes["http.url"] != unsafeURL || len(original.StringSliceAttributes["http.urls"]) != 3 {
 				t.Fatal("query-text shaping mutated the input URI attributes")
 			}
 		})
@@ -1108,80 +1144,137 @@ func TestQueryFilter_ShapeSpanForExport_RemovesRawQueryURIAttributes(t *testing.
 		t.Fatalf("NewQueryFilter(raw): %v", err)
 	}
 	got := qf.ShapeSpanForExport(original)
-	if got.Attributes["http.url"] != unsafeURL {
-		t.Fatal("raw mode unexpectedly removed the original URI")
+	if got.Attributes["http.url"] != unsafeURL || got.Attributes["clickhouse.uri"] != original.Attributes["clickhouse.uri"] {
+		t.Fatal("raw mode unexpectedly removed an original URI")
 	}
 }
 
-func TestContainsRawQueryParameter_QueryComponentVariants(t *testing.T) {
-	tests := []struct {
-		name  string
-		key   string
-		value string
-		want  bool
-	}{
-		{
-			name:  "literal question mark stays in parameter value",
-			key:   "url.query",
-			value: `query=SELECT * FROM t WHERE msg = 'why?'`,
-			want:  true,
+func TestQueryFilter_ShapeSpanForExport_RemovesSettingAttributes(t *testing.T) {
+	original := model.OpenTelemetrySpan{
+		Attributes: map[string]string{
+			"clickhouse.setting.additional_table_filters":     `{'users': 'email = \'PLANT\''}`,
+			"clickhouse.setting.additional_result_filter":     `x != 'PLANT'`,
+			"clickhouse.setting.parallel_replicas_custom_key": `cityHash64(email = 'PLANT')`,
+			"clickhouse.setting.custom_tenant":                `PLANT`,
+			"clickhouse.setting.SQL_tenant":                   `PLANT`,
+			"Clickhouse.Setting.Param_tok":                    `PLANT`,
+			"clickhouse.setting.max_threads":                  "4",
+			"clickhouse.setting.log_comment":                  `{"app":"dash"}`,
+			"other.additional_table_filters":                  "kept: not a recorded setting",
 		},
-		{
-			name:  "leading question mark is tolerated",
-			key:   "url.query",
-			value: `?query=SELECT+secret`,
-			want:  true,
-		},
-		{
-			name:  "misplaced request target is tolerated",
-			key:   "url.query",
-			value: `/?query=SELECT+secret`,
-			want:  true,
-		},
-		{
-			name:  "ordinary bare component is detected",
-			key:   "url.query",
-			value: `foo=1&query=SELECT+secret`,
-			want:  true,
-		},
-		{
-			name:  "safe bare component is retained",
-			key:   "url.query",
-			value: `foo=1&bar=2`,
-			want:  false,
-		},
-		{
-			name:  "legacy separator whitespace is tolerated",
-			key:   "url.query",
-			value: `/?foo=1;+query=SELECT+secret`,
-			want:  true,
-		},
-		{
-			name:  "fragment does not become a query parameter",
-			key:   "url.query",
-			value: `a=1#query=SELECT+secret`,
-			want:  false,
-		},
-		{
-			name:  "full URL query is detected",
-			key:   "http.url",
-			value: `/?query=SELECT+secret`,
-			want:  true,
-		},
-		{
-			name:  "safe full URL is retained",
-			key:   "http.url",
-			value: `/?foo=1`,
-			want:  false,
+		StringSliceAttributes: map[string][]string{
+			"clickhouse.setting.custom_list": {"PLANT"},
 		},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := containsRawQueryParameter(tt.key, tt.value); got != tt.want {
-				t.Fatalf("containsRawQueryParameter(%q, %q) = %v, want %v", tt.key, tt.value, got, tt.want)
+	for _, mode := range []config.QueryTextMode{
+		config.QueryTextModeRedacted,
+		config.QueryTextModeNormalizedOnly,
+		config.QueryTextModeNone,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			cfg := config.FiltersConfig{QueryTextMode: mode}
+			if mode == config.QueryTextModeRedacted {
+				cfg.RedactQueries = []config.RedactionRule{{Pattern: `'[^']*'`, Replacement: "?"}}
+			}
+			qf, err := NewQueryFilter(cfg)
+			if err != nil {
+				t.Fatalf("NewQueryFilter: %v", err)
+			}
+			got := qf.ShapeSpanForExport(original)
+			for key, value := range got.Attributes {
+				if strings.Contains(value, "PLANT") {
+					t.Errorf("%s = %q leaks a planted value", key, value)
+				}
+			}
+			if _, ok := got.StringSliceAttributes["clickhouse.setting.custom_list"]; ok {
+				t.Error("a string-array setting was kept")
+			}
+			if _, ok := got.Attributes["clickhouse.setting.max_threads"]; ok {
+				t.Error("a recorded setting other than log_comment was kept")
+			}
+			for _, key := range []string{"clickhouse.setting.log_comment", "other.additional_table_filters"} {
+				if got.Attributes[key] != original.Attributes[key] {
+					t.Errorf("%s = %q, want it kept", key, got.Attributes[key])
+				}
 			}
 		})
+	}
+
+	qf, err := NewQueryFilter(config.FiltersConfig{QueryTextMode: config.QueryTextModeRaw})
+	if err != nil {
+		t.Fatalf("NewQueryFilter(raw): %v", err)
+	}
+	if got := qf.ShapeSpanForExport(original); got.Attributes["clickhouse.setting.custom_tenant"] != "PLANT" {
+		t.Fatal("raw mode unexpectedly removed a setting")
+	}
+}
+
+func TestQueryFilter_ShapeSpanForExport_RemoteStatement(t *testing.T) {
+	// ClickHouse records the statement it sends to each shard or replica as
+	// clickhouse.query on the Connection::sendQuery span.
+	remote := "SELECT count() FROM db.users_local WHERE email = 'PLANT'"
+	span := model.OpenTelemetrySpan{
+		Attributes:            map[string]string{"clickhouse.query": remote},
+		StringSliceAttributes: map[string][]string{"clickhouse.query": {remote}},
+	}
+
+	for _, mode := range []config.QueryTextMode{config.QueryTextModeNormalizedOnly, config.QueryTextModeNone} {
+		qf, err := NewQueryFilter(config.FiltersConfig{QueryTextMode: mode})
+		if err != nil {
+			t.Fatalf("NewQueryFilter(%s): %v", mode, err)
+		}
+		got := qf.ShapeSpanForExport(span)
+		if _, ok := got.Attributes["clickhouse.query"]; ok {
+			t.Errorf("%s kept clickhouse.query", mode)
+		}
+		if _, ok := got.StringSliceAttributes["clickhouse.query"]; ok {
+			t.Errorf("%s kept a string-array clickhouse.query", mode)
+		}
+	}
+
+	redacting, err := NewQueryFilter(config.FiltersConfig{
+		QueryTextMode: config.QueryTextModeRedacted,
+		RedactQueries: []config.RedactionRule{{Pattern: `'[^']*'`, Replacement: "?"}},
+	})
+	if err != nil {
+		t.Fatalf("NewQueryFilter(redacted): %v", err)
+	}
+	got := redacting.ShapeSpanForExport(span)
+	if want := "SELECT count() FROM db.users_local WHERE email = ?"; got.Attributes["clickhouse.query"] != want {
+		t.Errorf("redacted clickhouse.query = %q, want %q", got.Attributes["clickhouse.query"], want)
+	}
+	if _, ok := got.StringSliceAttributes["clickhouse.query"]; ok {
+		t.Error("redacted mode kept a string-array clickhouse.query")
+	}
+
+	unmatched, err := NewQueryFilter(config.FiltersConfig{
+		QueryTextMode: config.QueryTextModeRedacted,
+		RedactQueries: []config.RedactionRule{{Pattern: `token=\S+`, Replacement: "token=?"}},
+	})
+	if err != nil {
+		t.Fatalf("NewQueryFilter(redacted, unmatched): %v", err)
+	}
+	if _, ok := unmatched.ShapeSpanForExport(span).Attributes["clickhouse.query"]; ok {
+		t.Error("redacted mode kept a remote statement no rule matched")
+	}
+
+	raw, err := NewQueryFilter(config.FiltersConfig{QueryTextMode: config.QueryTextModeRaw})
+	if err != nil {
+		t.Fatalf("NewQueryFilter(raw): %v", err)
+	}
+	if raw.ShapeSpanForExport(span).Attributes["clickhouse.query"] != remote {
+		t.Error("raw mode changed clickhouse.query")
+	}
+}
+
+func TestIsURIAttribute_Referer(t *testing.T) {
+	for _, key := range []string{"http.referer", "http.referrer", "http.request.header.referer"} {
+		if !IsURIAttribute(key) {
+			t.Errorf("IsURIAttribute(%q) = false, want true", key)
+		}
+	}
+	if IsURIAttribute("log_comment.referer") {
+		t.Error("promoted log_comment metadata must not be treated as a URI")
 	}
 }
 
@@ -1229,7 +1322,7 @@ func TestQueryFilter_ShapeSpanForExport_URISweepPreservesNonURIMetadata(t *testi
 	got := qf.ShapeSpanForExport(model.OpenTelemetrySpan{Attributes: map[string]string{
 		"log_comment.dashboard": dashboard,
 		"custom.metadata":       "query=cpu&from=now-1h",
-		"query_log.tables_csv":  "default.events",
+		"query_log.access_type": "read",
 		"http.url":              "/",
 	}})
 	if got.Attributes["log_comment.dashboard"] != dashboard {
@@ -1238,7 +1331,7 @@ func TestQueryFilter_ShapeSpanForExport_URISweepPreservesNonURIMetadata(t *testi
 	if got.Attributes["custom.metadata"] != "query=cpu&from=now-1h" {
 		t.Fatalf("non-URI metadata was removed: %q", got.Attributes["custom.metadata"])
 	}
-	if got.Attributes["query_log.tables_csv"] != "default.events" {
+	if got.Attributes["query_log.access_type"] != "read" {
 		t.Fatal("privacy-safe query metadata was removed")
 	}
 }
@@ -1280,4 +1373,114 @@ func TestQueryFilter_ShapeQueryForExport_NormalizedUnavailableNeverFallsBack(t *
 	if got.QueryID != "q-no-normalization" {
 		t.Fatal("normalized_only removed the privacy-safe query identifier")
 	}
+}
+
+// TestQueryFilter_AllowsQueryUsers pins how both user lists judge one query:
+// the whitelist follows the originating client's account, and the blacklist
+// rejects a query when either account is listed.
+func TestQueryFilter_AllowsQueryUsers(t *testing.T) {
+	tests := []struct {
+		name              string
+		cfg               config.FiltersConfig
+		user, initialUser string
+		want              bool
+	}{
+		{"no lists", config.FiltersConfig{}, "anyone", "anyone", true},
+		{"whitelisted client", config.FiltersConfig{WhitelistUsers: []string{"app"}}, "app", "app", true},
+		{"shard query for a whitelisted client", config.FiltersConfig{WhitelistUsers: []string{"app"}}, "default", "app", true},
+		{"whitelisted interserver account, other client", config.FiltersConfig{WhitelistUsers: []string{"default"}}, "default", "etl", false},
+		{"empty initial user falls back to user", config.FiltersConfig{WhitelistUsers: []string{"app"}}, "app", "", true},
+		{"unknown user under a whitelist", config.FiltersConfig{WhitelistUsers: []string{"app"}}, "", "", false},
+		{"blacklisted client", config.FiltersConfig{BlacklistUsers: []string{"etl"}}, "etl", "etl", false},
+		{"shard query for a blacklisted client", config.FiltersConfig{BlacklistUsers: []string{"etl"}}, "default", "etl", false},
+		{"blacklisted interserver account", config.FiltersConfig{BlacklistUsers: []string{"default"}}, "default", "app", false},
+		{"unknown user under a blacklist only", config.FiltersConfig{BlacklistUsers: []string{"etl"}}, "", "", true},
+		{"blacklist wins over whitelist", config.FiltersConfig{WhitelistUsers: []string{"etl"}, BlacklistUsers: []string{"etl"}}, "etl", "etl", false},
+		{"case-sensitive match", config.FiltersConfig{BlacklistUsers: []string{"ETL"}}, "etl", "etl", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			qf, err := NewQueryFilter(tt.cfg)
+			if err != nil {
+				t.Fatalf("NewQueryFilter: %v", err)
+			}
+			if got := qf.AllowsQueryUsers(tt.user, tt.initialUser); got != tt.want {
+				t.Errorf("AllowsQueryUsers(%q, %q) = %t, want %t", tt.user, tt.initialUser, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestQueryFilter_TraceScopedPredicates(t *testing.T) {
+	qf, err := NewQueryFilter(config.FiltersConfig{
+		WhitelistIPs:        []string{"192.168.0.0/16"},
+		WhitelistOperations: []string{"query", "Merge*"},
+		BlacklistQueries:    []string{`(?i)\bpatients\b`},
+	})
+	if err != nil {
+		t.Fatalf("NewQueryFilter: %v", err)
+	}
+	if !qf.HasTraceScopedFilter() || !qf.HasQueryBlacklist() {
+		t.Error("IP whitelist and query blacklist should be trace-scoped")
+	}
+	for addr, want := range map[string]bool{"192.168.4.7": true, "::ffff:192.168.4.7": true, "10.0.0.9": false, "": false} {
+		if got := qf.AllowsClient(addr); got != want {
+			t.Errorf("AllowsClient(%q) = %t, want %t", addr, got, want)
+		}
+	}
+	for op, want := range map[string]bool{"query": true, "MergeTreeSelect": true, "Formatter": false} {
+		if got := qf.AllowsOperation(op); got != want {
+			t.Errorf("AllowsOperation(%q) = %t, want %t", op, got, want)
+		}
+	}
+	for text, want := range map[string]bool{"SELECT ssn FROM PATIENTS": true, "SELECT 1": false, "": false} {
+		if got := qf.IsBlacklistedQuery(text); got != want {
+			t.Errorf("IsBlacklistedQuery(%q) = %t, want %t", text, got, want)
+		}
+	}
+
+	none, _ := NewQueryFilter(config.FiltersConfig{WhitelistOperations: []string{"query"}})
+	if none.HasTraceScopedFilter() {
+		t.Error("an operation whitelist alone is per span, not trace-scoped")
+	}
+	if !none.AllowsClient("") || none.IsBlacklistedQuery("anything") {
+		t.Error("with no IP whitelist or query blacklist every client and query passes")
+	}
+}
+
+// TestQueryFilter_ShouldFilterQueryLog pins the backfill row filter: the
+// operation filters do not apply to query_log rows, while the query
+// blacklist, IP whitelist, and user lists do.
+func TestQueryFilter_ShouldFilterQueryLog(t *testing.T) {
+	row := model.QueryLog{Query: "SELECT * FROM events", User: "default", InitialUser: "app"}
+	tests := []struct {
+		name string
+		cfg  config.FiltersConfig
+		addr string
+		want bool
+	}{
+		{"operation whitelist ignored", config.FiltersConfig{WhitelistOperations: []string{"query"}}, "192.168.4.7", false},
+		{"query blacklist", config.FiltersConfig{BlacklistQueries: []string{"events"}}, "192.168.4.7", true},
+		{"IP whitelist admits the client", config.FiltersConfig{WhitelistIPs: []string{"192.168.4.7"}}, "192.168.4.7", false},
+		{"IP whitelist rejects another client", config.FiltersConfig{WhitelistIPs: []string{"192.168.4.7"}}, "10.0.0.9", true},
+		{"user whitelist follows the initial user", config.FiltersConfig{WhitelistUsers: []string{"app"}}, "", false},
+		{"user blacklist on the interserver account", config.FiltersConfig{BlacklistUsers: []string{"default"}}, "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			qf, err := NewQueryFilter(tt.cfg)
+			if err != nil {
+				t.Fatalf("NewQueryFilter: %v", err)
+			}
+			if got := qf.ShouldFilterQueryLog(row, tt.addr); got != tt.want {
+				t.Errorf("ShouldFilterQueryLog = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+// rejectsSpan combines the client, operation, and query-text predicates for
+// tests that cover them together.
+func rejectsSpan(qf *QueryFilter, operationName, queryText, clientIP string) bool {
+	return !qf.AllowsClient(clientIP) || !qf.AllowsOperation(operationName) || qf.IsBlacklistedQuery(queryText)
 }

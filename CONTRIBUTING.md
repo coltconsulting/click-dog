@@ -1,6 +1,6 @@
 # Contributing to Click-Dog
 
-Thanks for your interest. Click-Dog is licensed under Apache 2.0 and accepts contributions under the [Developer Certificate of Origin](https://developercertificate.org/) (DCO).
+Click-Dog is licensed under Apache 2.0 and accepts contributions under the [Developer Certificate of Origin](https://developercertificate.org/) (DCO).
 
 ## Developer Certificate of Origin
 
@@ -9,10 +9,10 @@ The DCO is a lightweight way for contributors to certify that they wrote, or oth
 You agree to the DCO by adding a `Signed-off-by` trailer to every commit:
 
 ```bash
-git commit -s -m "your commit message"
+git commit -s -m "commit message"
 ```
 
-`-s` appends, using your `user.name` and `user.email` from `git config`:
+`-s` appends, using the `user.name` and `user.email` from `git config`:
 
 ```
 Signed-off-by: Jane Doe <jane@example.com>
@@ -20,7 +20,7 @@ Signed-off-by: Jane Doe <jane@example.com>
 
 Use a real name and a real email. Anonymous and pseudonymous sign-offs are not accepted.
 
-If you forget on an earlier commit, amend or rebase to add it:
+To add a missing sign-off to an earlier commit, amend or rebase:
 
 ```bash
 # Last commit only
@@ -30,7 +30,7 @@ git commit --amend -s --no-edit
 git rebase --signoff <base-branch>
 ```
 
-Maintainers check sign-off during review. There is no automated DCO bot yet. If you forget the trailer on a commit, you will be asked to add it with `--amend` or `git rebase --signoff` before merge.
+A DCO check runs on every push to a pull request and fails if any commit lacks the `Signed-off-by` trailer. Add it with `--amend` or `git rebase --signoff` and push again.
 
 ## Pull Requests
 
@@ -39,26 +39,26 @@ Maintainers check sign-off during review. There is no automated DCO bot yet. If 
 - `make check` must pass locally before opening the PR. It runs formatting, unit
   tests, the installer/release shell suites, linting, and a build. It needs the
   pinned tools, so run `make dev-setup` once first: the gates refuse a linter
-  or other tool from your `PATH` that is not the pinned version, and
+  or other tool from the `PATH` that is not the pinned version, and
   `make doctor` shows which ones differ. `make check-fast` (formatting + unit
-  tests) is the quick loop while you work.
+  tests) is the quick loop during development.
 - For substantial changes, open an issue first to align on direction.
 
-## How Your PR Lands
+## How a PR Lands
 
 Click-Dog is developed in a private tree and published to this repository
 release by release: `master` here only advances when a release ships.
 Contributor PRs are therefore imported rather than merged:
 
-1. Open your PR against `master` here as usual; review happens on the PR.
-2. Once accepted, a maintainer imports your commits into the development
-   tree with `git am`, preserving you as the commit author.
-3. Your change ships in the next release, and the PR is closed with a
-   comment naming the release version.
+1. Open the PR against `master` here as usual; review happens on the PR.
+2. Once accepted, a maintainer imports the commits into the development
+   tree with `git am`, preserving the original commit author.
+3. The change ships in the next release, and a maintainer closes the PR
+   with a comment naming the release version.
 
-Your PR will show as "closed" rather than "merged." This is expected. Your
-authorship is preserved in the development history, and contributions are
-credited in the release's changelog entry.
+The PR shows as "closed" rather than "merged." This is expected. The
+development history preserves authorship, and the release's changelog entry
+credits each contribution.
 
 ## Development Workflow
 
@@ -68,17 +68,9 @@ Build and test with the Makefile: `make build`, `make test`, `make check`,
 
 ## Documentation
 
-The docs site (`docs/`) is built with MkDocs + Material and served at
-click-dog.com. Preview it locally:
-
-```bash
-pip install -r requirements-docs.txt
-mkdocs serve
-```
-
-`mkdocs build --strict` runs in CI on every docs PR. The site publishes on
-release tags, not on merges to `master`, so docs changes go live with the
-next release.
+The documentation at [click-dog.com](https://click-dog.com/) is maintained in
+the development tree and is not part of this repository. Report a docs
+problem as an issue.
 
 ## License
 

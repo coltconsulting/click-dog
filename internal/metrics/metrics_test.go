@@ -489,32 +489,6 @@ func TestMetrics_LastCycleGaugesFollowLatest(t *testing.T) {
 	}
 }
 
-func TestMetrics_HealthEndpoint(t *testing.T) {
-	m := NewMetrics()
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/metrics", m.Handler())
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	})
-
-	req := httptest.NewRequest("GET", "/health", nil)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-
-	resp := w.Result()
-	body, _ := io.ReadAll(resp.Body)
-
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("health status = %d, want 200", resp.StatusCode)
-	}
-	if string(body) != `{"status":"ok"}` {
-		t.Errorf("health body = %q, want ok", string(body))
-	}
-}
-
 func TestMetrics_Snapshot(t *testing.T) {
 	m := NewMetrics()
 

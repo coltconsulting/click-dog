@@ -3,16 +3,22 @@ package processor
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/coltconsulting/click-dog/internal/clicklog"
 	"github.com/coltconsulting/click-dog/internal/config"
 	"github.com/coltconsulting/click-dog/internal/filter"
+	"github.com/coltconsulting/click-dog/internal/health"
 	"github.com/coltconsulting/click-dog/internal/metrics"
 	"github.com/coltconsulting/click-dog/internal/model"
 	"github.com/coltconsulting/click-dog/internal/resilience"
@@ -36,18 +42,27 @@ func mustContain(t *testing.T, body, line string) {
 	}
 }
 
-func captureProcessorWarns(t *testing.T) *bytes.Buffer {
+// captureProcessorLog sends clicklog output at level to a buffer for the test,
+// then restores the default error level and stderr.
+func captureProcessorLog(t *testing.T, level string) *bytes.Buffer {
 	t.Helper()
-	resetExportSinkWarningCounts()
-	t.Cleanup(resetExportSinkWarningCounts)
-	if err := clicklog.InitLogger("warn", "", "text", 0, 0); err != nil {
+	if err := clicklog.InitLogger(level, "", "text", 0, 0); err != nil {
 		t.Fatalf("InitLogger: %v", err)
 	}
+	t.Cleanup(func() { _ = clicklog.InitLogger("error", "", "text", 0, 0) })
 	t.Cleanup(clicklog.CloseLogger)
 
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	return &buf
+}
+
+func captureProcessorWarns(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	resetExportSinkWarningCounts()
+	t.Cleanup(resetExportSinkWarningCounts)
+	buf := captureProcessorLog(t, "warn")
 
 	const canary = "__processor_warn_capture__"
 	clicklog.Warn(canary)
@@ -55,7 +70,7 @@ func captureProcessorWarns(t *testing.T) *bytes.Buffer {
 		t.Fatalf("log capture broken: clicklog.Warn output was not captured; got %q", buf.String())
 	}
 	buf.Reset()
-	return &buf
+	return buf
 }
 
 // TestPipeline_ProcessCircuitOpenRecordsSkippedCycle — circuit breaker open, canary disabled.
@@ -103,7 +118,7 @@ func TestPipeline_ProcessCircuitOpenRecordsSkippedCycle(t *testing.T) {
 	mustContain(t, body, "click_dog_last_cycle_duplicate_spans 0")
 	// Skipped cycle MUST NOT advance last-success — operators alert on this
 	// gauge to detect a stalled exporter.
-	mustContain(t, body, "click_dog_last_success_timestamp_seconds 0")
+	mustContain(t, body, `click_dog_last_success_timestamp_seconds{role="active"} 0`)
 }
 
 // TestProcessor_ErrorCycleOutcome drives the health-check failure through the
@@ -136,7 +151,7 @@ func TestProcessor_ErrorCycleOutcome(t *testing.T) {
 	mustContain(t, body, `click_dog_cycle_results_total{result="success"} 0`)
 	mustContain(t, body, `click_dog_cycle_results_total{result="skipped"} 0`)
 	// Error cycles must not falsely advance last-success semantics.
-	mustContain(t, body, "click_dog_last_success_timestamp_seconds 0")
+	mustContain(t, body, `click_dog_last_success_timestamp_seconds{role="active"} 0`)
 }
 
 // TestProcessor_SuccessCycleUpdatesLastCycleGauges drives an actual successful
@@ -147,9 +162,9 @@ func TestProcessor_SuccessCycleUpdatesLastCycleGauges(t *testing.T) {
 	reader := &mockLiveReader{
 		healthy: true,
 		spans: []model.OpenTelemetrySpan{
-			{SpanID: 1, OperationName: "SELECT"},
-			{SpanID: 1, OperationName: "SELECT duplicate"},
-			{SpanID: 2, OperationName: "DROP", Attributes: map[string]string{"db.statement": "DROP TABLE t"}},
+			{TraceID: uuid.UUID{1}, SpanID: 1, OperationName: "query", Attributes: map[string]string{"clickhouse.query_id": "q-select"}},
+			{TraceID: uuid.UUID{1}, SpanID: 1, OperationName: "query", Attributes: map[string]string{"clickhouse.query_id": "q-select"}},
+			{TraceID: uuid.UUID{2}, SpanID: 2, OperationName: "query", Attributes: map[string]string{"clickhouse.query_id": "q-drop", "db.statement": "DROP TABLE t"}},
 		},
 	}
 	cfg := &config.Config{Filters: config.FiltersConfig{BlacklistQueries: []string{"^DROP"}}}
@@ -167,13 +182,11 @@ func TestProcessor_SuccessCycleUpdatesLastCycleGauges(t *testing.T) {
 	mustContain(t, body, "click_dog_last_cycle_duplicate_spans 1")
 }
 
-// TestProcessor_CanarySuccessCountsAsSuccess pins the canary→outcome routing.
-// A canary that ran cleanly resolves the circuit-blocked cycle through
-// RecordCycle with a nil error (ErrCanaryRan is filtered out by
-// recordCanaryCycle), so the result lands in the success bucket. If a
-// future change reclassifies canary outcomes into a separate bucket,
-// update this test alongside the docs and dashboard.
-func TestProcessor_CanarySuccessCountsAsSuccess(t *testing.T) {
+// TestProcessor_CanarySuccessCountsAsSkipped pins the canary→outcome routing.
+// A canary that ran cleanly in a circuit-blocked cycle ran no span fetch, so
+// it lands in the skipped bucket and does not advance last-success: a count
+// query and one exported span are not evidence that the data path works.
+func TestProcessor_CanarySuccessCountsAsSkipped(t *testing.T) {
 	cb := resilience.NewCircuitBreaker(config.CircuitBreakerConfig{
 		FailureThreshold: 1,
 		SuccessThreshold: 1,
@@ -205,12 +218,94 @@ func TestProcessor_CanarySuccessCountsAsSuccess(t *testing.T) {
 	}
 
 	body := scrapeMetrics(t, m)
-	// Canary success bumps the success bucket today. If a future change
-	// reclassifies canary cycles into a "skipped" or "degraded" outcome,
-	// update this test alongside the docs.
-	mustContain(t, body, `click_dog_cycle_results_total{result="success"} 1`)
-	mustContain(t, body, `click_dog_cycle_results_total{result="skipped"} 0`)
+	mustContain(t, body, `click_dog_cycle_results_total{result="success"} 0`)
+	mustContain(t, body, `click_dog_cycle_results_total{result="skipped"} 1`)
 	mustContain(t, body, `click_dog_cycle_results_total{result="error"} 0`)
+	mustContain(t, body, `click_dog_last_success_timestamp_seconds{role="active"} 0`)
+}
+
+// TestPipeline_CanaryLeavesStatusOnTheFailingFetch is the release-test
+// finding: with the breaker closed and backoff elevated, real fetches fail and
+// the canary in between succeeds. /status used to report clickhouse_healthy
+// true with no error after every canary, flipping each cycle. A successful
+// canary must leave /status, the last-cycle gauges, and last-success on the
+// last real fetch, error included.
+func TestPipeline_CanaryLeavesStatusOnTheFailingFetch(t *testing.T) {
+	fetchErr := errors.New("code: 497, message: Not enough privileges")
+	reader := &mockLiveReader{healthy: true, fetchErr: fetchErr}
+	p, poller, cb := degradedPipeline(t, reader)
+	m := p.Metrics
+	srv := health.NewServer(nil, statusSource{m}, "test")
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+
+	sawCanary := false
+	for cycle := 0; cycle < 6; cycle++ {
+		err := p.Process(context.Background())
+		UpdatePollerState(poller, err, ticker, 30*time.Second, m)
+		if cb.State() != resilience.CircuitClosed {
+			break
+		}
+		canary := errors.Is(err, ErrCanaryRan)
+		sawCanary = sawCanary || canary
+
+		st := getStatus(t, srv)
+		if st.ClickHouseHealthy {
+			t.Fatalf("cycle %d (canary=%v): clickhouse_healthy = true while every fetch fails", cycle, canary)
+		}
+		if st.LastCycle == nil || st.LastCycle.Error != fetchErr.Error() {
+			t.Fatalf("cycle %d (canary=%v): last_cycle = %+v, want the fetch error", cycle, canary, st.LastCycle)
+		}
+	}
+	if !sawCanary {
+		t.Fatal("no canary ran while the breaker was closed; the test did not exercise the finding")
+	}
+
+	body := scrapeMetrics(t, m)
+	mustContain(t, body, `click_dog_cycle_results_total{result="success"} 0`)
+	mustContain(t, body, `click_dog_last_success_timestamp_seconds{role="active"} 0`)
+}
+
+// statusSource adapts metrics to health.CycleSource for the /status test, as
+// health_adapter.go does in the binary.
+type statusSource struct{ m *metrics.Metrics }
+
+func (s statusSource) Snapshot() health.Snapshot {
+	snap := s.m.Snapshot()
+	lc := snap.LastCycle
+	return health.Snapshot{
+		LastCycle: health.CycleSnapshot{
+			Exported: lc.Exported, Filtered: lc.Filtered, Duplicates: lc.Duplicates,
+			DurationMs: lc.DurationMs, Err: lc.Err, Skipped: lc.Skipped,
+			SkipReason: lc.SkipReason, At: lc.At,
+		},
+		HaveLastCycle:       snap.HaveLastCycle,
+		CircuitBreakerState: snap.CircuitBreakerState,
+		BackoffIntervalSecs: snap.BackoffIntervalSecs,
+		Leader:              snap.Leader,
+		UpSince:             snap.UpSince,
+		TopologyWarning:     snap.TopologyWarning,
+	}
+}
+
+type statusBody struct {
+	ClickHouseHealthy bool `json:"clickhouse_healthy"`
+	LastCycle         *struct {
+		Error string `json:"error"`
+	} `json:"last_cycle"`
+}
+
+func getStatus(t *testing.T, srv *health.Server) statusBody {
+	t.Helper()
+	mux := http.NewServeMux()
+	srv.RegisterHandlers(mux)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/status", nil))
+	var st statusBody
+	if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil {
+		t.Fatalf("decode /status: %v\n%s", err, w.Body.String())
+	}
+	return st
 }
 
 func TestProcessQueriesBatch_RecordsSingleExporterResult(t *testing.T) {

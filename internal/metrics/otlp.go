@@ -176,8 +176,8 @@ func (m *Metrics) observeOTLP(observer otelmetric.Observer, instruments otlpInst
 	}
 
 	observer.ObserveFloat64(instruments.floatGauges[MetricBackoffIntervalSeconds], s.backoffIntervalSecs)
-	// Unlike Prometheus compatibility output, OTLP intentionally omits this
-	// point until a success exists so fresh starts do not look like 1970.
+	// Unlike the Prometheus scrape output, OTLP omits this point until a
+	// success exists so fresh starts do not look like 1970.
 	if s.lastSuccessUnix > 0 {
 		role := "active"
 		if s.leader == 0 {

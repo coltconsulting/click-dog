@@ -8,16 +8,17 @@ clickhouse:
   database: system
   username: click_dog_monitor  # read-only monitoring user (SELECT on the span and query logs)
   password: ${CLICKHOUSE_PASSWORD}
-  # Connection caps + 30s query timeout: the modest hardening install.sh
-  # used to emit unconditionally. Without these the monitor can exhaust
-  # pooled connections under sustained load. Override if your cluster
-  # can handle more concurrent reads from the monitor.
+  # Connection caps + 30s query timeout: modest hardening. Without these
+  # the monitor can exhaust pooled connections under sustained load.
+  # Override if the cluster can handle more concurrent reads from the
+  # monitor.
   max_open_conns: 2
   max_idle_conns: 1
   query_timeout_s: 30
 
 # filters.query_text_mode controls whether raw SQL crosses the export boundary.
-# Use normalized_only or none for privacy-sensitive production environments.
+# The default, normalized_only, keeps SQL literals out of exports; set raw
+# only if the backend may store them.
 # See https://click-dog.com/filtering/#query-text-export-modes.
 exporters:
   otel:
@@ -46,15 +47,15 @@ monitor:
     backoff_factor: 2.0
 
 filters:
-  query_text_mode: raw # raw | redacted | normalized_only | none
+  query_text_mode: normalized_only # raw | redacted | normalized_only | none
   blacklist_queries:
     - "^SYSTEM"
     - "^INSERT INTO.*\\.inner\\."
   # Drop internal ClickHouse pipeline spans at the SQL level (pushed down as
   # operation_name NOT LIKE '%pattern%'). These are high-volume but
   # low-signal — they represent engine internals, not user queries or
-  # their sub-queries. Removing them cuts ingest cost by ~90-99% without
-  # losing query-level data.
+  # their sub-queries. Removing them cuts span volume without losing
+  # query-level data.
   blacklist_operations:
     - "MergeTreeSource"
     - "MergeTreeMarksLoader"

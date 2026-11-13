@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -445,6 +446,27 @@ func TestAnalyzeTraceWizard_TruncatedStdinExits1(t *testing.T) {
 	// Must not have drilled into any trace.
 	if src.traceIDQueryID != "" {
 		t.Errorf("truncated wizard must not drill, drilled %q", src.traceIDQueryID)
+	}
+}
+
+// TestAnalyzeTraceWizard_OverlongLineExits1 pins the bounded read: an answer
+// with no newline stops the wizard with exit 1 instead of growing a buffer.
+func TestAnalyzeTraceWizard_OverlongLineExits1(t *testing.T) {
+	src := &fakeTraceSource{normalized: true}
+	input := &countingReader{r: io.LimitReader(zeroReader{}, 1<<20)}
+	var out, errOut bytes.Buffer
+	code := runAnalyzeTraceWizard(input, &out, &errOut, src, testTraceConfig(), "", wizardBaseOptions(), "json", "")
+	if code != 1 {
+		t.Fatalf("over-long answer should exit 1, got %d; stderr:\n%s", code, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "input line is longer than 4096 bytes; not running the drilldown") {
+		t.Errorf("stderr missing over-long message:\n%s", errOut.String())
+	}
+	if input.n > 2*maxPromptLineBytes {
+		t.Errorf("read %d bytes, want at most %d", input.n, 2*maxPromptLineBytes)
+	}
+	if src.traceIDQueryID != "" {
+		t.Errorf("wizard must not drill, drilled %q", src.traceIDQueryID)
 	}
 }
 

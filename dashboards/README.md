@@ -28,10 +28,10 @@ lets a later run know whether the live dashboard matches this build:
 
 - not present → created;
 - present and identical → left untouched ("already up to date");
-- present but a different version → you're asked to **overwrite** it in place,
-  create a **new** copy, or **skip**.
+- present but a different version → the command offers to **overwrite** it in
+  place, create a **new** copy, or **skip**.
 
-On a terminal you get a prompt; for scripted/CI use, force the action with
+On a terminal the command prompts; for scripted/CI use, force the action with
 `--on-exists=skip|overwrite|new` (default `skip` when not a terminal, so a
 re-run never hangs or silently overwrites). If several dashboards share a title
 (e.g. earlier duplicate imports), pass `--id <dashboard_id>` to choose one.
@@ -42,7 +42,7 @@ DD_API_KEY=... DD_APP_KEY=... click-dog create-dashboards \
   --dashboard query --on-exists overwrite
 ```
 
-> Selectively merging only the *new* widgets into a dashboard you've customized
+> Selectively merging only the *new* widgets into a customized dashboard
 > is a separate, not-yet-implemented capability. The private development
 > repository carries the dashboard-update design spec.
 
@@ -63,14 +63,6 @@ do
     -d "@dashboards/${dashboard}"
 done
 ```
-
-> [!WARNING]
-> The Application Query Analysis and Exported User Activity dashboards filter on
-> `@click_dog.source:span_log`. Importing either with click-dog older than
-> `v26.03.1` will show no live-span data until click-dog is upgraded. If you
-> cannot upgrade immediately, remove `@click_dog.source:span_log` from widget
-> queries after import to restore the previous `resource_name:query`-only
-> matching behavior.
 
 ## Application Query Analysis
 
@@ -99,13 +91,6 @@ Historical backfill is a separate data contract: backfill spans come from
 `db.read_rows`, and `db.memory_usage`. Use Datadog trace search or custom
 widgets with those backfill fields for historical workflows; this shipped
 dashboard will not populate from backfill-only imports.
-
-Compatibility: the `@click_dog.source:span_log` filter requires click-dog
-`v26.03.1` or newer, or any build that emits the `click_dog.source` attribute.
-Older binaries can still export spans, but this dashboard's source filter will
-not match them until click-dog is upgraded. If you cannot upgrade immediately,
-remove `@click_dog.source:span_log` from widget queries after import to restore
-the previous `resource_name:query`-only matching behavior.
 
 The higher-level query-family rollup API groups aggregated exact normalized-query groups for offline/dashboard-analysis callers. The shipped Datadog dashboard does not consume those rollups yet because it only reads span attributes; it continues to show exact normalized families until a dedicated rollup export or storage surface is added.
 
@@ -150,8 +135,8 @@ Those widgets remain blank until tagging is in place.
 ### Tuning latency thresholds (optional)
 
 The **p95 latency** and **p99 latency** tiles ship with a sparkline but **no
-color thresholds**: what counts as "slow" depends entirely on your workload,
-and the dashboard makes no assumption about your target. If you have an SLO,
+color thresholds**: what counts as "slow" depends entirely on the workload,
+and the dashboard makes no assumption about the target. To reflect an SLO,
 add a `conditional_formats` block to those tiles to color them.
 
 `@duration` is stored in **nanoseconds**, so thresholds are `seconds × 1e9`
@@ -169,7 +154,7 @@ Health dashboard uses). Example for p95 (green < 2s, yellow 2–5s, red ≥ 5s):
 
 Paste it into the `requests[0]` object of the p95/p99 tile (alongside
 `"response_format": "scalar"`), in the dashboard JSON or via **Edit** on the
-widget in Datadog, and adjust the second/third values to your target.
+widget in Datadog, and adjust the second/third values to the target.
 
 ## Exported User Activity
 
@@ -206,7 +191,7 @@ Use `click_dog.query_operation_supported` to distinguish an unsupported
 OTLP self-monitoring for the click-dog exporter. Enable
 `metrics.otlp.enabled: true`; by default click-dog reuses
 `exporters.otel[0]` and pushes self-metrics to the same collector as spans. Set
-`metrics.otlp.host` in containers if you want a stable `host.name` dashboard
+`metrics.otlp.host` in containers for a stable `host.name` dashboard
 variable instead of the pod/container hostname.
 
 Standalone `metrics.otlp` connections currently expose plaintext/TLS settings
@@ -233,15 +218,16 @@ leader column without contributing to stale-export age.
 | **Outcome breakdown** | Cycle results by outcome (`success`, `error`, `skipped`) |
 
 The **Setup and troubleshooting** group at the bottom contains the detailed
-health explanations and legacy scrape configuration. No data means unknown;
+health explanations and the OpenMetrics scrape configuration. No data means unknown;
 blank widgets must not be read as a healthy zero.
 
-### Legacy Datadog Agent OpenMetrics scrape config
+### Datadog Agent OpenMetrics scrape config
 
-Prometheus-only users can still scrape `/metrics`. Drop this in
-`/etc/datadog-agent/conf.d/openmetrics.d/conf.yaml` and restart the Agent. The
-explicit `metrics:` rename list is required for the scrape path; a generic
-wildcard such as `- click_dog_*` will not produce usable Datadog names.
+To read `/metrics` with the Datadog Agent instead of the OTLP push, put this in
+`/etc/datadog-agent/conf.d/openmetrics.d/conf.yaml` and restart the Agent. Each
+entry renames a Prometheus metric to its OTLP name, so the Health dashboard
+works on either path. A wildcard such as `- click_dog_*` keeps the full
+Prometheus names, which the dashboard does not query.
 
 ```yaml
 init_config:
@@ -254,28 +240,28 @@ instances:
       - click_dog_spans_exported_total: spans_exported
       - click_dog_spans_filtered_total: spans_filtered
       - click_dog_spans_duplicates_total: spans_duplicates
-      - click_dog_export_attempts_total: export.attempts
-      - click_dog_export_accepted_total: export.accepted
-      - click_dog_export_errors_total: export.errors
+      - click_dog_export_attempts_total: export_attempts
+      - click_dog_export_accepted_total: export_accepted
+      - click_dog_export_errors_total: export_errors
       - click_dog_cycle_results_total: cycle_results
       # Gauges: submitted as-is under the namespace.
-      - click_dog_circuit_breaker_state: circuit_breaker.state
+      - click_dog_circuit_breaker_state: circuit_breaker_state
       - click_dog_leader: leader
-      - click_dog_backoff_interval_seconds: backoff_interval.seconds
-      - click_dog_last_success_timestamp_seconds: last_success_timestamp.seconds
-      - click_dog_uptime_seconds: uptime.seconds
-      - click_dog_last_cycle_duration_seconds: last_cycle.duration_seconds
-      - click_dog_last_cycle_exported_spans: last_cycle.exported_spans
-      - click_dog_last_cycle_filtered_spans: last_cycle.filtered_spans
-      - click_dog_last_cycle_duplicate_spans: last_cycle.duplicate_spans
-      # ClickHouse data-plane health (#183).
-      - click_dog_span_log_last_poll_timestamp_seconds: span_log.last_poll_timestamp.seconds
-      - click_dog_span_log_newest_row_age_seconds: span_log.newest_row_age.seconds
-      - click_dog_span_log_rows_last_cycle: span_log.rows_last_cycle
-      - click_dog_query_log_enrichment_attempts_total: query_log.enrichment.attempts
-      - click_dog_query_log_enrichment_successes_total: query_log.enrichment.successes
-      - click_dog_query_log_enrichment_failures_total: query_log.enrichment.failures
-      - click_dog_query_log_enrichment_match_ratio: query_log.enrichment.match_ratio
+      - click_dog_backoff_interval_seconds: backoff_interval_seconds
+      - click_dog_last_success_timestamp_seconds: last_success_timestamp_seconds
+      - click_dog_uptime_seconds: uptime_seconds
+      - click_dog_last_cycle_duration_seconds: last_cycle_duration_seconds
+      - click_dog_last_cycle_exported_spans: last_cycle_exported_spans
+      - click_dog_last_cycle_filtered_spans: last_cycle_filtered_spans
+      - click_dog_last_cycle_duplicate_spans: last_cycle_duplicate_spans
+      # ClickHouse data-plane health.
+      - click_dog_span_log_last_poll_timestamp_seconds: span_log_last_poll_timestamp_seconds
+      - click_dog_span_log_newest_row_age_seconds: span_log_newest_row_age_seconds
+      - click_dog_span_log_rows_last_cycle: span_log_rows_last_cycle
+      - click_dog_query_log_enrichment_attempts_total: query_log_enrichment_attempts
+      - click_dog_query_log_enrichment_successes_total: query_log_enrichment_successes
+      - click_dog_query_log_enrichment_failures_total: query_log_enrichment_failures
+      - click_dog_query_log_enrichment_match_ratio: query_log_enrichment_match_ratio
       - click_dog_spans_with_query_id_ratio: spans_with_query_id_ratio
       - click_dog_normalized_query_supported: normalized_query_supported
       - click_dog_query_operation_supported: query_operation_supported
@@ -283,41 +269,40 @@ instances:
       - click_dog_topology_warning: topology_warning
 ```
 
-That mapping turns each Prometheus metric exposed at `/metrics` into the
-legacy Datadog scrape-path name. The shipped Health dashboard queries the OTLP
-default names directly; Datadog appends `.count` to OTLP monotonic sums.
+The Agent prefixes the `click_dog` namespace and appends `.count` to counters,
+the same names the OTLP push produces:
 
 | Prometheus metric (`/metrics`)                | Type    | Datadog metric                            |
 |-----------------------------------------------|---------|-------------------------------------------|
 | `click_dog_spans_exported_total`              | counter | `click_dog.spans_exported.count`          |
 | `click_dog_spans_filtered_total`              | counter | `click_dog.spans_filtered.count`          |
 | `click_dog_spans_duplicates_total`            | counter | `click_dog.spans_duplicates.count`        |
-| `click_dog_export_attempts_total`             | counter | `click_dog.export.attempts.count` (tag: `sink`) |
-| `click_dog_export_accepted_total`             | counter | `click_dog.export.accepted.count` (tag: `sink`) |
-| `click_dog_export_errors_total`               | counter | `click_dog.export.errors.count` (tag: `sink`) |
+| `click_dog_export_attempts_total`             | counter | `click_dog.export_attempts.count` (tag: `sink`) |
+| `click_dog_export_accepted_total`             | counter | `click_dog.export_accepted.count` (tag: `sink`) |
+| `click_dog_export_errors_total`               | counter | `click_dog.export_errors.count` (tag: `sink`) |
 | `click_dog_cycle_results_total`               | counter | `click_dog.cycle_results.count` (tag: `result`) |
-| `click_dog_circuit_breaker_state`             | gauge   | `click_dog.circuit_breaker.state`         |
+| `click_dog_circuit_breaker_state`             | gauge   | `click_dog.circuit_breaker_state`         |
 | `click_dog_leader`                            | gauge   | `click_dog.leader`                        |
-| `click_dog_backoff_interval_seconds`          | gauge   | `click_dog.backoff_interval.seconds`      |
-| `click_dog_last_success_timestamp_seconds`    | gauge   | `click_dog.last_success_timestamp.seconds` (tag: `role`) |
-| `click_dog_uptime_seconds`                    | gauge   | `click_dog.uptime.seconds`                |
-| `click_dog_last_cycle_duration_seconds`       | gauge   | `click_dog.last_cycle.duration_seconds`   |
-| `click_dog_last_cycle_exported_spans`         | gauge   | `click_dog.last_cycle.exported_spans`     |
-| `click_dog_last_cycle_filtered_spans`         | gauge   | `click_dog.last_cycle.filtered_spans`     |
-| `click_dog_last_cycle_duplicate_spans`        | gauge   | `click_dog.last_cycle.duplicate_spans`    |
-| `click_dog_span_log_last_poll_timestamp_seconds` | gauge | `click_dog.span_log.last_poll_timestamp.seconds` |
-| `click_dog_span_log_newest_row_age_seconds`   | gauge   | `click_dog.span_log.newest_row_age.seconds` |
-| `click_dog_span_log_rows_last_cycle`          | gauge   | `click_dog.span_log.rows_last_cycle`      |
-| `click_dog_query_log_enrichment_attempts_total`  | counter | `click_dog.query_log.enrichment.attempts.count`  |
-| `click_dog_query_log_enrichment_successes_total` | counter | `click_dog.query_log.enrichment.successes.count` |
-| `click_dog_query_log_enrichment_failures_total`  | counter | `click_dog.query_log.enrichment.failures.count`  |
-| `click_dog_query_log_enrichment_match_ratio`  | gauge   | `click_dog.query_log.enrichment.match_ratio` |
+| `click_dog_backoff_interval_seconds`          | gauge   | `click_dog.backoff_interval_seconds`      |
+| `click_dog_last_success_timestamp_seconds`    | gauge   | `click_dog.last_success_timestamp_seconds` (tag: `role`) |
+| `click_dog_uptime_seconds`                    | gauge   | `click_dog.uptime_seconds`                |
+| `click_dog_last_cycle_duration_seconds`       | gauge   | `click_dog.last_cycle_duration_seconds`   |
+| `click_dog_last_cycle_exported_spans`         | gauge   | `click_dog.last_cycle_exported_spans`     |
+| `click_dog_last_cycle_filtered_spans`         | gauge   | `click_dog.last_cycle_filtered_spans`     |
+| `click_dog_last_cycle_duplicate_spans`        | gauge   | `click_dog.last_cycle_duplicate_spans`    |
+| `click_dog_span_log_last_poll_timestamp_seconds` | gauge | `click_dog.span_log_last_poll_timestamp_seconds` |
+| `click_dog_span_log_newest_row_age_seconds`   | gauge   | `click_dog.span_log_newest_row_age_seconds` |
+| `click_dog_span_log_rows_last_cycle`          | gauge   | `click_dog.span_log_rows_last_cycle`      |
+| `click_dog_query_log_enrichment_attempts_total`  | counter | `click_dog.query_log_enrichment_attempts.count`  |
+| `click_dog_query_log_enrichment_successes_total` | counter | `click_dog.query_log_enrichment_successes.count` |
+| `click_dog_query_log_enrichment_failures_total`  | counter | `click_dog.query_log_enrichment_failures.count`  |
+| `click_dog_query_log_enrichment_match_ratio`  | gauge   | `click_dog.query_log_enrichment_match_ratio` |
 | `click_dog_spans_with_query_id_ratio`         | gauge   | `click_dog.spans_with_query_id_ratio`     |
 | `click_dog_normalized_query_supported`        | gauge   | `click_dog.normalized_query_supported`    |
 | `click_dog_query_operation_supported`         | gauge   | `click_dog.query_operation_supported`     |
 | `click_dog_topology_warning`                  | gauge   | `click_dog.topology_warning` (tag: `reason`) |
 
-The bottom block carries ClickHouse data-plane health signals (#183). See
+The bottom block carries ClickHouse data-plane health signals. See
 [Datadog Self-Monitoring: ClickHouse data-plane health signals](https://click-dog.com/integrations/datadog/self-monitoring/#clickhouse-data-plane-health-signals).
 
 ### Recommended monitors
@@ -335,8 +320,8 @@ If health-dashboard widgets show "No data" after import:
 2. Confirm the Datadog Agent or collector OTLP gRPC receiver is reachable from
    click-dog.
 3. In containers, set `metrics.otlp.host` to the stable node/instance identity
-   you want to use for the `host.name` template variable.
-4. On the legacy scrape path, search Metrics Explorer for
+   to use for the `host.name` template variable.
+4. On the scrape path, search Metrics Explorer for
    `click_dog.click_dog_spans_exported_total`; that means the explicit
    OpenMetrics `metrics:` rename list above is not being applied.
 
@@ -345,8 +330,7 @@ If health-dashboard widgets show "No data" after import:
 - Click-dog running and exporting spans
 - Datadog Agent receiving OTLP traces (for query analysis)
 - `metrics.otlp.enabled: true` for the health dashboard
-- Legacy scrape users only: Datadog Agent OpenMetrics check. See the explicit
-  rename list above
+- Scrape path only: the Datadog Agent OpenMetrics check above
 
 ## Other Platforms
 

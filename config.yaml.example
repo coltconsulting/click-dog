@@ -7,18 +7,18 @@
 #
 # This file is organized in two tiers:
 #
-#   STANDARD CONFIG — the settings most users need. If you only configure
-#   these, click-dog works well with safe defaults for everything else.
+#   STANDARD CONFIG — the settings most users need. With only these set,
+#   click-dog works well with safe defaults for everything else.
 #
 #   EXPERT CONFIG — tuning knobs for connection pools, safety limits,
 #   distributed queries, TLS, HA, and circuit breaker behavior. Commented
-#   out by default; uncomment only what you need.
+#   out by default; uncomment only what the deployment needs.
 #
 # ═══════════════════════════════════════════════════════════════════════
 
 
 # ─── STANDARD CONFIG ─────────────────────────────────────────────────
-# Everything you need for a working setup. ~10 lines.
+# Everything a working setup needs. ~10 lines.
 
 clickhouse:
   host: localhost
@@ -29,7 +29,7 @@ clickhouse:
 
 exporters:
   otel:
-    - collector_address: localhost:4317  # Your OTEL collector (Datadog Agent, etc.)
+    - collector_address: localhost:4317  # OTEL collector (Datadog Agent, etc.)
       service_name: click-dog-monitor
       # secure omitted: plaintext while collector_address is loopback (localhost,
       # 127.0.0.0/8, ::1, unix:), TLS for any other collector. Set it to override.
@@ -49,7 +49,7 @@ log_level: info                     # debug, info, warn, error
 
 
 # ─── EXPERT CONFIG ───────────────────────────────────────────────────
-# Everything below has safe defaults. Uncomment only what you need.
+# Everything below has safe defaults. Uncomment only what the deployment needs.
 
 # ── ClickHouse Connection Tuning ─────────────────────────────────────
 #
@@ -107,7 +107,7 @@ log_level: info                     # debug, info, warn, error
 #       service_name: click-dog-monitor
 #       max_query_length: 100000        # Truncate SQL > 100k chars (prevents PII leaks)
 #
-#       # TLS for gRPC to your collector. Omitted, secure is false only for
+#       # TLS for gRPC to the collector. Omitted, secure is false only for
 #       # a loopback collector_address and true otherwise; any of the TLS
 #       # settings below implies true, and secure: false beside one is an
 #       # error. Write secure: false for a plaintext collector elsewhere.
@@ -151,7 +151,7 @@ log_level: info                     # debug, info, warn, error
 #   # Polling
 #   lookback_buffer_s: 10            # Extra seconds added to check_interval for lookback overlap
 #                                     # Absorbs clock skew and slow poll cycles (default: 10)
-#                                     # Increase under high load if you see missed spans
+#                                     # Increase under high load if spans go missing
 #   lookback_s: 40                   # Override: total lookback (default: check_interval_s + lookback_buffer_s)
 #
 #   # Rate limiting
@@ -186,7 +186,7 @@ log_level: info                     # debug, info, warn, error
 #                                     # query logs a warning and the span is exported without
 #                                     # the extra fields. Default: true.
 #                                     # Note: includes potential PII (user / client_address /
-#                                     # client_hostname) — disable if your downstream pipeline
+#                                     # client_hostname) — disable if the downstream pipeline
 #                                     # treats those as sensitive.
 #
 #   # Circuit breaker — protects ClickHouse during failures
@@ -217,10 +217,10 @@ log_level: info                     # debug, info, warn, error
 # ── Filtering (advanced) ─────────────────────────────────────────────
 #
 # filters:
-#   query_text_mode: raw              # raw, redacted, normalized_only, or none
+#   query_text_mode: normalized_only  # raw, redacted, normalized_only (default), or none
 #
 #   # Drop internal ClickHouse pipeline spans at the SQL level (substring match).
-#   # This is the primary volume knob — cuts ~90-99% of noise spans.
+#   # This is the primary volume knob.
 #   blacklist_operations:
 #     - "MergeTreeSource"
 #     - "MergeTreeMarksLoader"
@@ -245,8 +245,14 @@ log_level: info                     # debug, info, warn, error
 #   whitelist_users: []
 #   blacklist_users: []
 #
-#   # Rewrite sensitive SQL fragments before export. Runs after blacklist
-#   # filtering; if a query is blacklisted, it is dropped rather than redacted.
+# Redacted query text, as an alternative to the mode above. redact_queries
+# rules are accepted only with query_text_mode redacted, and a statement that
+# no rule matches is omitted, never exported raw. Rules run after blacklist
+# filtering; a blacklisted query is dropped rather than redacted. Merge these
+# keys into the filters: block above; a second filters: key fails validation.
+#
+# filters:
+#   query_text_mode: redacted
 #   redact_queries:
 #     - pattern: |
 #         (?i)identified\s+by\s+'[^']*'
@@ -292,12 +298,11 @@ log_level: info                     # debug, info, warn, error
 
 # ── Prometheus Metrics ──────────────────────────────────────────────
 #
-# Exposes /metrics (Prometheus text format) and a legacy /health (JSON)
-# liveness endpoint. No external dependency — metrics are emitted in
-# Prometheus exposition format.
+# Exposes /metrics (Prometheus text format). No external dependency — metrics
+# are emitted in Prometheus exposition format.
 #
 # metrics:
-#   enabled: false                       # Enable /metrics and legacy /health
+#   enabled: false                       # Enable /metrics and the admin listener
 #   listen_address: ":9090"              # Scrape listener (default: :9090)
 #   admin_listen_address: "127.0.0.1:9091"  # Admin listener (POST /flush)
 #

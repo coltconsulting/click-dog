@@ -300,7 +300,7 @@ func TestExecuteQueryLogQueryScansNormalizedFields(t *testing.T) {
 	conn := &fakeConn{rows: newFakeRows([]any{
 		"qid-1", "QueryFinish", now, uint64(1500), "SELECT * FROM events WHERE id = 42",
 		uint64(987654321), "SELECT * FROM events WHERE id = ?",
-		"default", "clickhouse-go", "app-1", "10.0.0.1", "10.0.0.1",
+		"default", "default", "clickhouse-go", "app-1", "10.0.0.1", "10.0.0.1",
 		[]string{"default"}, []string{"default.events"}, int32(0),
 		uint64(100), uint64(200), uint64(0), uint64(0), uint64(10), uint64(20), uint64(300),
 	})}
@@ -333,7 +333,7 @@ func TestExecuteQueryLogQueryFallbackScansCurrentColumns(t *testing.T) {
 	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
 	conn := &fakeConn{rows: newFakeRows([]any{
 		"qid-1", "QueryFinish", now, uint64(1500), "SELECT 1",
-		"default", "clickhouse-go", "app-1", "10.0.0.1", "10.0.0.1",
+		"default", "default", "clickhouse-go", "app-1", "10.0.0.1", "10.0.0.1",
 		[]string{"default"}, []string{"default.events"}, int32(0),
 		uint64(100), uint64(200), uint64(0), uint64(0), uint64(10), uint64(20), uint64(300),
 	})}
@@ -366,7 +366,7 @@ func TestFetchQueryLogByQueryIDsScansNormalizedFields(t *testing.T) {
 	conn := &fakeConn{rows: newFakeRows([]any{
 		"qid-1", "QueryFinish", now, uint64(1500),
 		uint64(987654321), "SELECT * FROM events WHERE id = ?",
-		"default", "clickhouse-go", "app-1", "10.0.0.1", "10.0.0.1",
+		"default", "default", "clickhouse-go", "app-1", "10.0.0.1", "10.0.0.1",
 		[]string{"default"}, []string{"default.events"}, int32(0),
 		uint64(100), uint64(200), uint64(0), uint64(0), uint64(10), uint64(20), uint64(300),
 	})}
@@ -378,7 +378,7 @@ func TestFetchQueryLogByQueryIDsScansNormalizedFields(t *testing.T) {
 	}
 	reader.setUserFilter(nil, nil)
 
-	logs, err := reader.FetchQueryLogByQueryIDs(context.Background(), []string{"qid-1"}, 1)
+	logs, err := reader.FetchQueryLogByQueryIDs(context.Background(), []string{"qid-1"}, 1, 0)
 	if err != nil {
 		t.Fatalf("FetchQueryLogByQueryIDs failed: %v", err)
 	}
@@ -397,7 +397,7 @@ func TestFetchQueryLogByQueryIDsFallbackScansCurrentColumns(t *testing.T) {
 	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
 	conn := &fakeConn{rows: newFakeRows([]any{
 		"qid-1", "QueryFinish", now, uint64(1500),
-		"default", "clickhouse-go", "app-1", "10.0.0.1", "10.0.0.1",
+		"default", "default", "clickhouse-go", "app-1", "10.0.0.1", "10.0.0.1",
 		[]string{"default"}, []string{"default.events"}, int32(0),
 		uint64(100), uint64(200), uint64(0), uint64(0), uint64(10), uint64(20), uint64(300),
 	})}
@@ -408,7 +408,7 @@ func TestFetchQueryLogByQueryIDsFallbackScansCurrentColumns(t *testing.T) {
 	}
 	reader.setUserFilter(nil, nil)
 
-	logs, err := reader.FetchQueryLogByQueryIDs(context.Background(), []string{"qid-1"}, 1)
+	logs, err := reader.FetchQueryLogByQueryIDs(context.Background(), []string{"qid-1"}, 1, 0)
 	if err != nil {
 		t.Fatalf("FetchQueryLogByQueryIDs failed: %v", err)
 	}
@@ -514,7 +514,7 @@ func TestFetchQueryFamilyRollupsAggregatesExactGroupsBeforeRollup(t *testing.T) 
 		"GROUP BY normalized_query_hash",
 		"HAVING count() >= ?",
 		"ORDER BY execution_count DESC LIMIT ?",
-		"AND user IN ?",
+		"AND if(initial_user != '', initial_user, user) IN ?",
 	} {
 		if !strings.Contains(conn.lastQuery, want) {
 			t.Errorf("family SQL missing %q:\n%s", want, conn.lastQuery)

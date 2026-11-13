@@ -97,11 +97,10 @@ func TestPipeline_LeaderGateSkipsWhenNotLeader(t *testing.T) {
 
 	body := scrapeMetrics(t, m)
 	mustContain(t, body, "click_dog_leader 0")
+	// A standby skip is not evidence of a healthy export — last-success must
+	// not advance (operators alert on this gauge).
 	mustContain(t, body, `click_dog_last_success_timestamp_seconds{role="standby"} 0`)
 	mustContain(t, body, `click_dog_cycle_results_total{result="skipped"} 1`)
 	mustContain(t, body, `click_dog_cycle_results_total{result="success"} 0`)
 	mustContain(t, body, `click_dog_cycle_results_total{result="error"} 0`)
-	// A standby skip is not evidence of a healthy export — last-success must
-	// not advance (operators alert on this gauge).
-	mustContain(t, body, "click_dog_last_success_timestamp_seconds 0")
 }

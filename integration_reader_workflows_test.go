@@ -29,8 +29,9 @@ func TestIntegration_TraceDrilldown_RoundTripsAcrossCluster(t *testing.T) {
 
 	ctx := context.Background()
 	traceIDs := make([]string, 0, len(fixtures))
+	var earliestQueryStart time.Time
 	for _, fixture := range fixtures {
-		got, err := reader.FetchTraceIDsByQueryID(ctx, fixture.QueryIDs[0], 1, 10)
+		got, queryStart, err := reader.FetchTraceIDsByQueryID(ctx, fixture.QueryIDs[0], 1, fixture.WindowStart, 10)
 		if err != nil {
 			t.Fatalf("FetchTraceIDsByQueryID(%q): %v", fixture.QueryIDs[0], err)
 		}
@@ -38,10 +39,16 @@ func TestIntegration_TraceDrilldown_RoundTripsAcrossCluster(t *testing.T) {
 		if len(got) != 1 || got[0] != want {
 			t.Fatalf("trace IDs for query %q = %v, want [%s]", fixture.QueryIDs[0], got, want)
 		}
+		if queryStart.Before(fixture.WindowStart) {
+			t.Fatalf("query %q started %s, before its fixture window %s", fixture.QueryIDs[0], queryStart, fixture.WindowStart)
+		}
+		if earliestQueryStart.IsZero() || queryStart.Before(earliestQueryStart) {
+			earliestQueryStart = queryStart
+		}
 		traceIDs = append(traceIDs, got[0])
 	}
 
-	spans, err := reader.FetchSpansForTraceIDs(ctx, traceIDs, 1, 100, nil)
+	spans, err := reader.FetchSpansForTraceIDs(ctx, traceIDs, 1, earliestQueryStart, 100, nil)
 	if err != nil {
 		t.Fatalf("FetchSpansForTraceIDs: %v", err)
 	}
@@ -202,7 +209,7 @@ func TestIntegration_ReadinessAndCanary_UseLiveDataPlane(t *testing.T) {
 	for i, traceID := range fixture.TraceIDs {
 		fixtureTraceIDs[i] = traceID.String()
 	}
-	spans, err := reader.FetchSpansForTraceIDs(ctx, fixtureTraceIDs, 1, 100, nil)
+	spans, err := reader.FetchSpansForTraceIDs(ctx, fixtureTraceIDs, 1, fixture.WindowStart, 100, nil)
 	if err != nil {
 		t.Fatalf("FetchSpansForTraceIDs: %v", err)
 	}

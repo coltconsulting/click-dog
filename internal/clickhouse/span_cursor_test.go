@@ -36,14 +36,16 @@ func spanCursorTestRow(traceID uuid.UUID, spanID, finish uint64) []any {
 type liveSpanRow struct {
 	trace     uuid.UUID
 	span      uint64
+	start     uint64
 	finish    uint64
 	visibleAt uint64
 }
 
 // liveSpanLog answers Live Span Selection's trace and span page queries from
 // memory the way ClickHouse would: trace selection is bounded by the lookback
-// window, span pages are not, and keyset predicates and ordering follow the
-// SQL the reader actually sends. All times are microseconds.
+// window and the trace duration filters, span pages by the finish floor the
+// reader sends, and keyset predicates and ordering follow the SQL the reader
+// actually sends. All times are microseconds.
 type liveSpanLog struct {
 	*fakeConn
 	t        *testing.T
@@ -51,6 +53,10 @@ type liveSpanLog struct {
 	rows     []liveSpanRow
 	failNext int // fail the query this many calls from now (1 = next)
 	queries  int
+	// serverTimeReads counts reads of the server's clock.
+	serverTimeReads int
+	// spanFloors records the finish floor of every span page read.
+	spanFloors []uint64
 }
 
 func newLiveSpanLog(t *testing.T) (*liveSpanLog, *ClickHouseReader) {
@@ -60,11 +66,19 @@ func newLiveSpanLog(t *testing.T) (*liveSpanLog, *ClickHouseReader) {
 		queryTimeout:  time.Second,
 		traceIDSelect: strings.ReplaceAll(traceIDSelectSQL, tblSpanLog, "system.opentelemetry_span_log"),
 		spanSelect:    strings.ReplaceAll(spanSelectSQL, tblSpanLog, "system.opentelemetry_span_log"),
+		// This host's clock agrees with the log's.
+		now: func() time.Time { return time.UnixMicro(int64(l.nowUs)) },
 	}
 }
 
+// add writes a span that lasted one millisecond, so it qualifies its trace at
+// the minimum trace duration the walk tests use.
 func (l *liveSpanLog) add(trace uuid.UUID, span, finish, visibleAt uint64) {
-	l.rows = append(l.rows, liveSpanRow{trace: trace, span: span, finish: finish, visibleAt: visibleAt})
+	l.addSpan(trace, span, finish-min(finish, 1000), finish, visibleAt)
+}
+
+func (l *liveSpanLog) addSpan(trace uuid.UUID, span, start, finish, visibleAt uint64) {
+	l.rows = append(l.rows, liveSpanRow{trace: trace, span: span, start: start, finish: finish, visibleAt: visibleAt})
 }
 
 func (l *liveSpanLog) Query(_ context.Context, query string, args ...any) (driver.Rows, error) {
@@ -83,6 +97,15 @@ func (l *liveSpanLog) Query(_ context.Context, query string, args ...any) (drive
 	}
 	l.t.Fatalf("unexpected SQL:\n%s", query)
 	return nil, nil
+}
+
+// QueryRow answers the server-clock read with the log's current time.
+func (l *liveSpanLog) QueryRow(_ context.Context, query string, _ ...any) driver.Row {
+	l.serverTimeReads++
+	if query != serverTimeQuery {
+		l.t.Fatalf("unexpected QueryRow SQL:\n%s", query)
+	}
+	return fakeRow{vals: []any{int64(l.nowUs)}}
 }
 
 // bindIndex returns the position of clause's first bind argument.
@@ -125,15 +148,37 @@ func (l *liveSpanLog) tracePage(query string, args []any) driver.Rows {
 	if i, ok := bindIndex(query, "AND finish_time_us >= ?"); ok {
 		floor = max(floor, args[i].(uint64))
 	}
+	minDurationUs := uint64(args[2].(int)) * 1000
+	maxDurationUs := uint64(0)
+	if i, ok := bindIndex(query, "(finish_time_us - start_time_us) <= ? * 1000"); ok {
+		maxDurationUs = uint64(args[i].(int)) * 1000
+	}
 	newest := map[uuid.UUID]uint64{}
+	earliest := map[uuid.UUID]uint64{}
 	for _, r := range l.rows {
-		if r.visibleAt <= l.nowUs && r.finish >= floor && r.finish > newest[r.trace] {
+		duration := r.finish - r.start
+		if r.visibleAt > l.nowUs || r.finish < floor || duration < minDurationUs || (maxDurationUs > 0 && duration > maxDurationUs) {
+			continue
+		}
+		if r.finish > newest[r.trace] {
 			newest[r.trace] = r.finish
+		}
+		if e, ok := earliest[r.trace]; !ok || r.start < e {
+			earliest[r.trace] = r.start
+		}
+	}
+	settledBy := ^uint64(0)
+	if i, ok := bindIndex(query, "max_finish_time <= toUnixTimestamp64Micro(now64(6)) - ?"); ok {
+		settledBy = 0
+		if settle := uint64(args[i].(int64)); l.nowUs > settle {
+			settledBy = l.nowUs - settle
 		}
 	}
 	var keys []traceKey
 	for id, finish := range newest {
-		keys = append(keys, traceKey{finish: finish, id: id})
+		if finish <= settledBy {
+			keys = append(keys, traceKey{finish: finish, id: id})
+		}
 	}
 	for _, b := range []struct {
 		clause string
@@ -163,7 +208,7 @@ func (l *liveSpanLog) tracePage(query string, args []any) driver.Rows {
 	}
 	out := make([][]any, 0, len(keys))
 	for _, k := range keys {
-		out = append(out, []any{k.id, k.finish})
+		out = append(out, []any{k.id, k.finish, earliest[k.id]})
 	}
 	return newFakeRows(out...)
 }
@@ -173,9 +218,15 @@ func (l *liveSpanLog) spanPage(query string, args []any) driver.Rows {
 	for _, id := range args[0].([]uuid.UUID) {
 		inPage[id] = true
 	}
+	i, ok := bindIndex(query, "AND finish_time_us >= ?")
+	if !ok {
+		l.t.Fatalf("span page has no finish floor:\n%s", query)
+	}
+	floor := args[i].(uint64)
+	l.spanFloors = append(l.spanFloors, floor)
 	var keys []spanKey
 	for _, r := range l.rows {
-		if r.visibleAt <= l.nowUs && inPage[r.trace] {
+		if r.visibleAt <= l.nowUs && inPage[r.trace] && r.finish >= floor {
 			keys = append(keys, spanKey{finish: r.finish, trace: r.trace, span: r.span})
 		}
 	}
@@ -334,7 +385,7 @@ func TestFetchLiveSpans_UncommittedPageIsReadAgain(t *testing.T) {
 	for i := uint64(1); i <= 5; i++ {
 		log.add(testTraceID(i), 1, seconds(float64(i)), 0)
 	}
-	log.nowUs = seconds(10)
+	log.nowUs = seconds(25) // past the settle for every row
 	fetch := func() []spanIdentity {
 		spans, err := reader.FetchLiveSpans(context.Background(), 1, time.Minute, 2, FetchOpts{})
 		if err != nil {
@@ -365,7 +416,7 @@ func TestFetchLiveSpans_FailedQueryKeepsTheCommittedPosition(t *testing.T) {
 	for i := uint64(1); i <= 3; i++ {
 		log.add(testTraceID(i), 1, seconds(float64(i)), 0)
 	}
-	log.nowUs = seconds(10)
+	log.nowUs = seconds(25) // past the settle for every row
 
 	log.failNext = 2 // the trace page succeeds, its span page fails
 	if _, err := reader.FetchLiveSpans(context.Background(), 1, time.Minute, 10, FetchOpts{}); err == nil {
@@ -445,24 +496,65 @@ func TestFetchLiveSpans_RetryReachesBackThreeLookbacksAndNoFurther(t *testing.T)
 		return identities(spans)
 	}
 
-	if got := fetch(5); !equalIdentities(got, []spanIdentity{{committed, 1}}) {
+	if got := fetch(20); !equalIdentities(got, []spanIdentity{{committed, 1}}) {
 		t.Fatalf("first fetch = %v, want the committed trace", got)
 	}
 	reader.CommitLiveSpans()
 
 	// Never committed from here on: every export of the pending trace fails.
 	want := []spanIdentity{{pending, 1}}
-	if got := fetch(15); !equalIdentities(got, want) {
-		t.Fatalf("fetch at 15s = %v, want %v", got, want)
+	if got := fetch(30); !equalIdentities(got, want) {
+		t.Fatalf("fetch at 30s = %v, want %v", got, want)
 	}
-	if got := fetch(70); !equalIdentities(got, want) {
-		t.Fatalf("fetch at 70s (trace 60s old, behind the 40s floor) = %v, want it retried", got)
+	if got := fetch(85); !equalIdentities(got, want) {
+		t.Fatalf("fetch at 85s (trace 75s old, behind the 40s floor plus the settle) = %v, want it retried", got)
 	}
-	if got := fetch(120); !equalIdentities(got, want) {
-		t.Fatalf("fetch at 120s (trace 110s old, within three lookbacks) = %v, want it retried", got)
+	if got := fetch(140); !equalIdentities(got, want) {
+		t.Fatalf("fetch at 140s (trace 130s old, within three lookbacks plus the settle) = %v, want it retried", got)
 	}
-	if got := fetch(135); len(got) != 0 {
-		t.Fatalf("fetch at 135s (trace 125s old, past three lookbacks) = %v, want it dropped", got)
+	if got := fetch(150); len(got) != 0 {
+		t.Fatalf("fetch at 150s (trace 140s old, past three lookbacks plus the settle) = %v, want it dropped", got)
+	}
+}
+
+// TestFetchLiveSpans_LongTraceIsReadFromItsStart pins the span-page floor for
+// a trace that started long before the walk's window. A ten-minute query's
+// children are too short to qualify and all finished before the window the
+// query span is selected in; they are still read, across several capped
+// fetches, because every span page of the trace reads from one margin before
+// the query span started. A span of the same trace that finished more than the
+// margin before that, under no qualifying span, is outside the read.
+func TestFetchLiveSpans_LongTraceIsReadFromItsStart(t *testing.T) {
+	log, reader := newLiveSpanLog(t)
+	long := testTraceID(1)
+	rootStart, rootFinish := seconds(100), seconds(700)
+	log.addSpan(long, 1, rootStart, rootFinish, rootFinish)
+	for i := uint64(1); i <= 59; i++ {
+		finish := rootStart + seconds(float64(10*i))
+		log.addSpan(long, 1+i, finish-100, finish, finish)
+	}
+	// Spans of an earlier query in the same trace, as when an application
+	// propagates one trace context into several ClickHouse queries.
+	insideMargin := rootStart - seconds(59)
+	outsideMargin := rootStart - seconds(61)
+	log.addSpan(long, 100, insideMargin-100, insideMargin, insideMargin)
+	log.addSpan(long, 101, outsideMargin-100, outsideMargin, outsideMargin)
+
+	delivered := runLiveCycles(t, log, reader, 30*time.Second, 40*time.Second, 20, 30, nil)
+
+	for _, r := range log.rows {
+		got, want := delivered[spanIdentity{trace: r.trace, span: r.span}], r.span != 101
+		if got != want {
+			t.Errorf("span %d (finish %.0fs) delivered = %t, want %t", r.span, float64(r.finish)/1e6, got, want)
+		}
+	}
+	if len(log.spanFloors) < 4 {
+		t.Fatalf("span pages = %d, want the 61-span trace drained over at least four capped fetches", len(log.spanFloors))
+	}
+	for i, floor := range log.spanFloors {
+		if want := rootStart - uint64(traceStartMargin.Microseconds()); floor != want {
+			t.Errorf("span page %d floor = %dµs, want %dµs (one margin before the query span started)", i, floor, want)
+		}
 	}
 }
 
@@ -472,14 +564,14 @@ func TestFetchLiveSpans_RetryReachesBackThreeLookbacksAndNoFurther(t *testing.T)
 func TestFetchLiveSpans_FreshWalkStartsAtTheLookbackFloor(t *testing.T) {
 	log, reader := newLiveSpanLog(t)
 	log.add(testTraceID(1), 1, seconds(10), 0)
-	log.nowUs = seconds(60)
+	log.nowUs = seconds(70)
 
 	spans, err := reader.FetchLiveSpans(context.Background(), 1, 40*time.Second, 10, FetchOpts{})
 	if err != nil {
 		t.Fatalf("FetchLiveSpans: %v", err)
 	}
 	if len(spans) != 0 {
-		t.Fatalf("fresh walk returned %v, a trace 50s old behind the 40s floor", identities(spans))
+		t.Fatalf("fresh walk returned %v, a trace 60s old behind the 40s floor plus the 15s settle", identities(spans))
 	}
 }
 
@@ -508,7 +600,7 @@ func TestFetchLiveSpans_DrainsATraceLargerThanTheCap(t *testing.T) {
 	for span := uint64(1); span <= 5; span++ {
 		log.add(big, span, seconds(5)+span, 0)
 	}
-	log.nowUs = seconds(10)
+	log.nowUs = seconds(25) // past the settle for every row
 
 	var got []spanIdentity
 	for i := 0; i < 3; i++ {
@@ -536,7 +628,7 @@ func TestFetchLiveSpans_RescanFindsASpanThatFlushedBehindTheWatermark(t *testing
 	log.add(late, 1, seconds(2), seconds(2))
 	// Another node's span of the first trace flushes after the walk has
 	// passed that trace.
-	log.add(early, 2, seconds(0.5), seconds(15))
+	log.add(early, 2, seconds(0.5), seconds(30))
 
 	fetch := func(now float64) []spanIdentity {
 		log.nowUs = seconds(now)
@@ -548,11 +640,11 @@ func TestFetchLiveSpans_RescanFindsASpanThatFlushedBehindTheWatermark(t *testing
 		return identities(spans)
 	}
 
-	if got := fetch(10); len(got) != 2 {
+	if got := fetch(25); len(got) != 2 {
 		t.Fatalf("first fetch = %v, want both visible traces", got)
 	}
 	found := false
-	for _, id := range fetch(20) {
+	for _, id := range fetch(35) {
 		if id == (spanIdentity{early, 2}) {
 			found = true
 		}
@@ -568,8 +660,9 @@ func TestFetchLiveSpans_RescanFindsASpanThatFlushedBehindTheWatermark(t *testing
 func TestFetchLiveSpans_WalksOldestFirstFromTheWatermark(t *testing.T) {
 	log, reader := newLiveSpanLog(t)
 	log.add(testTraceID(1), 1, seconds(1), 0)
-	log.nowUs = seconds(10)
-	conn := &captureConn{fakeConn: &fakeConn{}}
+	log.nowUs = seconds(25) // past the settle for every row
+	// The resumed fetch reads the server's clock to check its reach.
+	conn := &captureConn{fakeConn: &fakeConn{row: fakeRow{vals: []any{int64(log.nowUs)}}}}
 	conn.rowsFn = func(query string) (driver.Rows, error) {
 		return log.Query(context.Background(), query, conn.queries[len(conn.queries)-1]...)
 	}
@@ -586,8 +679,8 @@ func TestFetchLiveSpans_WalksOldestFirstFromTheWatermark(t *testing.T) {
 	wants := []string{
 		"ORDER BY max_finish_time ASC, trace_id ASC",
 		"ORDER BY finish_time_us ASC, trace_id ASC, span_id ASC",
-		"HAVING (max_finish_time, trace_id) > (?, ?) ORDER BY max_finish_time ASC",
-		"HAVING (max_finish_time, trace_id) <= (?, ?) ORDER BY max_finish_time DESC",
+		"AND (max_finish_time, trace_id) > (?, ?) ORDER BY max_finish_time ASC",
+		"AND (max_finish_time, trace_id) <= (?, ?) ORDER BY max_finish_time DESC",
 		"ORDER BY finish_time_us DESC, trace_id DESC, span_id DESC",
 	}
 	for i, want := range wants {
@@ -598,14 +691,20 @@ func TestFetchLiveSpans_WalksOldestFirstFromTheWatermark(t *testing.T) {
 
 	// A fresh walk reads the plain window; once a position is committed the
 	// forward walk widens it to the retry reach and floors it at the position.
-	if strings.Contains(conn.sqls[0], "AND finish_time_us >= ?") || conn.queries[0][1] != int(time.Minute.Seconds()) {
-		t.Errorf("fresh trace page = %v, want the plain 60s window without a position floor", conn.queries[0])
+	settle := int(LiveSettle.Seconds())
+	if strings.Contains(conn.sqls[0], "AND finish_time_us >= ?") || conn.queries[0][1] != int(time.Minute.Seconds())+settle {
+		t.Errorf("fresh trace page = %v, want the 60s window shifted back by the settle, without a position floor", conn.queries[0])
 	}
-	if !strings.Contains(conn.sqls[2], "AND finish_time_us >= ?") || conn.queries[2][1] != liveRetryReach*int(time.Minute.Seconds()) || conn.queries[2][3] != seconds(1) {
+	if !strings.Contains(conn.sqls[2], "AND finish_time_us >= ?") || conn.queries[2][1] != liveRetryReach*int(time.Minute.Seconds())+settle || conn.queries[2][3] != seconds(1) {
 		t.Errorf("resumed trace page args = %v, want a %d-lookback window floored at the committed position", conn.queries[2], liveRetryReach)
 	}
-	if strings.Contains(conn.sqls[3], "AND finish_time_us >= ?") || conn.queries[3][1] != int(time.Minute.Seconds()) {
-		t.Errorf("rescan trace page = %v, want the plain 60s window", conn.queries[3])
+	if strings.Contains(conn.sqls[3], "AND finish_time_us >= ?") || conn.queries[3][1] != int(time.Minute.Seconds())+settle {
+		t.Errorf("rescan trace page = %v, want the 60s window shifted back by the settle", conn.queries[3])
+	}
+	for _, i := range []int{0, 2, 3} {
+		if !strings.Contains(conn.sqls[i], "HAVING max_finish_time <= toUnixTimestamp64Micro(now64(6)) - ?") {
+			t.Errorf("trace page %d does not wait out the settle:\n%s", i, conn.sqls[i])
+		}
 	}
 }
 
@@ -617,7 +716,7 @@ func TestFetchLiveSpans_FilterChangeRestartsTheWalk(t *testing.T) {
 	for i := uint64(1); i <= 3; i++ {
 		log.add(testTraceID(i), 1, seconds(float64(i)), 0)
 	}
-	log.nowUs = seconds(10)
+	log.nowUs = seconds(25) // past the settle for every row
 
 	if _, err := reader.FetchLiveSpans(context.Background(), 1, time.Minute, 3, FetchOpts{}); err != nil {
 		t.Fatalf("FetchLiveSpans: %v", err)
@@ -642,4 +741,39 @@ func equalIdentities(a, b []spanIdentity) bool {
 		}
 	}
 	return true
+}
+
+// TestFetchLiveSpans_WaitsForATraceToSettle pins the settle: a trace is read
+// only once its newest qualifying span is LiveSettle old, and a trace whose
+// query span finishes after the walk passed it is read again in full, because
+// that span moves the trace's key past the watermark.
+func TestFetchLiveSpans_WaitsForATraceToSettle(t *testing.T) {
+	log, reader := newLiveSpanLog(t)
+	trace := testTraceID(1)
+	log.add(trace, 1, seconds(10), seconds(10)) // a child, while the query runs
+	fetch := func(now float64) []spanIdentity {
+		log.nowUs = seconds(now)
+		spans, err := reader.FetchLiveSpans(context.Background(), 1, 40*time.Second, 100, FetchOpts{})
+		if err != nil {
+			t.Fatalf("FetchLiveSpans at %.0fs: %v", now, err)
+		}
+		reader.CommitLiveSpans()
+		return identities(spans)
+	}
+
+	if got := fetch(20); len(got) != 0 {
+		t.Fatalf("fetch at 20s = %v, want nothing from a trace that finished 10s ago", got)
+	}
+	if got := fetch(26); !equalIdentities(got, []spanIdentity{{trace, 1}}) {
+		t.Fatalf("fetch at 26s = %v, want the settled child", got)
+	}
+
+	log.add(trace, 2, seconds(40), seconds(40)) // the query span lands
+	if got := fetch(50); len(got) != 0 {
+		t.Fatalf("fetch at 50s = %v, want nothing until the query span settles", got)
+	}
+	got := fetch(56)
+	if !equalIdentities(got, []spanIdentity{{trace, 1}, {trace, 2}}) {
+		t.Fatalf("fetch at 56s = %v, want the whole trace read again with its query span", got)
+	}
 }

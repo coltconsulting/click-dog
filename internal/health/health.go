@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/coltconsulting/click-dog/internal/clicklog"
@@ -29,10 +30,11 @@ import (
 // see the contract; also referenced from the docs.
 const DefaultReadyTimeout = 2 * time.Second
 
-// Pinger verifies an upstream dependency is reachable within a bounded time.
-// In production this is wrapped around clickhouse.ClickHouseReader.IsHealthy.
+// Pinger verifies an upstream dependency is reachable within a bounded time
+// and returns the failure without logging it; the Server logs it once per
+// change of state. In production this is clickhouse.ClickHouseReader.Ping.
 type Pinger interface {
-	IsHealthy(ctx context.Context) bool
+	Ping(ctx context.Context) error
 }
 
 // CycleSource returns a single atomic snapshot of everything /status and
@@ -132,6 +134,11 @@ type Server struct {
 	// cluster is non-nil only when EnableCluster has been called. It gates
 	// whether RegisterHandlers mounts /clusterz.
 	cluster *clusterServer
+
+	// pingFailing records whether the last readiness ping failed, so a
+	// failing ping is logged once per change of state. Probes may run
+	// concurrently (/readyz and the /clusterz self-check).
+	pingFailing atomic.Bool
 }
 
 // NewServer constructs a Server. pinger and source may be nil if the
@@ -178,12 +185,8 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// readyzResult is the in-process /readyz outcome. The JSON byte order
-// matters: the previous implementation built the body from a
-// map[string]any whose keys serialize alphabetically, so existing
-// consumers see "checks" first and "status" second. Field order in this
-// struct preserves that contract — flip Checks above Status here and
-// the HTTP body changes for any literal-string matcher in the wild.
+// readyzResult is the in-process /readyz outcome. Field order sets the JSON
+// key order: "checks" first and "status" second.
 //
 // The same struct is used both to render the HTTP response and to
 // embed the leader's self-check inside a /clusterz aggregate without
@@ -203,7 +206,9 @@ func (s *Server) evaluateReadyz(parent context.Context) (int, readyzResult) {
 	if s.pinger != nil {
 		ctx, cancel := context.WithTimeout(parent, s.readyTimeout)
 		defer cancel()
-		if s.pinger.IsHealthy(ctx) {
+		err := s.pinger.Ping(ctx)
+		s.logPing(err)
+		if err == nil {
 			res.Checks["clickhouse"] = "ok"
 		} else {
 			res.Checks["clickhouse"] = "unreachable"
@@ -231,6 +236,25 @@ func (s *Server) evaluateReadyz(parent context.Context) (int, readyzResult) {
 	}
 	res.Status = "not_ready"
 	return http.StatusServiceUnavailable, res
+}
+
+// logPing logs a readiness ping's outcome once per change of state: a warning
+// when the ping starts failing and an info line when it succeeds again, with
+// repeated failures at debug. Probes run at the prober's rate, not the cycle
+// rate, so a warning per probe would flood the log for the whole outage. The
+// polling cycle's own health check still warns on every failed cycle.
+func (s *Server) logPing(err error) {
+	if err != nil {
+		if s.pingFailing.Swap(true) {
+			clicklog.Debug("Readiness probe: ClickHouse ping still failing: %v", err)
+		} else {
+			clicklog.Warn("Readiness probe: ClickHouse ping failed: %v", err)
+		}
+		return
+	}
+	if s.pingFailing.Swap(false) {
+		clicklog.Info("Readiness probe: ClickHouse ping succeeded again")
+	}
 }
 
 // readyz reports 200 only when ClickHouse is reachable (when a pinger is
@@ -277,7 +301,9 @@ type lastCycleJSON struct {
 // clickhouse_healthy requires a closed circuit breaker plus either a successful
 // real cycle or an explicit leader-standby skip. Breaker-open skips still do
 // not count as health evidence, but a long-lived HA follower is healthy when it
-// is intentionally idle behind the leader gate.
+// is intentionally idle behind the leader gate. A successful degraded-mode
+// canary is not recorded as the last cycle at all, so it can neither turn
+// clickhouse_healthy green nor hide the error of the cycle recorded before it.
 func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
 	resp := statusResponse{Version: s.version}
 	cbClosed := true
@@ -297,8 +323,13 @@ func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
 
 		if snap.HaveLastCycle {
 			lc := snap.LastCycle
-			standby = lc.Skipped && lc.SkipReason == model.CycleSkipReasonLeaderStandby
-			cycleOK = lc.Err == "" && (!lc.Skipped || standby)
+			skippedAsStandby := lc.Skipped && lc.SkipReason == model.CycleSkipReasonLeaderStandby
+			cycleOK = lc.Err == "" && (!lc.Skipped || skippedAsStandby)
+			// A promoted instance marks itself active when its first cycle as
+			// leader starts, but records that cycle only when it ends, which
+			// on a loaded host takes seconds. Until then the last recorded
+			// cycle is still a standby skip; the leader gauge is current.
+			standby = skippedAsStandby && snap.Leader == 0
 			resp.LastCycle = &lastCycleJSON{
 				Exported:   lc.Exported,
 				Filtered:   lc.Filtered,

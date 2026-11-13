@@ -3,6 +3,7 @@ package processor
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,7 +154,7 @@ func TestServerVersionStamp_ClearForcesNextRead(t *testing.T) {
 	start := time.Now()
 
 	stamp.Refresh(context.Background(), reader, exporter, start)
-	stamp.Clear(exporter)
+	stamp.Clear(exporter, clearReasonHealthCheck)
 	stamp.Refresh(context.Background(), reader, exporter, start.Add(time.Second))
 
 	if reader.calls != 2 {
@@ -169,10 +170,57 @@ func TestServerVersionStamp_ClearDropsTheStamp(t *testing.T) {
 	var stamp serverVersionStamp
 
 	refreshNow(&stamp, reader, exporter, 0)
-	stamp.Clear(exporter)
+	stamp.Clear(exporter, clearReasonHealthCheck)
 
 	if got := exporter.last(); got != "" {
 		t.Fatalf("last stamp = %q, want cleared", got)
+	}
+}
+
+// The stamp is cleared both when ClickHouse is unreachable and when a degraded
+// cycle runs the canary against a ClickHouse that answers. The log line must
+// state which, not claim ClickHouse is unreachable after a canary succeeded.
+func TestPipeline_ClearVersionLogNamesTheReason(t *testing.T) {
+	tests := []struct {
+		name    string
+		healthy bool
+		canary  bool
+		want    string
+	}{
+		{name: "health check fails", healthy: false, want: "(ClickHouse health check failed)"},
+		{name: "canary runs", healthy: true, canary: true, want: "(canary running in place of the span fetch)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reader, exporter := newVersionFixtures("25.3.2.1")
+			cfg := &config.Config{Monitor: config.MonitorConfig{
+				CheckIntervalS: 10,
+				Canary:         config.CanaryConfig{Enabled: true, ThresholdDurationMs: 60000},
+			}}
+			pipeline := mustLivePipeline(t, reader, exporter, cfg, nil, metrics.NewMetrics())
+			if err := pipeline.Process(context.Background()); err != nil {
+				t.Fatalf("healthy Process: %v", err)
+			}
+			if tt.canary {
+				pipeline.CanaryQuerier = &mockCanaryQuerier{}
+				pipeline.Poller = resilience.NewAdaptivePoller(cfg.GetCheckInterval(), config.BackoffConfig{
+					MaxIntervalS: 300, BackoffFactor: 3,
+				})
+				pipeline.Poller.RecordFailure()
+			}
+			reader.healthy = tt.healthy
+
+			buf := captureProcessorLog(t, "debug")
+			_ = pipeline.Process(context.Background())
+
+			out := buf.String()
+			if !strings.Contains(out, "Clearing exported clickhouse.version (was 25.3.2.1)") || !strings.Contains(out, tt.want) {
+				t.Errorf("log does not name the reason %q:\n%s", tt.want, out)
+			}
+			if tt.canary && strings.Contains(out, "unreachable") {
+				t.Errorf("canary cycle logged ClickHouse as unreachable:\n%s", out)
+			}
+		})
 	}
 }
 

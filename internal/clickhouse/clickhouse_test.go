@@ -5,6 +5,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+	_ "time/tzdata" // Europe/Berlin for the daylight-saving cursor test
+
+	"github.com/coltconsulting/click-dog/internal/model"
 )
 
 // TestBuildTableRef verifies table reference generation
@@ -310,21 +313,21 @@ func TestQueryLogBuilder_AddUserFilters(t *testing.T) {
 		{
 			name:       "whitelist only",
 			whitelist:  []string{"app_frontend", "app_analytics"},
-			wantSQL:    " AND user IN ?",
+			wantSQL:    " AND if(initial_user != '', initial_user, user) IN ?",
 			wantParams: 1,
 		},
 		{
 			name:       "blacklist only",
 			blacklist:  []string{"patient_records"},
-			wantSQL:    " AND user NOT IN ?",
-			wantParams: 1,
+			wantSQL:    " AND user NOT IN ? AND initial_user NOT IN ?",
+			wantParams: 2,
 		},
 		{
 			name:       "both lists",
 			whitelist:  []string{"a"},
 			blacklist:  []string{"b"},
-			wantSQL:    " AND user IN ? AND user NOT IN ?",
-			wantParams: 2,
+			wantSQL:    " AND if(initial_user != '', initial_user, user) IN ? AND user NOT IN ? AND initial_user NOT IN ?",
+			wantParams: 3,
 		},
 	}
 	for _, tt := range tests {
@@ -338,8 +341,8 @@ func TestQueryLogBuilder_AddUserFilters(t *testing.T) {
 				t.Errorf("params length = %d, want %d", len(b.params), tt.wantParams)
 			}
 			if len(tt.whitelist) > 0 && len(tt.blacklist) > 0 {
-				wl := strings.Index(b.query, "AND user IN ?")
-				bl := strings.Index(b.query, "AND user NOT IN ?")
+				wl := strings.Index(b.query, "AND if(initial_user != '', initial_user, user) IN ?")
+				bl := strings.Index(b.query, "AND user NOT IN ? AND initial_user NOT IN ?")
 				if wl < 0 || bl < 0 || wl >= bl {
 					t.Errorf("whitelist clause must precede blacklist clause: %q", b.query)
 				}
@@ -356,20 +359,141 @@ func TestSlowQueriesBuilder_PicksUpUserFilters(t *testing.T) {
 	}
 
 	b := r.slowQueriesBuilder(100, 0, 0, 60*time.Second, 10)
-	if !strings.Contains(b.query, "AND user IN ?") {
+	if !strings.Contains(b.query, "AND if(initial_user != '', initial_user, user) IN ?") {
 		t.Errorf("slowQueriesBuilder did not splice whitelist clause\nSQL: %s", b.query)
 	}
-	if !strings.Contains(b.query, "AND user NOT IN ?") {
+	if !strings.Contains(b.query, "AND user NOT IN ? AND initial_user NOT IN ?") {
 		t.Errorf("slowQueriesBuilder did not splice blacklist clause\nSQL: %s", b.query)
 	}
 
-	b = r.slowQueriesInRangeBuilder(100, 0, 0, time.Now().Add(-time.Hour), time.Now(), 10)
-	if !strings.Contains(b.query, "AND user IN ?") {
-		t.Errorf("slowQueriesInRangeBuilder did not splice whitelist clause\nSQL: %s", b.query)
+	b = r.slowQueriesInRangePageBuilder(100, 0, 0, time.Now().Add(-time.Hour), time.Now(), nil, 10)
+	if !strings.Contains(b.query, "AND if(initial_user != '', initial_user, user) IN ?") {
+		t.Errorf("slowQueriesInRangePageBuilder did not splice whitelist clause\nSQL: %s", b.query)
 	}
-	if !strings.Contains(b.query, "AND user NOT IN ?") {
-		t.Errorf("slowQueriesInRangeBuilder did not splice blacklist clause\nSQL: %s", b.query)
+	if !strings.Contains(b.query, "AND user NOT IN ? AND initial_user NOT IN ?") {
+		t.Errorf("slowQueriesInRangePageBuilder did not splice blacklist clause\nSQL: %s", b.query)
 	}
+}
+
+// TestSlowQueriesInRangePageBuilder_KeysetSQL pins the paged backfill read:
+// rows ordered by (event_time, query_id), the cursor as a strict keyset bound
+// after the row filters, and the page size as the LIMIT.
+func TestSlowQueriesInRangePageBuilder_KeysetSQL(t *testing.T) {
+	r := &ClickHouseReader{blacklistUsers: []string{"svc"}}
+	start := time.Unix(1000, 0).UTC()
+	end := time.Unix(2000, 0).UTC()
+
+	first := r.slowQueriesInRangePageBuilder(100, 0, 0, start, end, nil, 5)
+	if strings.Contains(first.query, "query_id > ?") {
+		t.Errorf("first page carries a cursor bound:\n%s", first.query)
+	}
+	if !strings.HasSuffix(first.query, " ORDER BY event_time ASC, query_id ASC LIMIT ?") {
+		t.Errorf("first page order/limit:\n%s", first.query)
+	}
+	if got := first.params[len(first.params)-1]; got != 5 {
+		t.Errorf("first page LIMIT param = %v, want 5", got)
+	}
+
+	at := time.Unix(1500, 0).UTC()
+	next := r.slowQueriesInRangePageBuilder(100, 0, 0, start, end, CursorAfter(model.QueryLog{QueryID: "q7", EventTime: at}), 5)
+	const bound = " AND (event_time > ? OR (event_time = ? AND query_id > ?)) ORDER BY event_time ASC, query_id ASC LIMIT ?"
+	if !strings.HasSuffix(next.query, bound) {
+		t.Fatalf("next page lacks the keyset bound:\n%s", next.query)
+	}
+	if strings.Index(next.query, "user NOT IN ?") > strings.Index(next.query, bound) {
+		t.Errorf("cursor bound must follow the row filters:\n%s", next.query)
+	}
+	tail := next.params[len(next.params)-4:]
+	if tail[0] != at || tail[1] != at || tail[2] != "q7" || tail[3] != 5 {
+		t.Errorf("cursor and limit params = %v, want [%v %v q7 5]", tail, at, at)
+	}
+	if got, want := strings.Count(next.query, "?"), len(next.params); got != want {
+		t.Errorf("placeholders = %d, params = %d", got, want)
+	}
+
+	unbounded := r.slowQueriesInRangePageBuilder(100, 0, 0, start, end, nil, 0)
+	if strings.Contains(unbounded.query, "LIMIT") {
+		t.Errorf("page size 0 must read without a LIMIT:\n%s", unbounded.query)
+	}
+}
+
+// TestSlowQueriesInRangePageBuilder_BindsUnambiguousTimes pins the cursor
+// through a daylight-saving fall-back. A scanned event_time carries the
+// server's zone, and the driver binds a time in that zone as bare wall-clock
+// text. 02:30 in the hour Berlin repeats names two instants, so a cursor bound
+// that way can move back an hour and re-read pages forever. Every time the
+// page read binds must be in UTC, which the driver renders unambiguously.
+func TestSlowQueriesInRangePageBuilder_BindsUnambiguousTimes(t *testing.T) {
+	berlin, err := time.LoadLocation("Europe/Berlin")
+	if err != nil {
+		t.Fatalf("LoadLocation: %v", err)
+	}
+	firstPass := time.Date(2026, 10, 25, 0, 30, 0, 0, time.UTC).In(berlin) // 02:30 CEST
+	secondPass := firstPass.Add(time.Hour)                                 // 02:30 CET
+	const wall = "2006-01-02 15:04:05"
+	if firstPass.Format(wall) != secondPass.Format(wall) {
+		t.Fatalf("setup: %s and %s should share a wall-clock time", firstPass, secondPass)
+	}
+
+	first := CursorAfter(model.QueryLog{QueryID: "q1", EventTime: firstPass})
+	second := CursorAfter(model.QueryLog{QueryID: "q1", EventTime: secondPass})
+	if first.EventTime.Format(wall) == second.EventTime.Format(wall) {
+		t.Errorf("cursors one hour apart render alike: %s", first.EventTime.Format(wall))
+	}
+
+	r := &ClickHouseReader{blacklistQueries: []string{"secret"}}
+	start := time.Date(2026, 10, 25, 0, 0, 0, 0, berlin)
+	end := time.Date(2026, 10, 25, 6, 0, 0, 0, berlin)
+	for _, cursor := range []*QueryLogCursor{nil, second, {EventTime: secondPass, QueryID: "q1"}} {
+		b := r.slowQueriesInRangePageBuilder(0, 0, 0, start, end, cursor, 5)
+		times := 0
+		for i, p := range b.params {
+			if ts, ok := p.(time.Time); ok {
+				times++
+				if ts.Location() != time.UTC {
+					t.Errorf("param %d = %s in %s, want UTC", i, ts, ts.Location())
+				}
+			}
+		}
+		if want := 3 + 2*boolInt(cursor != nil); times != want {
+			t.Errorf("bound %d times, want %d (range, lookup floor, cursor)", times, want)
+		}
+	}
+}
+
+// TestSlowQueriesInRangePageBuilder_LookupStartsAtTheCursor pins the
+// blacklist_queries initial-query lookup of a later page: its rows finished
+// at or after the cursor, so their initial queries did too, and the lookup
+// reads from there instead of from the start of the range.
+func TestSlowQueriesInRangePageBuilder_LookupStartsAtTheCursor(t *testing.T) {
+	r := &ClickHouseReader{queryLogRef: "system.query_log", blacklistQueries: []string{"secret"}}
+	start := time.Unix(1000, 0).UTC()
+	end := time.Unix(9000, 0).UTC()
+	at := time.Unix(5000, 0).UTC()
+	lookupFloor := func(b *queryLogBuilder) any {
+		i := strings.Index(b.query, "WHERE is_initial_query AND event_time >= ?")
+		if i < 0 {
+			t.Fatalf("no initial-query lookup:\n%s", b.query)
+		}
+		return b.params[strings.Count(b.query[:i], "?")]
+	}
+	if got := lookupFloor(r.slowQueriesInRangePageBuilder(0, 0, 0, start, end, nil, 5)); got != start {
+		t.Errorf("first page lookup floor = %v, want the range start %v", got, start)
+	}
+	if got, want := lookupFloor(r.slowQueriesInRangePageBuilder(0, 0, 0, start, end, &QueryLogCursor{EventTime: at, QueryID: "q"}, 5)), at.Add(-pageLookupSkew); got != want {
+		t.Errorf("later page lookup floor = %v, want the cursor less the skew margin %v", got, want)
+	}
+	near := start.Add(10 * time.Second)
+	if got := lookupFloor(r.slowQueriesInRangePageBuilder(0, 0, 0, start, end, &QueryLogCursor{EventTime: near, QueryID: "q"}, 5)); got != start {
+		t.Errorf("lookup floor near the range start = %v, want the range start %v", got, start)
+	}
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func TestSlowQueriesBuilder_NoUserFilterByDefault(t *testing.T) {
@@ -461,10 +585,9 @@ func TestUserFilter_DefensiveCopy(t *testing.T) {
 func TestUserFilter_BlacklistNotInEnrichSelect(t *testing.T) {
 	// Regression: blacklist must NOT be spliced into enrichSelect.
 	// Pushing it down to SQL would strip blacklisted users' rows from the
-	// enrichment map; resolveSpanUser would then return "" and the Go-level
-	// blacklist (permissive on unknown users by design) would silently let
-	// blacklisted spans through. Blacklist is enforced exclusively at the
-	// Go layer for the enrichment path.
+	// enrichment map, leaving the Go-level blacklist unable to identify the
+	// user it is meant to drop. Blacklist is enforced exclusively at the Go
+	// layer for the enrichment path.
 	r := &ClickHouseReader{enrichSelect: queryLogEnrichSelectSQL}
 	r.setUserFilter([]string{"app_frontend"}, []string{"patient_records"})
 
@@ -487,9 +610,9 @@ func TestUserFilter_BlacklistNotInEnrichSelect(t *testing.T) {
 
 func TestUserFilter_EnrichmentParamCountMatchesPlaceholders(t *testing.T) {
 	// FetchQueryLogByQueryIDs assembles params as
-	//   {queryIDs, lookbackDays} ++ enrichExtraParams
+	//   {queryIDs, lookbackDays, eventTimeFloor} ++ enrichExtraParams
 	// so the count of ? placeholders in enrichSelect must equal
-	// 2 + len(enrichExtraParams). If a future change adds a new fixed ?
+	// 3 + len(enrichExtraParams). If a future change adds a new fixed ?
 	// param to the template without inserting it before the append of
 	// enrichExtraParams, this test fires.
 	cases := []struct {
@@ -508,9 +631,9 @@ func TestUserFilter_EnrichmentParamCountMatchesPlaceholders(t *testing.T) {
 			r.setUserFilter(tt.whitelist, tt.blacklist)
 
 			placeholders := strings.Count(r.enrichSelect, "?")
-			expected := 2 + len(r.enrichExtraParams)
+			expected := 3 + len(r.enrichExtraParams)
 			if placeholders != expected {
-				t.Errorf("placeholder/param mismatch: %d ? in SQL, want %d (2 fixed + %d extras)\nSQL: %s",
+				t.Errorf("placeholder/param mismatch: %d ? in SQL, want %d (3 fixed + %d extras)\nSQL: %s",
 					placeholders, expected, len(r.enrichExtraParams), r.enrichSelect)
 			}
 		})
@@ -561,9 +684,9 @@ func TestUserFilter_SplicesEnrichSelect(t *testing.T) {
 		{
 			name:              "whitelist only",
 			whitelist:         []string{"app_frontend"},
-			wantContains:      []string{"AND user IN ?"},
+			wantContains:      []string{"AND if(initial_user != '', initial_user, user) IN ?"},
 			wantParamCount:    1,
-			wantOrderByBefore: "AND user IN ?",
+			wantOrderByBefore: "AND if(initial_user != '', initial_user, user) IN ?",
 		},
 		{
 			// Blacklist intentionally does NOT touch enrichSelect — see
@@ -577,9 +700,9 @@ func TestUserFilter_SplicesEnrichSelect(t *testing.T) {
 			name:              "both lists splice whitelist only",
 			whitelist:         []string{"a"},
 			blacklist:         []string{"b"},
-			wantContains:      []string{"AND user IN ?"},
+			wantContains:      []string{"AND if(initial_user != '', initial_user, user) IN ?"},
 			wantParamCount:    1,
-			wantOrderByBefore: "AND user IN ?",
+			wantOrderByBefore: "AND if(initial_user != '', initial_user, user) IN ?",
 		},
 	}
 	for _, tt := range tests {

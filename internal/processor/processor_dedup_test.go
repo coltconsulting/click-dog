@@ -1,13 +1,18 @@
 package processor
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	lru "github.com/hashicorp/golang-lru/v2"
 
+	"github.com/coltconsulting/click-dog/internal/clicklog"
 	"github.com/coltconsulting/click-dog/internal/config"
 	"github.com/coltconsulting/click-dog/internal/metrics"
 	"github.com/coltconsulting/click-dog/internal/model"
@@ -306,5 +311,47 @@ func TestDedup_SameCycleDuplicatePartialSuccess_UnacceptedKeyRetriesNextCycle(t 
 	}
 	if !cache.Contains(model.KeyOf(spanB)) {
 		t.Error("retry-accepted span B must be marked seen")
+	}
+}
+
+// TestDedup_RereadOverlapDoesNotWarn pins that a cycle made mostly of spans
+// the walk read again on purpose logs no duplicate-ratio advice. Release
+// testing saw "High duplicate ratio ... consider increasing dedup_cache_size"
+// on healthy cycles, where the late-flush rescan re-reads delivered traces and
+// the dedup cache suppresses them as designed.
+func TestDedup_RereadOverlapDoesNotWarn(t *testing.T) {
+	if err := clicklog.InitLogger("info", "", "text", 0, 0); err != nil {
+		t.Fatalf("InitLogger: %v", err)
+	}
+	t.Cleanup(clicklog.CloseLogger)
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	trace := uuid.MustParse("44444444-4444-4444-4444-444444444444")
+	delivered := []model.OpenTelemetrySpan{
+		{TraceID: trace, SpanID: 1, OperationName: "op"},
+		{TraceID: trace, SpanID: 2, OperationName: "op"},
+		{TraceID: trace, SpanID: 3, OperationName: "op"},
+	}
+	cache := mustDedupCache(t)
+	for _, s := range delivered {
+		cache.Add(model.KeyOf(s), true)
+	}
+	fresh := model.OpenTelemetrySpan{TraceID: trace, SpanID: 4, OperationName: "op"}
+
+	cycle, err := runLiveDedupCycle(t, &mockLiveReader{healthy: true}, cache, &mockExporter{}, append(delivered, fresh))
+	if err != nil {
+		t.Fatalf("Pipeline.Process: %v", err)
+	}
+	if cycle.Exported != 1 || cycle.Duplicates != 3 {
+		t.Fatalf("cycle exported=%d duplicates=%d, want 1/3", cycle.Exported, cycle.Duplicates)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "Exported: 1, Filtered: 0, Duplicates: 3") {
+		t.Errorf("cycle summary missing from logs:\n%s", out)
+	}
+	if strings.Contains(out, "duplicate ratio") || strings.Contains(out, "dedup_cache_size") {
+		t.Errorf("healthy re-read overlap logged duplicate-ratio advice:\n%s", out)
 	}
 }

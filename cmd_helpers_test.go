@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"errors"
+	"flag"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -372,7 +376,7 @@ func TestBuildExporters_LabelsNamesAndOrder(t *testing.T) {
 }
 
 // A constructor failure must land in InitErr for that entry — not abort the
-// build — so `check` and `test-span` can report the broken exporter and keep
+// build — so `check` and `test export` can report the broken exporter and keep
 // probing the rest.
 func TestBuildExporters_InitErrorDoesNotAbortBuild(t *testing.T) {
 	cfg := &config.Config{}
@@ -403,5 +407,118 @@ func TestBuildExporters_InitErrorDoesNotAbortBuild(t *testing.T) {
 	}
 	if built[1].InitErr != nil || built[1].Exporter == nil {
 		t.Errorf("built[1] = {InitErr: %v}, want working exporter after a failed one", built[1].InitErr)
+	}
+}
+
+// zeroReader is an endless stream of zero bytes, the /dev/zero stand-in. Tests
+// always wrap it in io.LimitReader so a regression cannot allocate without
+// bound.
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
+}
+
+// repeatByteReader is an endless stream of one byte with no newline.
+type repeatByteReader byte
+
+func (r repeatByteReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = byte(r)
+	}
+	return len(p), nil
+}
+
+// countingReader counts the bytes read through it.
+type countingReader struct {
+	r io.Reader
+	n int
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += n
+	return n, err
+}
+
+func TestReadPromptLine(t *testing.T) {
+	exact := strings.Repeat("a", maxPromptLineBytes)
+	for _, tc := range []struct {
+		name     string
+		in       string
+		wantLine string
+		wantErr  error
+	}{
+		{"line", "answer\nnext\n", "answer", nil},
+		{"crlf keeps the carriage return for the caller to trim", "y\r\n", "y\r", nil},
+		{"partial line at EOF", "partial", "partial", io.EOF},
+		{"empty input", "", "", io.EOF},
+		{"exactly the bound", exact + "\n", exact, nil},
+		{"exactly the bound with CRLF", exact + "\r\n", exact + "\r", nil},
+		{"one byte over the bound", exact + "a\n", "", errPromptLineTooLong},
+		{"one byte over the bound with CRLF", exact + "a\r\n", "", errPromptLineTooLong},
+		{"CR at the bound not followed by LF", exact + "\rx\n", "", errPromptLineTooLong},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			line, err := readPromptLine(bufio.NewReader(strings.NewReader(tc.in)))
+			if line != tc.wantLine || !errors.Is(err, tc.wantErr) {
+				t.Errorf("readPromptLine = %q, %v; want %q, %v", line, err, tc.wantLine, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestReadPromptLine_EndlessLineIsBounded is the /dev/zero case: an input
+// with no newline is refused after the bound instead of buffered without
+// limit.
+func TestReadPromptLine_EndlessLineIsBounded(t *testing.T) {
+	input := &countingReader{r: io.LimitReader(zeroReader{}, 1<<20)}
+	line, err := readPromptLine(bufio.NewReader(input))
+	if line != "" || !errors.Is(err, errPromptLineTooLong) {
+		t.Fatalf("readPromptLine = %q, %v; want errPromptLineTooLong", line, err)
+	}
+	if input.n > 2*maxPromptLineBytes {
+		t.Errorf("read %d bytes, want at most %d", input.n, 2*maxPromptLineBytes)
+	}
+}
+
+func TestRejectLeftoverArgs(t *testing.T) {
+	for _, tc := range []struct {
+		args      []string
+		want      string
+		wantNoTip bool
+	}{
+		{args: []string{"--fail-on", "critical"}},
+		{args: []string{"--redact-dimensions=false", "--fail-on", "critical"}},
+		{args: []string{"--redact-dimensions", "false", "--fail-on", "critical"}, want: `click-dog x: unexpected argument "false": boolean flags take their value with =, e.g. --redact-dimensions=false`},
+		{args: []string{"-redact-dimensions", "true"}, want: `e.g. --redact-dimensions=true`},
+		{args: []string{"foo", "--fail-on", "critical"}, want: `click-dog x: unexpected argument "foo"`},
+		{args: []string{"--fail-on", "critical", "extra"}, want: `click-dog x: unexpected argument "extra"`},
+		{args: []string{"--", "--fail-on"}, want: `click-dog x: unexpected argument "--fail-on"`},
+		// A true or false that follows no boolean flag gets no boolean tip.
+		{args: []string{"false"}, want: `click-dog x: unexpected argument "false"`, wantNoTip: true},
+		{args: []string{"--fail-on", "warning", "true"}, want: `click-dog x: unexpected argument "true"`, wantNoTip: true},
+	} {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			fs := flag.NewFlagSet("x", flag.ContinueOnError)
+			fs.SetOutput(io.Discard)
+			fs.Bool("redact-dimensions", false, "")
+			fs.String("fail-on", "none", "")
+			if err := fs.Parse(tc.args); err != nil {
+				t.Fatal(err)
+			}
+			err := rejectLeftoverArgs("click-dog x", fs, tc.args)
+			switch {
+			case tc.want == "":
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			case err == nil || !strings.Contains(err.Error(), tc.want):
+				t.Errorf("error = %v, want it to contain %q", err, tc.want)
+			case tc.wantNoTip && strings.Contains(err.Error(), "boolean"):
+				t.Errorf("error = %v, want no boolean tip", err)
+			}
+		})
 	}
 }

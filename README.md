@@ -7,21 +7,26 @@
 
 # Click-Dog
 
-> [!NOTE]
-> **Public beta.** Click-Dog is newly open source, so the public API and config may still change. It has run in production for months.
-
-Operational query observability without making the source system harder to run.
-
 An open-source project from [Futureproof.dev](https://futureproof.dev/), created and maintained by [Colin Taylor](https://futureproof.dev/profile).
 
-Click-Dog turns database telemetry into traces, dashboards, and query-analysis
-signals for OTEL-compatible backends such as Datadog, Honeycomb, Grafana Tempo,
-and more. Today it reads ClickHouse `system.opentelemetry_span_log` for live
-telemetry and `system.query_log` for historical backfill; additional source
-adapters are planned.
+Click-Dog shows the work inside each ClickHouse query from the application's
+own trace. ClickHouse records each step of a query as a span in
+`system.opentelemetry_span_log`, such as reading table parts or running part of
+the query on a shard. Click-Dog reads those spans and `system.query_log` over a
+read-only connection and exports each slow query's spans over OTLP/gRPC or to Splunk HEC.
+When the application passes its `traceparent` to ClickHouse, the spans appear
+inside the application's trace
+([trace context propagation](https://click-dog.com/span-attributes/#trace-context-propagation)).
 
-It limits source load with zero DDL, read-only connections, bounded export
-volume, SQL-level filtering, circuit breaker protection, and adaptive backoff.
+Tempo, Jaeger, and other receivers that need no auth headers take OTLP
+directly; Datadog and Honeycomb need a Collector or Agent in between.
+`click-dog analyze` builds local query-family and regression reports from the
+same logs.
+
+It needs no DDL and only read grants (`SELECT`, plus `REMOTE` in cluster
+mode), and bounds its load on ClickHouse
+with SQL-level filtering, a per-cycle span cap, a circuit breaker, and adaptive
+backoff.
 
 ## What ships
 
@@ -56,8 +61,15 @@ authentication, and the archive SHA-256 must still match.
 To authenticate `install.sh` itself before giving it root privileges, follow
 the optional [bootstrap verification](https://click-dog.com/verify-releases/#authenticate-installsh-before-sudo).
 
-For an unattended host install, run the downloaded script as
-`sudo env CLICKHOUSE_PASSWORD=... bash install.sh install -c <collector-host>:4317 --systemd`.
+For an unattended host install, pass the password through the environment:
+
+```bash
+read -rs CLICKHOUSE_PASSWORD; export CLICKHOUSE_PASSWORD
+sudo --preserve-env=CLICKHOUSE_PASSWORD bash install.sh install -c <collector-host>:4317 --systemd
+```
+
+A collector that is not on this host gets TLS; add `--otel-secure=false` if it
+serves plaintext, as a Collector or Datadog Agent on 4317 does by default.
 The [Install Guide](https://click-dog.com/install/) covers the standard host
 path and links to focused Ansible, Kubernetes, Docker, update, and verification
 guides.
@@ -65,9 +77,9 @@ guides.
 For a pre-verified binary, use `-b /path/to/click-dog` to skip the automatic
 download.
 
-### Manual download (verify yourself)
+### Manual download and verification
 
-If you cannot run the installer, follow the verified manual recipe at
+For hosts that cannot use the installer, follow the verified manual recipe at
 [Verifying releases manually](https://click-dog.com/verify-releases/#verifying-releases-manually).
 It walks through fetching the archive plus the signed `checksums.txt`,
 verifying the signature against the pinned release-workflow identity, and
@@ -87,8 +99,8 @@ make build
 
 ## Quick Start
 
-Copy one of the parity-tested starter configs from `examples/` (also included
-in every binary archive), or create `click-dog.yaml`:
+Copy one of the starter configs from `examples/` (also included in every
+binary archive), or create `click-dog.yaml`:
 
 ```yaml
 clickhouse:
@@ -127,11 +139,10 @@ click-dog validate --config click-dog.yaml
 > **Datadog dashboards:** the config above exports traces, which is enough for the
 > **Application Query Analysis** and **Exported User Activity** dashboards
 > (`click-dog create-dashboards --dashboard query` / `--dashboard activity`).
-> The **Health** dashboard reads click-dog's own metrics.
+> The **Health** dashboard reads Click-Dog's own metrics.
 > For the OTLP path, enable `metrics.otlp.enabled: true`. The
 > installer-generated / `click-dog init --profile production` configs enable the
-> Prometheus `/metrics` endpoint for the legacy Datadog Agent OpenMetrics scrape
-> fallback. See
+> Prometheus `/metrics` endpoint for a Datadog Agent OpenMetrics check. See
 > [Datadog Self-Monitoring](https://click-dog.com/integrations/datadog/self-monitoring/).
 
 ## Modes
@@ -140,7 +151,9 @@ click-dog validate --config click-dog.yaml
 |------|-------|
 | **Scheduled** (default) | Continuous polling with circuit breaker + adaptive backoff |
 | **Backfill** | One-shot historical export over an RFC 3339 range: `backfill --start YYYY-MM-DDT00:00:00Z --end YYYY-MM-DDT00:00:00Z` |
-| **Validate** | Check config and exit: `validate` |
+| **Validate** | Check config offline and exit: `validate` |
+| **Check** | Validate config, then check ClickHouse, grants, recent spans, and exporter reachability: `check` |
+| **Init** | Render a starter config: `init` or `init --wizard` |
 | **Dry-run** | Read real data, discard exports, print a one-shot summary and exit: `--dry-run` |
 | **Test** | Exercise exporter acceptance, OTLP receiver TLS, or native ClickHouse tracing without starting the scheduled service: `test export` / `test tls` / `test tracing` |
 | **Analyze** | Local read-only query reports: `analyze queries` and `analyze trace` |
@@ -159,9 +172,9 @@ See [Operation Modes](https://click-dog.com/modes/#click-dog-deploy-deployment-m
 - [Query Analysis](https://click-dog.com/query-analysis/): query families, known-good baselines, regression findings, policy gates, and notifications
 - [Security and Privacy](https://click-dog.com/security/): query-text modes, secret handling, and privacy boundaries
 - [Observability](https://click-dog.com/observability/): `/metrics`, `/healthz`, `/readyz`, `/status`, webhooks, per-sink export counters
-- [Operating Contract](https://click-dog.com/operating/): beta delivery guarantees and loss windows, compatibility matrix, performance tuning, cost estimation, cluster/sidecar topology, config at scale
-- [Span Attributes](https://click-dog.com/span-attributes/): live spans, backfill query attributes, normalized query family
-- [Datadog](https://click-dog.com/integrations/datadog/) / [Honeycomb](https://click-dog.com/integrations/honeycomb/) / [Generic OTLP](https://click-dog.com/integrations/generic-otlp/): backend integration guides
+- [Operating Contract](https://click-dog.com/operating/): delivery guarantees and loss windows, compatibility policy, performance tuning, cost estimation, cluster/sidecar topology, config at scale
+- [Span Attributes](https://click-dog.com/span-attributes/): live spans, backfill query attributes, normalized query hash and preview
+- [Datadog](https://click-dog.com/integrations/datadog/) / [Honeycomb](https://click-dog.com/integrations/honeycomb/) / [Generic OTLP](https://click-dog.com/integrations/generic-otlp/) / [Splunk HEC](https://click-dog.com/integrations/splunk-hec/): backend integration guides
 - [Architecture](https://click-dog.com/architecture/): source, processing pipeline, sinks, and deployment topology
 - [Production Support](https://click-dog.com/support/): community help and direct deployment, integration, and troubleshooting support from Click-Dog's maintainer
 
@@ -169,7 +182,7 @@ See [Operation Modes](https://click-dog.com/modes/#click-dog-deploy-deployment-m
 
 Every target is prefixed by what it does: `test-` runs tests, `check-` runs
 tests plus linting and analysis, `build-` produces artifacts, `release-` ships
-something, and `print-` only tells you something. `make help` lists them all.
+something, and `print-` only reports information. `make help` lists them all.
 
 | Target | Does |
 |---|---|

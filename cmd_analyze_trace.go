@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/coltconsulting/click-dog/internal/analysis"
 	"github.com/coltconsulting/click-dog/internal/clickhouse"
@@ -120,10 +123,11 @@ type fanoutSet struct {
 type traceDrilldownSource interface {
 	queryAnalysisSource
 
-	FetchTraceIDsByQueryID(ctx context.Context, queryID string, lookbackDays, limit int) ([]string, error)
-	FetchSpansForTraceIDs(ctx context.Context, traceIDs []string, lookbackDays, limit int, blacklistOperations []string) ([]model.OpenTelemetrySpan, error)
+	FetchTraceIDsByQueryID(ctx context.Context, queryID string, lookbackDays int, since time.Time, limit int) ([]string, time.Time, error)
+	FetchSpansForTraceIDs(ctx context.Context, traceIDs []string, lookbackDays int, since time.Time, limit int, blacklistOperations []string) ([]model.OpenTelemetrySpan, error)
 	FetchRecentQueryCandidates(ctx context.Context, opts clickhouse.RecentQueryCandidateOptions) ([]model.QueryLog, error)
 	FetchCurrentQueryCandidates(ctx context.Context, opts clickhouse.CurrentQueryCandidateOptions) ([]model.QueryLog, error)
+	ServerTime(ctx context.Context) (time.Time, error)
 }
 
 func runAnalyzeTrace(args []string, out, errOut io.Writer) int {
@@ -158,8 +162,10 @@ Usage:
   click-dog analyze trace --normalized-query-hash <hash> [flags]
 
 Finds a query, then the native trace IDs that carry it via the
-clickhouse.query_id span attribute, fetches the trace's spans, and fans out to
-query-log stats and the matching query-family rollup. With --source recent the
+clickhouse.query_id span attribute, fetches the trace's spans, and reports the
+--fanout views: by default the trace and its query-log stats; similar adds the
+matching query-family rollup and findings adds that family's analysis
+findings. With --source recent the
 command searches system.query_log inside the lookback window; --source current
 searches the running queries in system.processes. --query-id and --trace-id are
 direct drills that skip candidate search; --normalized-query-hash does an exact
@@ -197,6 +203,10 @@ Flags:
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
+		return 2
+	}
+	if err := rejectLeftoverArgs("click-dog analyze trace", fs, args); err != nil {
+		_, _ = fmt.Fprintln(errOut, err)
 		return 2
 	}
 	if *format != "table" && *format != "json" {
@@ -251,6 +261,10 @@ Flags:
 			_, _ = fmt.Fprintf(errOut, "click-dog analyze trace: %v\n", err)
 			return 2
 		}
+		if err := validateTraceIdentity(*traceID, *normalizedHash); err != nil {
+			_, _ = fmt.Fprintf(errOut, "click-dog analyze trace: %v\n", err)
+			return 2
+		}
 
 		fanoutSet, err = parseFanout(*fanout)
 		if err != nil {
@@ -295,6 +309,45 @@ Flags:
 		return runAnalyzeTraceWizard(os.Stdin, out, errOut, reader, cfg, resolvedPath, opts, *format, *output)
 	}
 	return analyzeTraceWithSource(reader, cfg, resolvedPath, opts, *format, *output, out, errOut)
+}
+
+// validateTraceIdentity rejects a malformed --trace-id or
+// --normalized-query-hash before any connection opens. Neither can match a
+// span-log or query-log row, so without this a typo read as a successful
+// drilldown that found nothing, or failed later as an operational error.
+func validateTraceIdentity(traceID, normalizedHash string) error {
+	if err := validateTraceIDFlag(traceID); err != nil {
+		return err
+	}
+	return validateNormalizedHashFlag(normalizedHash)
+}
+
+// validateTraceIDFlag accepts the trace ID forms the span-log reader parses:
+// 32 hex digits, with or without UUID hyphens. The all-zero ID is never a
+// valid trace. An empty value means the flag was not given.
+func validateTraceIDFlag(traceID string) error {
+	if traceID == "" {
+		return nil
+	}
+	id, err := uuid.Parse(traceID)
+	if err != nil || id == uuid.Nil {
+		return fmt.Errorf("invalid --trace-id %q: want a nonzero 32-hex-digit trace ID, with or without UUID hyphens", traceID)
+	}
+	return nil
+}
+
+// validateNormalizedHashFlag accepts the unsigned 64-bit decimal that
+// system.query_log.normalized_query_hash holds. Zero is rejected like the
+// all-zero trace ID: analysis treats a zero hash as no hash. An empty value
+// means the flag was not given.
+func validateNormalizedHashFlag(normalizedHash string) error {
+	if normalizedHash == "" {
+		return nil
+	}
+	if h, err := strconv.ParseUint(normalizedHash, 10, 64); err != nil || h == 0 {
+		return fmt.Errorf("invalid --normalized-query-hash %q: want a nonzero unsigned decimal integer, as system.query_log.normalized_query_hash shows it", normalizedHash)
+	}
+	return nil
 }
 
 // resolveTraceSource validates --source and reconciles it with the identity

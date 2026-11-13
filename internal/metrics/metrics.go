@@ -29,9 +29,9 @@ type Metrics struct {
 
 	// Per-outcome cycle counters, exposed as cycle_results_total{result}.
 	// Mutually exclusive: every cycle increments exactly one of these, so their
-	// sum is the total cycle count. "skipped" covers cycles that touched no
-	// ClickHouse work (breaker open without canary, canary sentinel resolved to
-	// non-error). Kept as a fixed three-value enum to keep the result label
+	// sum is the total cycle count. "skipped" covers cycles that ran no span
+	// fetch (breaker open without canary, a cluster-mode standby, a successful
+	// canary). Kept as a fixed three-value enum to keep the result label
 	// low-cardinality.
 	cyclesSuccess int64
 	cyclesError   int64
@@ -228,6 +228,19 @@ func (m *Metrics) RecordSkippedCycle(durationMs int64) {
 // no-op.
 func (m *Metrics) RecordSkippedCycleWithReason(durationMs int64, reason string) {
 	m.recordCycle(0, 0, 0, durationMs, nil, true, reason)
+}
+
+// RecordCanaryCycle records a cycle that ran the degraded-mode canary in place
+// of a span fetch, and whose canary succeeded. It counts as skipped: a count
+// query and one exported span cannot show that a span fetch would succeed.
+// The last cycle stays as the cycle recorded before it, so /status and the
+// last-cycle gauges keep describing that cycle, including its error, and
+// last_success_timestamp_seconds is not advanced. A failed canary is an error
+// cycle and goes through RecordCycle.
+func (m *Metrics) RecordCanaryCycle() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cyclesSkipped++
 }
 
 // RecordExportResult records per-sink export counters from an ExportResult.
@@ -572,7 +585,6 @@ func (m *Metrics) render() []byte {
 	_, _ = fmt.Fprintf(&b, "%s %.1f\n", name, m.backoffIntervalSecs)
 
 	name = writePromMetricHeader(&b, MetricLastSuccessTimestampSeconds)
-	_, _ = fmt.Fprintf(&b, "%s %d\n", name, m.lastSuccessUnix)
 	role := "active"
 	if m.leader == 0 {
 		role = "standby"
@@ -692,7 +704,7 @@ func promLabelValue(s string) string {
 // share a port, avoiding a second goroutine + socket.
 type MuxExtension func(*http.ServeMux)
 
-// StartMetricsServer starts the scrape HTTP server for /metrics and /health.
+// StartMetricsServer starts the scrape HTTP server for /metrics.
 // Additional extensions may register handlers on the same mux (e.g. /healthz,
 // /readyz, /status from the health package).
 //
@@ -709,16 +721,6 @@ type MuxExtension func(*http.ServeMux)
 func StartMetricsServer(addr string, metrics *Metrics, extensions ...MuxExtension) (*http.Server, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/metrics", metrics.Handler())
-	// /health is the legacy always-200 liveness endpoint kept for
-	// backward compatibility. For K8s probes prefer /healthz (liveness)
-	// and /readyz (readiness) from the health package — they're mounted
-	// on this same mux when listener sharing is enabled and encode
-	// actual readiness signals rather than just "process is up".
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"status":"ok"}`)
-	})
 	for _, ext := range extensions {
 		ext(mux)
 	}
@@ -745,7 +747,7 @@ func StartAdminServer(addr string, flushChan chan<- struct{}) (*http.Server, err
 	}
 
 	if !isLoopbackAddress(addr) {
-		clicklog.Warn("Admin listener bound to non-loopback address %s — POST /flush is reachable off-host. Use 127.0.0.1:9091 (default) unless you have a specific reason.", addr)
+		clicklog.Warn("Admin listener bound to non-loopback address %s — POST /flush is reachable off-host. Use 127.0.0.1:9091 (default) unless there is a specific reason not to.", addr)
 	}
 
 	mux := http.NewServeMux()

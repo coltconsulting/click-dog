@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -71,15 +70,15 @@ func TestDispatch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var out, errOut bytes.Buffer
-			code, fellThrough, argv := dispatch(tt.args, &out, &errOut)
+			code, fellThrough, opts := dispatch(tt.args, &out, &errOut)
 
 			if fellThrough != tt.wantThrough {
 				t.Errorf("fellThrough = %v, want %v", fellThrough, tt.wantThrough)
 			}
-			// A plain fall-through hands the original args back unchanged for
-			// flag parsing (only the backfill verb rewrites them).
-			if tt.wantThrough && !slices.Equal(argv, tt.args) {
-				t.Errorf("fall-through argv = %v, want %v", argv, tt.args)
+			// A plain fall-through leaves the root flags to main(); only the
+			// backfill verb returns parsed options.
+			if opts != nil {
+				t.Errorf("fall-through opts = %+v, want nil", opts)
 			}
 			if !tt.wantThrough && code != tt.wantCode {
 				t.Errorf("exitCode = %d, want %d", code, tt.wantCode)
@@ -514,9 +513,7 @@ func TestFetchAndProcessSpans(t *testing.T) {
 				continue
 			}
 
-			queryText := span.Attributes["db.statement"]
-			clientAddr := span.Attributes["client.address"]
-			if qf.ShouldFilter(span.OperationName, queryText, clientAddr) {
+			if rejectsSpan(qf, span) {
 				filtered++
 				continue
 			}
@@ -593,9 +590,7 @@ func TestFetchAndProcessSpans(t *testing.T) {
 		if seenSpans.Contains(model.KeyOf(span)) {
 			t.Error("Should not be seen yet")
 		}
-		queryText := span.Attributes["db.statement"]
-		clientAddr := span.Attributes["client.address"]
-		if !qf.ShouldFilter(span.OperationName, queryText, clientAddr) {
+		if !rejectsSpan(qf, span) {
 			result, err := exporter.ExportSpans(ctx, []model.OpenTelemetrySpan{span})
 			if err != nil {
 				t.Fatalf("Failed to export: %v", err)
@@ -680,9 +675,7 @@ func TestFetchAndProcessSpans(t *testing.T) {
 				if seenSpans.Contains(model.KeyOf(span)) {
 					continue
 				}
-				queryText := span.Attributes["db.statement"]
-				clientAddr := span.Attributes["client.address"]
-				if qf.ShouldFilter(span.OperationName, queryText, clientAddr) {
+				if rejectsSpan(qf, span) {
 					continue
 				}
 				toExport = append(toExport, span)
@@ -818,4 +811,12 @@ func TestProcessQueriesBatch_WithBatching(t *testing.T) {
 	if len(spans) != 5 {
 		t.Errorf("Expected 5 spans with batching, got %d", len(spans))
 	}
+}
+
+// rejectsSpan applies the client, operation, and query-text filters to one
+// span, for tests that simulate a pipeline over hand-built spans.
+func rejectsSpan(qf *filter.QueryFilter, span model.OpenTelemetrySpan) bool {
+	return !qf.AllowsClient(span.Attributes["client.address"]) ||
+		!qf.AllowsOperation(span.OperationName) ||
+		qf.IsBlacklistedQuery(span.Attributes["db.statement"])
 }

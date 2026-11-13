@@ -59,11 +59,18 @@ type fakeTracingTestReader struct {
 	fetchCalls     int
 	traceIDs       [][]string
 	lookbackDays   []int
+	sinces         []time.Time
 	limits         []int
 	blacklists     [][]string
+	serverTime     time.Time
+	serverTimeErr  error
 	gotSpanContext oteltrace.SpanContext
 	gotQueryID     string
 	closed         bool
+}
+
+func (r *fakeTracingTestReader) ServerTime(context.Context) (time.Time, error) {
+	return r.serverTime, r.serverTimeErr
 }
 
 func (r *fakeTracingTestReader) ExecuteTracingTestQuery(_ context.Context, spanContext oteltrace.SpanContext, queryID string) error {
@@ -73,10 +80,11 @@ func (r *fakeTracingTestReader) ExecuteTracingTestQuery(_ context.Context, spanC
 	return r.queryErr
 }
 
-func (r *fakeTracingTestReader) FetchSpansForTraceIDs(_ context.Context, traceIDs []string, lookbackDays, limit int, blacklist []string) ([]model.OpenTelemetrySpan, error) {
+func (r *fakeTracingTestReader) FetchSpansForTraceIDs(_ context.Context, traceIDs []string, lookbackDays int, since time.Time, limit int, blacklist []string) ([]model.OpenTelemetrySpan, error) {
 	r.fetchCalls++
 	r.traceIDs = append(r.traceIDs, append([]string(nil), traceIDs...))
 	r.lookbackDays = append(r.lookbackDays, lookbackDays)
+	r.sinces = append(r.sinces, since)
 	r.limits = append(r.limits, limit)
 	r.blacklists = append(r.blacklists, append([]string(nil), blacklist...))
 	if r.fetchCalls <= len(r.fetchErrors) && r.fetchErrors[r.fetchCalls-1] != nil {
@@ -185,15 +193,15 @@ func TestRunTest_DispatchHelpAndInvalidUsage(t *testing.T) {
 func TestRootHelpPromotesTestCommandFamily(t *testing.T) {
 	var out bytes.Buffer
 	printUsage(&out)
-	for _, want := range []string{"click-dog test <subcommand>", "Deprecated alias for 'click-dog test export'", "click-dog test tracing --config"} {
+	for _, want := range []string{"click-dog test <subcommand>", "click-dog test export --config", "click-dog test tracing --config"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("root help missing %q:\n%s", want, out.String())
 		}
 	}
 }
 
-func TestTestSpanAlias_ParityAndDeprecationNotice(t *testing.T) {
-	_, addr, cleanup := startMockOTELServer(t)
+func TestTestExport_SendsTestExportIdentity(t *testing.T) {
+	collector, addr, cleanup := startMockOTELServer(t)
 	defer cleanup()
 
 	configPath := filepath.Join(t.TempDir(), "click-dog.yaml")
@@ -213,26 +221,31 @@ monitor:
 		t.Fatal(err)
 	}
 
-	var canonicalOut, canonicalErr bytes.Buffer
-	canonicalCode := runTestExport([]string{"-config", configPath}, &canonicalOut, &canonicalErr)
-	var aliasOut, aliasErr bytes.Buffer
-	aliasCode := runTestSpan([]string{"-config", configPath}, &aliasOut, &aliasErr)
-
-	if canonicalCode != 0 || aliasCode != canonicalCode {
-		t.Fatalf("canonical/alias exits = %d/%d; canonical=%s alias=%s", canonicalCode, aliasCode, canonicalOut.String(), aliasOut.String())
+	var out, errOut bytes.Buffer
+	if code := runTestExport([]string{"--config", configPath}, &out, &errOut); code != 0 {
+		t.Fatalf("exit = %d; stdout=%s stderr=%s", code, out.String(), errOut.String())
 	}
-	for _, output := range []string{canonicalOut.String(), aliasOut.String()} {
-		for _, want := range []string{"Exporter test", "PASS (accepted 1 span", "Result: PASS"} {
-			if !strings.Contains(output, want) {
-				t.Errorf("output missing %q:\n%s", want, output)
-			}
+	for _, want := range []string{"Exporter test", "PASS (accepted 1 span", "Result: PASS"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output missing %q:\n%s", want, out.String())
 		}
 	}
-	if canonicalErr.Len() != 0 {
-		t.Errorf("canonical stderr = %q, want empty", canonicalErr.String())
+	if errOut.Len() != 0 {
+		t.Errorf("stderr = %q, want empty", errOut.String())
 	}
-	if !strings.Contains(aliasErr.String(), "deprecated") || !strings.Contains(aliasErr.String(), "click-dog test export") {
-		t.Errorf("alias stderr missing replacement notice: %q", aliasErr.String())
+
+	spans := waitForReceivedSpans(t, collector, 1)
+	if got := spans[0].GetName(); got != "click-dog.test.export" {
+		t.Errorf("span name = %q, want click-dog.test.export", got)
+	}
+	attrs := map[string]string{}
+	for _, kv := range spans[0].GetAttributes() {
+		attrs[kv.GetKey()] = kv.GetValue().GetStringValue()
+	}
+	for key, want := range map[string]string{"click_dog.source": "test-export", "click_dog.test": "true", "click_dog.test_kind": "export"} {
+		if attrs[key] != want {
+			t.Errorf("%s = %q, want %q", key, attrs[key], want)
+		}
 	}
 }
 
@@ -276,7 +289,10 @@ func TestExecuteTracingTest_SuccessPreservesIdentityAndProvenance(t *testing.T) 
 	identity := fixedTracingIdentity()
 	child := nativeTracingChild(identity)
 	originalAttrs := cloneStringMap(child.Attributes)
-	reader := &fakeTracingTestReader{fetchResponses: [][]model.OpenTelemetrySpan{{}, {child}}}
+	// The server's clock runs five minutes behind this host's: the polls read
+	// from the server's time, not the canary's local start.
+	serverTime := time.Date(2026, 8, 4, 11, 55, 0, 0, time.UTC)
+	reader := &fakeTracingTestReader{serverTime: serverTime, fetchResponses: [][]model.OpenTelemetrySpan{{}, {child}}}
 	exporter := &testCommandExporter{acceptedCount: -1}
 	deps := tracingTestDeps(reader, []builtExporter{{Label: "OTEL[0]", Endpoint: "collector:4317", Exporter: exporter}})
 	var waits []time.Duration
@@ -286,7 +302,10 @@ func TestExecuteTracingTest_SuccessPreservesIdentityAndProvenance(t *testing.T) 
 	}
 
 	var out bytes.Buffer
-	if code := executeTracingTest(context.Background(), &config.Config{}, identity, deps, &out); code != 0 {
+	// Raw mode keeps the parent's own constant statement so the contract below
+	// can see it; the default normalized_only would strip it at export.
+	cfg := &config.Config{Filters: config.FiltersConfig{QueryTextMode: config.QueryTextModeRaw}}
+	if code := executeTracingTest(context.Background(), cfg, identity, deps, &out); code != 0 {
 		t.Fatalf("exit = %d, want 0:\n%s", code, out.String())
 	}
 	if reader.gotQueryID != identity.QueryID || reader.gotSpanContext.TraceID() != identity.SpanContext.TraceID() || !reader.gotSpanContext.IsSampled() {
@@ -296,15 +315,15 @@ func TestExecuteTracingTest_SuccessPreservesIdentityAndProvenance(t *testing.T) 
 		t.Errorf("poll calls/waits = %d/%v, want 2/[100ms]", reader.fetchCalls, waits)
 	}
 	for i := range reader.traceIDs {
-		if len(reader.traceIDs[i]) != 1 || reader.traceIDs[i][0] != identity.TraceID.String() || reader.lookbackDays[i] != 1 || reader.limits[i] != 1000 || len(reader.blacklists[i]) != 0 {
-			t.Errorf("fetch[%d] = ids=%v days=%d limit=%d blacklist=%v", i, reader.traceIDs[i], reader.lookbackDays[i], reader.limits[i], reader.blacklists[i])
+		if len(reader.traceIDs[i]) != 1 || reader.traceIDs[i][0] != identity.TraceID.String() || reader.lookbackDays[i] != 1 || !reader.sinces[i].Equal(serverTime) || reader.limits[i] != 1000 || len(reader.blacklists[i]) != 0 {
+			t.Errorf("fetch[%d] = ids=%v days=%d since=%s limit=%d blacklist=%v", i, reader.traceIDs[i], reader.lookbackDays[i], reader.sinces[i], reader.limits[i], reader.blacklists[i])
 		}
 	}
 	if len(exporter.spans) != 2 {
 		t.Fatalf("exported %d spans, want parent + child", len(exporter.spans))
 	}
 	parent, gotChild := exporter.spans[0], exporter.spans[1]
-	if parent.OperationName != "click-dog.test.tracing" || parent.TraceID != identity.TraceID || parent.SpanID != identity.SpanID || parent.Attributes["click_dog.source"] != "test-span" || parent.Attributes["click_dog.test_kind"] != "tracing" || parent.Attributes["db.statement"] != "SELECT 1" {
+	if parent.OperationName != "click-dog.test.tracing" || parent.TraceID != identity.TraceID || parent.SpanID != identity.SpanID || parent.Attributes["click_dog.source"] != "test-tracing" || parent.Attributes["click_dog.test_kind"] != "tracing" || parent.Attributes["db.statement"] != "SELECT 1" {
 		t.Errorf("local parent contract not preserved: %+v", parent)
 	}
 	if gotChild.TraceID != child.TraceID || gotChild.SpanID != child.SpanID || gotChild.ParentSpanID != child.ParentSpanID || gotChild.OperationName != child.OperationName || gotChild.Kind != child.Kind || gotChild.Hostname != child.Hostname || gotChild.StartTimeUs != child.StartTimeUs || gotChild.FinishTimeUs != child.FinishTimeUs {
@@ -326,6 +345,21 @@ func TestExecuteTracingTest_SuccessPreservesIdentityAndProvenance(t *testing.T) 
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("output missing %q:\n%s", want, out.String())
 		}
+	}
+}
+
+// TestExecuteTracingTest_ServerTimeFailureReadsTheDayFloor keeps an unreadable
+// server clock from failing the test: the polls fall back to the day floor.
+func TestExecuteTracingTest_ServerTimeFailureReadsTheDayFloor(t *testing.T) {
+	identity := fixedTracingIdentity()
+	reader := &fakeTracingTestReader{serverTimeErr: errors.New("TIMEOUT_EXCEEDED"), fetchResponses: [][]model.OpenTelemetrySpan{{nativeTracingChild(identity)}}}
+	exporter := &testCommandExporter{acceptedCount: -1}
+	var out bytes.Buffer
+	if code := executeTracingTest(context.Background(), &config.Config{}, identity, tracingTestDeps(reader, []builtExporter{{Label: "OTEL[0]", Endpoint: "collector:4317", Exporter: exporter}}), &out); code != 0 {
+		t.Fatalf("exit = %d, want 0:\n%s", code, out.String())
+	}
+	if len(reader.sinces) != 1 || !reader.sinces[0].IsZero() {
+		t.Errorf("poll since = %v, want the zero time", reader.sinces)
 	}
 }
 
@@ -353,7 +387,11 @@ func TestExecuteTracingTest_FailuresRetainIDs(t *testing.T) {
 			d.wait = func(context.Context, time.Duration) error { return context.DeadlineExceeded }
 		}, want: "deadline or cancellation"},
 		{name: "wrong trace", reader: &fakeTracingTestReader{fetchResponses: [][]model.OpenTelemetrySpan{{wrongTrace}}}, want: "unexpected row"},
-		{name: "missing parent", reader: &fakeTracingTestReader{fetchResponses: [][]model.OpenTelemetrySpan{{missingParent}}}, want: "did not continue"},
+		{name: "missing parent", reader: &fakeTracingTestReader{fetchResponses: [][]model.OpenTelemetrySpan{{missingParent}}}, customize: func(d *tracingTestDependencies) {
+			// The parent link never arrives: polling continues until the
+			// deadline, then judges the spans it has.
+			d.wait = func(context.Context, time.Duration) error { return context.DeadlineExceeded }
+		}, want: "did not continue"},
 		{name: "cap", reader: &fakeTracingTestReader{fetchResponses: [][]model.OpenTelemetrySpan{capped}}, want: "1000-span safety cap"},
 	}
 	for _, tt := range tests {

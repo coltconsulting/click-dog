@@ -195,6 +195,11 @@ test-scripts: ## Run the installer, release-tooling, and boundary shell suites
 	else \
 		echo "skipping publish-gate tests (internal-only; absent from the public archive)"; \
 	fi
+	@if [ -f scripts/release-targets_test.sh ]; then \
+		bash scripts/release-targets_test.sh; \
+	else \
+		echo "skipping release-target tests (internal-only; absent from the public archive)"; \
+	fi
 
 # Start the 3-node ClickHouse cluster + OTEL collector
 test-integration-up:
@@ -280,8 +285,32 @@ build-site: ## Build the documentation site into target/ (strict)
 		MKDOCS="$(MKDOCS)" scripts/check-site-escape.sh; \
 	fi
 
-build-docker: build ## Build the Docker image for the current platform
-	docker build --build-arg TARGETPLATFORM=. -t $(DOCKER_REPO):$(DOCKER_TAG) .
+# The image runs where the Docker daemon runs, which on macOS and Windows is a
+# Linux VM, not the host, so `build`'s host binary would leave an image that
+# cannot start. Ask the daemon for its platform and build that binary instead.
+# The smoke run fails this target, and so check-release, when the image cannot
+# start or carries a different build.
+build-docker: ## Build click-dog:local for the Docker daemon's platform and smoke-run it
+	@set -e; \
+	platform="$$(docker version --format '{{.Server.Os}}/{{.Server.Arch}}')" || { \
+		echo "FAIL: cannot reach the Docker daemon"; exit 1; \
+	}; \
+	case "$$platform" in \
+		linux/amd64|linux/arm64) ;; \
+		*) echo "FAIL: the Docker daemon runs $$platform; build-docker supports linux/amd64 and linux/arm64"; exit 1 ;; \
+	esac; \
+	ctx="$$(mktemp -d "$${TMPDIR:-/tmp}/click-dog-docker.XXXXXX")"; \
+	trap 'rm -rf "$$ctx"' EXIT; \
+	CGO_ENABLED=0 GOOS=linux GOARCH="$${platform#linux/}" go build -ldflags="-s -w -X main.version=$(VERSION)" -o "$$ctx/$$platform/click-dog"; \
+	docker build --platform "$$platform" --build-arg TARGETPLATFORM="$$platform" \
+		-f Dockerfile -t "$(DOCKER_LOCAL_IMAGE)" "$$ctx"; \
+	out="$$(docker run --rm --pull never --network none "$(DOCKER_LOCAL_IMAGE)" version)" || { \
+		echo "FAIL: $(DOCKER_LOCAL_IMAGE) does not run on $$platform"; exit 1; \
+	}; \
+	if [ "$$out" != "click-dog $(VERSION)" ]; then \
+		echo "FAIL: $(DOCKER_LOCAL_IMAGE) reports '$$out', want 'click-dog $(VERSION)'"; exit 1; \
+	fi; \
+	echo "  [ok] $(DOCKER_LOCAL_IMAGE) ($$platform): $$out"
 
 # Multi-platform images cannot be loaded into the classic Docker daemon.
 # By default this writes an OCI archive; release-docker-manual overrides the
@@ -352,7 +381,7 @@ dev-setup: ## Install the pinned repository-managed development tools
 	case "$$(uname -m)" in \
 		arm64|aarch64) arch=aarch64 ;; \
 		x86_64|amd64)  arch=x86_64 ;; \
-		*) echo "no pinned shellcheck build for $$(uname -m); install it from your package manager"; exit 1 ;; \
+		*) echo "no pinned shellcheck build for $$(uname -m); install it from a package manager"; exit 1 ;; \
 	esac; \
 	staged="$(LOCAL_TOOLS_BIN)/.shellcheck.$$$$"; \
 	trap 'rm -f "$$staged" "$$staged.tar.xz"' EXIT INT TERM; \

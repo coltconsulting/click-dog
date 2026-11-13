@@ -56,11 +56,11 @@ func TestIntegration_QueryOperationSurvivesBothReadersAndExport(t *testing.T) {
 			if err := conn.QueryRow(ctx, "SELECT normalized_query_hash FROM system.query_log WHERE query_id = ? AND type = 'QueryFinish'", identity.QueryID).Scan(&sourceHash); err != nil {
 				t.Fatal(err)
 			}
-			historical, err := reader.FetchSlowQueriesInRange(ctx, 0, 0, 100000, start, time.Now().Add(clockSkewMargin), 10000)
+			historical, err := reader.FetchSlowQueriesInRangePage(ctx, 0, 0, 100000, start, time.Now().Add(clockSkewMargin), nil, 10000)
 			if err != nil {
 				t.Fatal(err)
 			}
-			live, err := reader.FetchQueryLogByQueryIDs(ctx, []string{identity.QueryID}, 1)
+			live, err := reader.FetchQueryLogByQueryIDs(ctx, []string{identity.QueryID}, 1, uint64(start.UnixMicro()))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -70,7 +70,7 @@ func TestIntegration_QueryOperationSurvivesBothReadersAndExport(t *testing.T) {
 					rows["historical"] = row
 				}
 			}
-			spans, err := reader.FetchSpansForTraceIDs(ctx, []string{identity.TraceID.String()}, 1, 1000, nil)
+			spans, err := reader.FetchSpansForTraceIDs(ctx, []string{identity.TraceID.String()}, 1, start, 1000, nil)
 			if err != nil || len(spans) == 0 {
 				t.Fatalf("native spans: count=%d error=%v", len(spans), err)
 			}

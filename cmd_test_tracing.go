@@ -30,8 +30,9 @@ const (
 )
 
 type tracingTestReader interface {
+	ServerTime(ctx context.Context) (time.Time, error)
 	ExecuteTracingTestQuery(ctx context.Context, spanContext oteltrace.SpanContext, queryID string) error
-	FetchSpansForTraceIDs(ctx context.Context, traceIDs []string, lookbackDays, limit int, blacklistOperations []string) ([]model.OpenTelemetrySpan, error)
+	FetchSpansForTraceIDs(ctx context.Context, traceIDs []string, lookbackDays int, since time.Time, limit int, blacklistOperations []string) ([]model.OpenTelemetrySpan, error)
 	Close() error
 }
 
@@ -87,8 +88,8 @@ Flags:
 		}
 		return 2
 	}
-	if fs.NArg() != 0 {
-		_, _ = fmt.Fprintf(errOut, "click-dog test tracing: unexpected argument %q\n\n", fs.Arg(0))
+	if err := rejectLeftoverArgs("click-dog test tracing", fs, args); err != nil {
+		_, _ = fmt.Fprintf(errOut, "%v\n\n", err)
 		fs.Usage()
 		return 2
 	}
@@ -161,6 +162,13 @@ func executeTracingTest(ctx context.Context, cfg *config.Config, identity tracin
 	}
 	defer func() { _ = reader.Close() }()
 
+	// The canary's spans are stamped by the server's clock, so the polls read
+	// from the server's time before the canary rather than this host's. If it
+	// cannot be read, they fall back to the whole day floor.
+	serverStart, err := reader.ServerTime(ctx)
+	if err != nil {
+		serverStart = time.Time{}
+	}
 	queryStart := deps.now()
 	queryErr := reader.ExecuteTracingTestQuery(ctx, identity.SpanContext, identity.QueryID)
 	queryFinish := deps.now()
@@ -173,7 +181,7 @@ func executeTracingTest(ctx context.Context, cfg *config.Config, identity tracin
 	_, _ = fmt.Fprintf(out, "  %-25s PASS (query_id=%s)\n", "ClickHouse query:", identity.QueryID)
 
 	materializationStart := deps.now()
-	spans, err := pollTracingSpans(ctx, reader, identity.TraceID, deps.wait, out)
+	spans, timedOut, err := pollTracingSpans(ctx, reader, identity.TraceID, identity.SpanID, serverStart, deps.wait, out)
 	materializationElapsed := deps.now().Sub(materializationStart)
 	if materializationElapsed < 0 {
 		materializationElapsed = 0
@@ -204,14 +212,15 @@ func executeTracingTest(ctx context.Context, cfg *config.Config, identity tracin
 	}
 	_, _ = fmt.Fprintf(out, "  %-25s PASS (%d %s, %s)\n", "Span materialization:", len(spans), pluralSpan(len(spans)), materializationElapsed.Round(time.Millisecond))
 
-	parentFound := false
-	for _, span := range spans {
-		if span.ParentSpanID == identity.SpanID {
-			parentFound = true
-			break
+	if !tracingContinuesParent(spans, identity.SpanID) {
+		if timedOut {
+			// The spans read so far are part of the trace; the one that
+			// continues the parent may still be waiting for a flush.
+			_, _ = fmt.Fprintf(out, "  %-25s FAIL (no native span referenced parent_span_id=%d within --timeout)\n", "Parent propagation:", identity.SpanID)
+			printTracingIDs(out, identity)
+			_, _ = fmt.Fprintln(out, "Result: FAIL — the span that continues the supplied parent context was not seen within --timeout. Increase --timeout when the span-log flush interval is long; otherwise ClickHouse did not continue the parent context.")
+			return 1
 		}
-	}
-	if !parentFound {
 		_, _ = fmt.Fprintf(out, "  %-25s FAIL (no native span references parent_span_id=%d)\n", "Parent propagation:", identity.SpanID)
 		printTracingIDs(out, identity)
 		_, _ = fmt.Fprintln(out, "Result: FAIL — ClickHouse recorded rows but did not continue the supplied parent context.")
@@ -229,7 +238,7 @@ func executeTracingTest(ctx context.Context, cfg *config.Config, identity tracin
 		FinishTimeUs:  uint64(queryFinish.UnixMicro()),
 		FinishDate:    queryFinish,
 		Attributes: map[string]string{
-			"click_dog.source":    "test-span",
+			"click_dog.source":    "test-tracing",
 			"click_dog.test":      "true",
 			"click_dog.test_kind": "tracing",
 			"db.system":           "clickhouse",
@@ -254,32 +263,55 @@ func executeTracingTest(ctx context.Context, cfg *config.Config, identity tracin
 		_, _ = fmt.Fprintln(out, "Result: FAIL — one or more exporters did not accept the complete trace.")
 		return 1
 	}
-	_, _ = fmt.Fprintln(out, "Result: PASS — exporters accepted the trace; search this trace ID in your backend.")
+	_, _ = fmt.Fprintln(out, "Result: PASS — exporters accepted the trace; search this trace ID in the backend.")
 	return 0
 }
 
-func pollTracingSpans(ctx context.Context, reader tracingTestReader, traceID uuid.UUID, wait func(context.Context, time.Duration) error, out io.Writer) ([]model.OpenTelemetrySpan, error) {
+// pollTracingSpans reads the canary's trace until a native span continues the
+// supplied parent. Every native span of the canary starts after serverStart,
+// the server's time before the canary was sent, so each read covers only
+// span-log rows that finished from a minute before it, not the whole day
+// floor. The zero time reads the day floor.
+//
+// ClickHouse writes a span to the span log when the span finishes, and the
+// span that continues the supplied parent is the query's outermost one, so it
+// finishes last. A flush can land between the inner spans and that one, so a
+// read can return part of the trace without the parent link. Polling goes on
+// past such a partial read; because the log is written in finish order, the
+// read that holds the parent link also holds every span that finished before
+// it. When the deadline passes after a partial read, that read is returned
+// with timedOut set and no error, so the caller judges what ClickHouse
+// actually recorded and can say that time ran out.
+func pollTracingSpans(ctx context.Context, reader tracingTestReader, traceID uuid.UUID, parentSpanID uint64, serverStart time.Time, wait func(context.Context, time.Duration) error, out io.Writer) (spans []model.OpenTelemetrySpan, timedOut bool, err error) {
 	delay := tracingPollInitialDelay
 	missingTableReported := false
 	var lastMissingTable error
-	pollStopped := func(err error) error {
-		if lastMissingTable != nil {
-			return fmt.Errorf("deadline or cancellation waiting for system.opentelemetry_span_log to materialize (last read: %v): %w", lastMissingTable, err)
+	var partial []model.OpenTelemetrySpan
+	pollStopped := func(err error) ([]model.OpenTelemetrySpan, bool, error) {
+		switch {
+		case len(partial) > 0:
+			return partial, true, nil
+		case lastMissingTable != nil:
+			return nil, false, fmt.Errorf("deadline or cancellation waiting for system.opentelemetry_span_log to materialize (last read: %v): %w", lastMissingTable, err)
 		}
-		return fmt.Errorf("deadline or cancellation before native spans appeared: %w", err)
+		return nil, false, fmt.Errorf("deadline or cancellation before native spans appeared: %w", err)
 	}
 	for {
 		if err := ctx.Err(); err != nil {
-			return nil, pollStopped(err)
+			return pollStopped(err)
 		}
-		spans, err := reader.FetchSpansForTraceIDs(ctx, []string{traceID.String()}, tracingTestLookbackDays, tracingTestSpanLimit, nil)
+		spans, err := reader.FetchSpansForTraceIDs(ctx, []string{traceID.String()}, tracingTestLookbackDays, serverStart, tracingTestSpanLimit, nil)
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				// The read failed because the deadline passed during it.
+				return pollStopped(ctxErr)
+			}
 			// ClickHouse creates this system log lazily on its first flush. Only
 			// UNKNOWN_TABLE from this exact span-log read is a startup condition;
 			// permission, schema, and transport errors must still fail promptly.
 			var exception *clickhouse.Exception
 			if !errors.As(err, &exception) || exception.Code != chErrUnknownTable {
-				return nil, err
+				return nil, false, err
 			}
 			if !missingTableReported {
 				_, _ = fmt.Fprintf(out, "  %-25s waiting for system.opentelemetry_span_log to be created (first flush)\n", "Span materialization:")
@@ -289,11 +321,16 @@ func pollTracingSpans(ctx context.Context, reader tracingTestReader, traceID uui
 		} else {
 			lastMissingTable = nil
 		}
+		// A read at the safety cap is judged at once: more polling cannot
+		// make a truncated trace verifiable.
+		if tracingContinuesParent(spans, parentSpanID) || len(spans) >= tracingTestSpanLimit {
+			return spans, false, nil
+		}
 		if len(spans) > 0 {
-			return spans, nil
+			partial = spans
 		}
 		if err := wait(ctx, delay); err != nil {
-			return nil, pollStopped(err)
+			return pollStopped(err)
 		}
 		if delay < tracingPollMaxDelay {
 			delay *= 2
@@ -302,6 +339,17 @@ func pollTracingSpans(ctx context.Context, reader tracingTestReader, traceID uui
 			}
 		}
 	}
+}
+
+// tracingContinuesParent reports whether any span names parentSpanID as its
+// parent.
+func tracingContinuesParent(spans []model.OpenTelemetrySpan, parentSpanID uint64) bool {
+	for _, span := range spans {
+		if span.ParentSpanID == parentSpanID {
+			return true
+		}
+	}
+	return false
 }
 
 func waitForTracingPoll(ctx context.Context, delay time.Duration) error {

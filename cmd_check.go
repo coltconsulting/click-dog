@@ -75,6 +75,10 @@ Flags:
 		}
 		return 2
 	}
+	if err := rejectLeftoverArgs("click-dog check", fs, args); err != nil {
+		_, _ = fmt.Fprintln(errOut, err)
+		return 2
+	}
 
 	allOK := true
 	sawWarnings := false
@@ -188,8 +192,7 @@ func runReadinessReport(out io.Writer, chReader *clickhouse.ClickHouseReader, cf
 	_, _ = fmt.Fprintf(out, "  [PASS] connection: %s:%d (%s)\n",
 		cfg.ClickHouse.Host, cfg.ClickHouse.Port, tlsMode)
 
-	enrichmentNeeded := cfg.Monitor.ShouldEnrichFromQueryLog() ||
-		len(cfg.Filters.WhitelistUsers) > 0 || len(cfg.Filters.BlacklistUsers) > 0
+	enrichmentNeeded := queryLogNeeded(cfg)
 
 	ctx, cancel := context.WithTimeout(context.Background(), readinessTimeout)
 	defer cancel()
@@ -197,6 +200,7 @@ func runReadinessReport(out io.Writer, chReader *clickhouse.ClickHouseReader, cf
 		Lookback:           lookback,
 		MinTraceDurationMs: cfg.Monitor.MinTraceDurationMs,
 		EnrichmentNeeded:   enrichmentNeeded,
+		QueryIDNeeded:      queryIDNeeded(cfg),
 	})
 
 	return printReadinessChecks(out, checks)
@@ -220,4 +224,20 @@ func printReadinessChecks(out io.Writer, checks []clickhouse.ReadinessCheck) (ok
 		}
 	}
 	return ok, warned
+}
+
+// queryLogNeeded reports whether scheduled export reads system.query_log:
+// for enrichment, or to resolve each query's users and client for the user
+// lists and whitelist_ips.
+func queryLogNeeded(cfg *config.Config) bool {
+	return cfg.Monitor.ShouldEnrichFromQueryLog() ||
+		len(cfg.Filters.WhitelistUsers) > 0 || len(cfg.Filters.BlacklistUsers) > 0 ||
+		len(cfg.Filters.WhitelistIPs) > 0
+}
+
+// queryIDNeeded reports whether scheduled export needs clickhouse.query_id on
+// spans: everything queryLogNeeded covers, plus blacklist_queries, which finds
+// a trace's statements through its query spans and drops a trace with none.
+func queryIDNeeded(cfg *config.Config) bool {
+	return queryLogNeeded(cfg) || len(cfg.Filters.BlacklistQueries) > 0
 }

@@ -794,6 +794,7 @@ func TestValidate_NoExporters(t *testing.T) {
 
 func TestValidate_RedactQueries_EmptyPattern(t *testing.T) {
 	cfg := validConfig()
+	cfg.Filters.QueryTextMode = QueryTextModeRedacted
 	cfg.Filters.RedactQueries = []RedactionRule{{Pattern: ""}}
 	err := cfg.Validate()
 	if err == nil {
@@ -806,6 +807,7 @@ func TestValidate_RedactQueries_EmptyPattern(t *testing.T) {
 
 func TestValidate_RedactQueries_InvalidRegex(t *testing.T) {
 	cfg := validConfig()
+	cfg.Filters.QueryTextMode = QueryTextModeRedacted
 	cfg.Filters.RedactQueries = []RedactionRule{{Pattern: "[invalid("}}
 	err := cfg.Validate()
 	if err == nil {
@@ -860,92 +862,28 @@ func TestValidate_UserLists_AcceptsPopulatedEntries(t *testing.T) {
 	}
 }
 
-func TestValidate_UserFilter_RequiresEnrichment(t *testing.T) {
-	// User filtering can't work without query_log enrichment — span_log has
-	// no user attribute, so every span would resolve to "" (whitelist drops
-	// all, blacklist passes all). The combination must be rejected.
+// The query-dependent filters read each query's users and client address
+// from query_log themselves, so they work with enrichment off.
+func TestValidate_QueryFilters_DoNotNeedEnrichment(t *testing.T) {
 	disabled := false
 	tests := []struct {
 		name   string
 		mutate func(*Config)
 	}{
-		{
-			name: "whitelist with enrichment disabled",
-			mutate: func(c *Config) {
-				c.Filters.WhitelistUsers = []string{"app_frontend"}
-				c.Monitor.EnrichFromQueryLog = &disabled
-			},
-		},
-		{
-			name: "blacklist with enrichment disabled",
-			mutate: func(c *Config) {
-				c.Filters.BlacklistUsers = []string{"patient_records"}
-				c.Monitor.EnrichFromQueryLog = &disabled
-			},
-		},
+		{"whitelist_users", func(c *Config) { c.Filters.WhitelistUsers = []string{"app_frontend"} }},
+		{"blacklist_users", func(c *Config) { c.Filters.BlacklistUsers = []string{"patient_records"} }},
+		{"whitelist_ips", func(c *Config) { c.Filters.WhitelistIPs = []string{"10.0.0.0/8"} }},
+		{"blacklist_queries", func(c *Config) { c.Filters.BlacklistQueries = []string{"(?i)password"} }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := validConfig()
 			tt.mutate(cfg)
-			err := cfg.Validate()
-			if err == nil {
-				t.Fatal("expected validation error")
-			}
-			if !strings.Contains(err.Error(), "require query_log enrichment") {
-				t.Errorf("error should mention enrichment requirement, got: %v", err)
+			cfg.Monitor.EnrichFromQueryLog = &disabled
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("%s with enrichment disabled should pass, got: %v", tt.name, err)
 			}
 		})
-	}
-}
-
-// The IP whitelist carries the same enrichment dependency as the user filters:
-// span-log rows have no client address, so scheduled mode resolves it through
-// query_log. Without enrichment every span resolves to "" and the whitelist
-// drops the entire cycle, which is the exact failure the user-filter rule
-// above exists to prevent.
-func TestValidate_IPWhitelist_RequiresEnrichment(t *testing.T) {
-	disabled := false
-	cfg := validConfig()
-	cfg.Filters.WhitelistIPs = []string{"10.0.0.0/8"}
-	cfg.Monitor.EnrichFromQueryLog = &disabled
-
-	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("whitelist_ips without query_log enrichment should fail validation")
-	}
-	if !strings.Contains(err.Error(), "filters.whitelist_ips requires query_log enrichment") {
-		t.Errorf("error should name the enrichment requirement, got: %v", err)
-	}
-}
-
-func TestValidate_IPWhitelist_PassesWithEnrichmentEnabled(t *testing.T) {
-	enabled := true
-	cfg := validConfig()
-	cfg.Filters.WhitelistIPs = []string{"10.0.0.0/8"}
-	cfg.Monitor.EnrichFromQueryLog = &enabled
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("IP whitelist with enrichment enabled should pass, got: %v", err)
-	}
-}
-
-// Enrichment defaults to on, so the common config — a whitelist and no
-// explicit enrich_from_query_log — must not trip the new rule.
-func TestValidate_IPWhitelist_PassesOnDefaultEnrichment(t *testing.T) {
-	cfg := validConfig()
-	cfg.Filters.WhitelistIPs = []string{"10.0.0.0/8"}
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("IP whitelist with default enrichment should pass, got: %v", err)
-	}
-}
-
-func TestValidate_UserFilter_PassesWithEnrichmentExplicitlyEnabled(t *testing.T) {
-	enabled := true
-	cfg := validConfig()
-	cfg.Filters.WhitelistUsers = []string{"app_frontend"}
-	cfg.Monitor.EnrichFromQueryLog = &enabled
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("user filter with enrichment explicitly enabled should pass, got: %v", err)
 	}
 }
 
@@ -995,6 +933,7 @@ func TestValidate_FilterWhitelistIPs(t *testing.T) {
 		{"invalid CIDR mask", []string{"10.0.0.0/99"}, true, "not a valid CIDR"},
 		{"garbage CIDR", []string{"not-a-cidr/24"}, true, "not a valid CIDR"},
 		{"empty entry", []string{""}, true, "not a valid IP address"},
+		{"zoned IP", []string{"fe80::1%eth0"}, true, "has a zone"},
 		// First good, second bad — both should be reported with index
 		{"second entry bad", []string{"10.0.0.1", "bogus"}, true, "filters.whitelist_ips[1]"},
 	}
@@ -1010,6 +949,34 @@ func TestValidate_FilterWhitelistIPs(t *testing.T) {
 				t.Errorf("error should contain %q, got: %v", tt.substr, err)
 			}
 		})
+	}
+}
+
+// ClientPrefix is the one parse both the live filter and the query_log SQL
+// match against, so its normalization decides whether they agree.
+func TestClientPrefix(t *testing.T) {
+	tests := []struct {
+		entry string
+		want  string
+	}{
+		{"10.0.0.1", "10.0.0.1/32"},
+		{"::ffff:10.0.0.1", "10.0.0.1/32"},
+		{"::1", "::1/128"},
+		{"2001:DB8::0:1", "2001:db8::1/128"},
+		{"10.0.0.0/8", "10.0.0.0/8"},
+		{"10.1.2.3/8", "10.0.0.0/8"},
+		{"::ffff:10.0.0.0/104", "10.0.0.0/8"},
+		{"::ffff:10.0.0.0/96", "0.0.0.0/0"},
+		{"fe80::/10", "fe80::/10"},
+	}
+	for _, tt := range tests {
+		got, err := ClientPrefix(tt.entry)
+		if err != nil {
+			t.Fatalf("ClientPrefix(%q): %v", tt.entry, err)
+		}
+		if got.String() != tt.want {
+			t.Errorf("ClientPrefix(%q) = %s, want %s", tt.entry, got, tt.want)
+		}
 	}
 }
 
@@ -1505,13 +1472,14 @@ func TestConfigValidation_QueryTextMode(t *testing.T) {
 		{name: "raw", mode: QueryTextModeRaw},
 		{name: "redacted", mode: QueryTextModeRedacted, rules: []RedactionRule{{Pattern: `'[^']*'`}}},
 		{name: "normalized only", mode: QueryTextModeNormalizedOnly},
-		{name: "normalized only ignores stale rules", mode: QueryTextModeNormalizedOnly, rules: []RedactionRule{{Pattern: `[invalid(`}}},
 		{name: "none", mode: QueryTextModeNone},
-		{name: "none ignores stale rules", mode: QueryTextModeNone, rules: []RedactionRule{{Pattern: `[invalid(`}}},
 		{name: "ambiguous normalized rejected", mode: "normalized", wantErr: "normalized_only"},
 		{name: "unknown rejected", mode: "scrubbed", wantErr: "query_text_mode"},
 		{name: "redacted requires rules", mode: QueryTextModeRedacted, wantErr: "requires at least one valid"},
 		{name: "rules rejected under raw", mode: QueryTextModeRaw, rules: []RedactionRule{{Pattern: `secret`}}, wantErr: "only used when"},
+		{name: "rules rejected under normalized only", mode: QueryTextModeNormalizedOnly, rules: []RedactionRule{{Pattern: `secret`}}, wantErr: "only used when"},
+		{name: "rules rejected under none", mode: QueryTextModeNone, rules: []RedactionRule{{Pattern: `secret`}}, wantErr: "only used when"},
+		{name: "rules rejected without a mode", rules: []RedactionRule{{Pattern: `secret`}}, wantErr: "(currently normalized_only)"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1602,5 +1570,17 @@ monitor:
 	}
 	if len(cfg.ValidationWarnings) == 0 {
 		t.Fatal("expected a topology-audit cadence warning in ValidationWarnings, got none")
+	}
+}
+
+func TestValidate_BlacklistQueries_InvalidRegex(t *testing.T) {
+	cfg := validConfig()
+	cfg.Filters.BlacklistQueries = []string{"SHOW TABLES", "[invalid("}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for invalid blacklist_queries regex")
+	}
+	if !strings.Contains(err.Error(), "filters.blacklist_queries[1] is invalid regex") {
+		t.Errorf("error should name the invalid pattern, got: %v", err)
 	}
 }

@@ -4,7 +4,7 @@
 
 ## Apache 2.0 and Trademark Rights
 
-The Click-Dog source code is licensed under the [Apache License 2.0](LICENSE). As stated in section 6 of that license, the license does **not** grant you permission to use the Marks. Specifically, the Apache 2.0 grant covers copyright and patent rights; it explicitly excludes trademark rights.
+The Click-Dog source code is licensed under the [Apache License 2.0](LICENSE). Section 6 of that license excludes trademark rights: it grants copyright and patent rights, not permission to use the Marks.
 
 ## Permitted Use
 

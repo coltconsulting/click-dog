@@ -3,12 +3,16 @@ package clickhouse
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+
+	"github.com/coltconsulting/click-dog/internal/model"
 )
 
 // captureConn records each Query call and returns a per-call canned result so
@@ -45,50 +49,82 @@ func newTraceDrilldownReader(rowsFn func(query string) (driver.Rows, error)) (*C
 func TestFetchTraceIDsByQueryID_BuildsExpectedQuery(t *testing.T) {
 	traceA := uuid.New()
 	traceB := uuid.New()
+	since := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	startA := uint64(since.Add(10 * time.Minute).UnixMicro())
+	startB := uint64(since.Add(-2 * time.Hour).UnixMicro())
 	reader, conn := newTraceDrilldownReader(func(string) (driver.Rows, error) {
-		return newFakeRows([]any{traceA}, []any{traceB}), nil
+		return newFakeRows([]any{traceA, startA}, []any{traceB, startB}), nil
 	})
 
-	ids, err := reader.FetchTraceIDsByQueryID(context.Background(), "q-123", 1, 500)
+	ids, queryStart, err := reader.FetchTraceIDsByQueryID(context.Background(), "q-123", 1, since, 500)
 	if err != nil {
 		t.Fatalf("FetchTraceIDsByQueryID: %v", err)
 	}
 	if len(ids) != 2 || ids[0] != traceA.String() || ids[1] != traceB.String() {
 		t.Fatalf("trace IDs = %v, want [%s %s]", ids, traceA, traceB)
 	}
+	// The earliest matched start, even one before the window: a long query
+	// that finished inside it.
+	if want := time.UnixMicro(int64(startB)); !queryStart.Equal(want) {
+		t.Errorf("query start = %s, want the earliest matched start %s", queryStart, want)
+	}
 
 	// The SQL must match the spec's query-id -> trace-id query exactly.
 	sql := conn.sqls[0]
 	for _, want := range []string{
-		"SELECT DISTINCT trace_id",
+		"SELECT trace_id, min(start_time_us) AS min_start_time",
 		"FROM system.opentelemetry_span_log",
 		"finish_date >= today() - INTERVAL ? DAY",
+		"finish_time_us >= ?",
 		"attribute['clickhouse.query_id'] = ?",
+		"GROUP BY trace_id",
 		"LIMIT ?",
 	} {
 		if !strings.Contains(sql, want) {
 			t.Errorf("query-id->trace-id SQL missing %q:\n%s", want, sql)
 		}
 	}
-	// Args order: lookbackDays, queryID, limit.
+	// Args order: lookbackDays, finish floor, queryID, limit.
 	args := conn.queries[0]
-	if len(args) != 3 {
-		t.Fatalf("args = %v, want [days queryID limit]", args)
+	if len(args) != 4 {
+		t.Fatalf("args = %v, want [days floor queryID limit]", args)
 	}
 	if args[0] != 1 {
 		t.Errorf("lookbackDays arg = %v, want 1", args[0])
 	}
-	if args[1] != "q-123" {
-		t.Errorf("queryID arg = %v, want q-123", args[1])
+	if want := uint64(since.Add(-traceStartMargin).UnixMicro()); args[1] != want {
+		t.Errorf("finish floor arg = %v, want %d (one margin before the window start)", args[1], want)
 	}
-	if args[2] != 500 {
-		t.Errorf("limit arg = %v, want 500", args[2])
+	if args[2] != "q-123" {
+		t.Errorf("queryID arg = %v, want q-123", args[2])
+	}
+	if args[3] != 500 {
+		t.Errorf("limit arg = %v, want 500", args[3])
+	}
+}
+
+// TestFetchTraceIDsByQueryID_ZeroSinceReadsTheDayRange keeps a caller without
+// a window from building an underflowed floor: it reads the whole day range,
+// as before the floor existed.
+func TestFetchTraceIDsByQueryID_ZeroSinceReadsTheDayRange(t *testing.T) {
+	reader, conn := newTraceDrilldownReader(func(string) (driver.Rows, error) {
+		return newFakeRows(), nil
+	})
+	ids, queryStart, err := reader.FetchTraceIDsByQueryID(context.Background(), "q-1", 1, time.Time{}, 100)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ids) != 0 || !queryStart.IsZero() {
+		t.Errorf("no match = %v, %s; want no IDs and the zero time", ids, queryStart)
+	}
+	if conn.queries[0][1] != uint64(0) {
+		t.Errorf("finish floor = %v, want 0 for a zero since", conn.queries[0][1])
 	}
 }
 
 func TestFetchTraceIDsByQueryID_EmptyQueryIDSkipsQuery(t *testing.T) {
 	reader, conn := newTraceDrilldownReader(nil)
-	ids, err := reader.FetchTraceIDsByQueryID(context.Background(), "", 1, 500)
+	ids, _, err := reader.FetchTraceIDsByQueryID(context.Background(), "", 1, time.Time{}, 500)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -104,7 +140,7 @@ func TestFetchTraceIDsByQueryID_LookbackDaysFlooredAtOne(t *testing.T) {
 	reader, conn := newTraceDrilldownReader(func(string) (driver.Rows, error) {
 		return newFakeRows(), nil
 	})
-	if _, err := reader.FetchTraceIDsByQueryID(context.Background(), "q-1", 0, 100); err != nil {
+	if _, _, err := reader.FetchTraceIDsByQueryID(context.Background(), "q-1", 0, time.Time{}, 100); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if conn.queries[0][0] != 1 {
@@ -116,7 +152,7 @@ func TestFetchTraceIDsByQueryID_QueryErrorPropagates(t *testing.T) {
 	reader, _ := newTraceDrilldownReader(func(string) (driver.Rows, error) {
 		return nil, errors.New("ACCESS_DENIED")
 	})
-	if _, err := reader.FetchTraceIDsByQueryID(context.Background(), "q-1", 1, 100); err == nil {
+	if _, _, err := reader.FetchTraceIDsByQueryID(context.Background(), "q-1", 1, time.Time{}, 100); err == nil {
 		t.Fatal("expected the query error to propagate")
 	}
 }
@@ -139,7 +175,7 @@ func TestFetchSpansForTraceIDs_FetchesAllSpansNoDurationSelection(t *testing.T) 
 		return newFakeRows(spanRow), nil
 	})
 
-	spans, err := reader.FetchSpansForTraceIDs(context.Background(), []string{traceID.String()}, 1, 1000, []string{"MergeTreeIndex"})
+	spans, err := reader.FetchSpansForTraceIDs(context.Background(), []string{traceID.String()}, 1, time.Time{}, 1000, []string{"MergeTreeIndex"})
 	if err != nil {
 		t.Fatalf("FetchSpansForTraceIDs: %v", err)
 	}
@@ -160,6 +196,223 @@ func TestFetchSpansForTraceIDs_FetchesAllSpansNoDurationSelection(t *testing.T) 
 	}
 	if strings.Contains(sql, "(finish_time_us - start_time_us) >=") {
 		t.Errorf("span fetch must not apply duration filters:\n%s", sql)
+	}
+}
+
+// traceSpanRow is one span-log row in spanSelectSQL's column order.
+func traceSpanRow(traceID uuid.UUID, spanID uint64, operation string, start, finish time.Time) []any {
+	return []any{
+		"host-1", traceID, spanID, uint64(0), operation, "server",
+		uint64(start.UnixMicro()), uint64(finish.UnixMicro()), finish.UTC(), map[string]string{},
+	}
+}
+
+// TestFetchSpansForTraceIDs_ReadsFromSince pins the span fetch's finish_time_us
+// floor: one margin before since, after the day-floor and before the blacklist
+// and limit arguments. A span that started inside the margin needs no second
+// read: everything under it finished after it started, inside the floor.
+func TestFetchSpansForTraceIDs_ReadsFromSince(t *testing.T) {
+	traceID := uuid.New()
+	since := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	reader, conn := newTraceDrilldownReader(func(string) (driver.Rows, error) {
+		return newFakeRows(
+			traceSpanRow(traceID, 1, "query", since.Add(-30*time.Second), since.Add(time.Second)),
+			traceSpanRow(traceID, 2, "QueryPipelineEx::execute", since, since.Add(time.Second)),
+		), nil
+	})
+
+	spans, err := reader.FetchSpansForTraceIDs(context.Background(), []string{traceID.String()}, 2, since, 1000, []string{"MergeTreeIndex"})
+	if err != nil {
+		t.Fatalf("FetchSpansForTraceIDs: %v", err)
+	}
+	if len(spans) != 2 {
+		t.Fatalf("spans = %d, want 2", len(spans))
+	}
+	if len(conn.sqls) != 1 {
+		t.Fatalf("reads = %d, want 1 when no span started before the floor:\n%s", len(conn.sqls), strings.Join(conn.sqls, "\n---\n"))
+	}
+	sql := conn.sqls[0]
+	if !strings.Contains(sql, "AND finish_time_us >= ?") || strings.Contains(sql, "finish_time_us < ?") {
+		t.Errorf("span SQL must bound finish_time_us from below only:\n%s", sql)
+	}
+	args := conn.queries[0]
+	floor := uint64(since.Add(-traceStartMargin).UnixMicro())
+	want := []any{[]uuid.UUID{traceID}, 2, floor, "%MergeTreeIndex%", 1000}
+	if len(args) != len(want) {
+		t.Fatalf("args = %v, want [traceIDs days floor blacklist limit]", args)
+	}
+	if got := args[0].([]uuid.UUID); len(got) != 1 || got[0] != traceID {
+		t.Errorf("trace IDs arg = %v, want [%s]", got, traceID)
+	}
+	for i := 1; i < len(want); i++ {
+		if args[i] != want[i] {
+			t.Errorf("arg %d = %v, want %v", i, args[i], want[i])
+		}
+	}
+}
+
+// TestFetchSpansForTraceIDs_ReadsALongQueryWhole is a query that started two
+// hours before since and finished after it. Its `query` span is in the first
+// read; the spans it ran that finished early are reached by a second read of
+// only the gap, back to one margin before the query started.
+func TestFetchSpansForTraceIDs_ReadsALongQueryWhole(t *testing.T) {
+	traceID := uuid.New()
+	since := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	queryStart := since.Add(-2 * time.Hour)
+	reader, conn := newTraceDrilldownReader(func(query string) (driver.Rows, error) {
+		if strings.Contains(query, "finish_time_us < ?") {
+			return newFakeRows(
+				traceSpanRow(traceID, 3, "MergeTreeRead", queryStart.Add(time.Second), queryStart.Add(time.Minute)),
+			), nil
+		}
+		return newFakeRows(
+			traceSpanRow(traceID, 1, "query", queryStart, since.Add(5*time.Minute)),
+			traceSpanRow(traceID, 2, "MergeTreeRead", since.Add(-time.Second), since.Add(time.Minute)),
+		), nil
+	})
+
+	spans, err := reader.FetchSpansForTraceIDs(context.Background(), []string{traceID.String()}, 1, since, 500, nil)
+	if err != nil {
+		t.Fatalf("FetchSpansForTraceIDs: %v", err)
+	}
+	var ids []uint64
+	for _, span := range spans {
+		ids = append(ids, span.SpanID)
+	}
+	if fmt.Sprint(ids) != "[1 2 3]" {
+		t.Fatalf("span IDs = %v, want [1 2 3]: the whole query", ids)
+	}
+	if len(conn.sqls) != 2 {
+		t.Fatalf("reads = %d, want 2", len(conn.sqls))
+	}
+	if !strings.Contains(conn.sqls[1], "AND finish_time_us >= ? AND finish_time_us < ?") {
+		t.Errorf("gap read must be bounded on both sides:\n%s", conn.sqls[1])
+	}
+	floor := uint64(since.Add(-traceStartMargin).UnixMicro())
+	reach := uint64(queryStart.Add(-traceStartMargin).UnixMicro())
+	args := conn.queries[1]
+	if len(args) != 5 || args[1] != 1 || args[2] != reach || args[3] != floor || args[4] != 498 {
+		t.Errorf("gap read args = %v, want [traceIDs 1 %d %d 498]", args, reach, floor)
+	}
+}
+
+// TestFetchSpansForTraceIDs_ReadsAnOverlappingEarlierQueryWhole is an
+// application trace with two queries: P ran 10:00-11:30 and Q 11:00-12:45,
+// fetched by trace ID from a 12:00 window. Q's start reaches P's `query` span,
+// whose own start reaches back further: the reads repeat until a read finds
+// nothing that started before its floor, so P is not returned without the
+// spans it ran early.
+func TestFetchSpansForTraceIDs_ReadsAnOverlappingEarlierQueryWhole(t *testing.T) {
+	traceID := uuid.New()
+	at := func(h, m int) time.Time { return time.Date(2026, 6, 15, h, m, 0, 0, time.UTC) }
+	reads := [][][]any{
+		{traceSpanRow(traceID, 1, "query", at(11, 0), at(12, 45))},         // Q
+		{traceSpanRow(traceID, 2, "query", at(10, 0), at(11, 30))},         // P
+		{traceSpanRow(traceID, 3, "MergeTreeRead", at(10, 1), at(10, 30))}, // P's early span
+	}
+	calls := 0
+	reader, conn := newTraceDrilldownReader(func(string) (driver.Rows, error) {
+		calls++
+		if calls > len(reads) {
+			t.Fatalf("read %d: want %d reads", calls, len(reads))
+		}
+		return newFakeRows(reads[calls-1]...), nil
+	})
+
+	spans, err := reader.FetchSpansForTraceIDs(context.Background(), []string{traceID.String()}, 1, at(12, 0), 100, nil)
+	if err != nil {
+		t.Fatalf("FetchSpansForTraceIDs: %v", err)
+	}
+	if got := spanIDSet(spans); got != "[1 2 3]" {
+		t.Fatalf("span IDs = %s, want [1 2 3]", got)
+	}
+	us := func(t time.Time) uint64 { return uint64(t.Add(-traceStartMargin).UnixMicro()) }
+	wantBounds := [][2]uint64{
+		{us(at(12, 0)), 0},
+		{us(at(11, 0)), us(at(12, 0))},
+		{us(at(10, 0)), us(at(11, 0))},
+	}
+	wantLimits := []int{100, 99, 98}
+	for i, want := range wantBounds {
+		args := conn.queries[i]
+		if args[2] != want[0] {
+			t.Errorf("read %d from = %v, want %d", i+1, args[2], want[0])
+		}
+		if want[1] == 0 {
+			if len(args) != 4 || args[3] != wantLimits[i] {
+				t.Errorf("read %d args = %v, want [traceIDs 1 %d %d]", i+1, args, want[0], wantLimits[i])
+			}
+			continue
+		}
+		if len(args) != 5 || args[3] != want[1] || args[4] != wantLimits[i] {
+			t.Errorf("read %d args = %v, want [traceIDs 1 %d %d %d]", i+1, args, want[0], want[1], wantLimits[i])
+		}
+	}
+}
+
+// spanIDSet is a stable string of the span IDs in spans.
+func spanIDSet(spans []model.OpenTelemetrySpan) string {
+	ids := make([]uint64, len(spans))
+	for i, span := range spans {
+		ids[i] = span.SpanID
+	}
+	slices.Sort(ids)
+	return fmt.Sprint(ids)
+}
+
+func TestServerTime_ReadsTheServerClock(t *testing.T) {
+	want := time.Date(2026, 6, 15, 12, 0, 0, 123456000, time.UTC)
+	conn := &fakeConn{row: fakeRow{vals: []any{want.UnixMicro()}}}
+	reader := &ClickHouseReader{conn: conn, queryTimeout: time.Second}
+	got, err := reader.ServerTime(context.Background())
+	if err != nil {
+		t.Fatalf("ServerTime: %v", err)
+	}
+	if !got.Equal(want) {
+		t.Errorf("server time = %s, want %s", got, want)
+	}
+	if conn.lastQueryRow != serverTimeQuery {
+		t.Errorf("query = %q, want %q", conn.lastQueryRow, serverTimeQuery)
+	}
+
+	conn.row = fakeRow{err: errors.New("TIMEOUT_EXCEEDED")}
+	if _, err := reader.ServerTime(context.Background()); err == nil {
+		t.Error("expected the query error to propagate")
+	}
+}
+
+// TestFetchSpansForTraceIDs_NoGapReadAtTheLimit keeps a full first read from
+// reading more: the limit is already reached.
+func TestFetchSpansForTraceIDs_NoGapReadAtTheLimit(t *testing.T) {
+	traceID := uuid.New()
+	since := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	reader, conn := newTraceDrilldownReader(func(string) (driver.Rows, error) {
+		return newFakeRows(
+			traceSpanRow(traceID, 1, "query", since.Add(-2*time.Hour), since.Add(time.Minute)),
+			traceSpanRow(traceID, 2, "MergeTreeRead", since, since.Add(time.Second)),
+		), nil
+	})
+	spans, err := reader.FetchSpansForTraceIDs(context.Background(), []string{traceID.String()}, 1, since, 2, nil)
+	if err != nil {
+		t.Fatalf("FetchSpansForTraceIDs: %v", err)
+	}
+	if len(spans) != 2 || len(conn.sqls) != 1 {
+		t.Errorf("spans/reads = %d/%d, want 2/1", len(spans), len(conn.sqls))
+	}
+}
+
+func TestFetchSpansForTraceIDs_GapReadErrorPropagates(t *testing.T) {
+	traceID := uuid.New()
+	since := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	reader, _ := newTraceDrilldownReader(func(query string) (driver.Rows, error) {
+		if strings.Contains(query, "finish_time_us < ?") {
+			return nil, errors.New("TIMEOUT_EXCEEDED")
+		}
+		return newFakeRows(traceSpanRow(traceID, 1, "query", since.Add(-time.Hour), since.Add(time.Minute))), nil
+	})
+	spans, err := reader.FetchSpansForTraceIDs(context.Background(), []string{traceID.String()}, 1, since, 100, nil)
+	if err == nil || spans != nil {
+		t.Fatalf("spans, err = %v, %v; want the gap read's error and no spans", spans, err)
 	}
 }
 
@@ -216,7 +469,7 @@ func TestRecentQueryCandidatesBuilder_PicksUpUserFilters(t *testing.T) {
 		EndTime:   time.Now(),
 		Limit:     10,
 	})
-	if !strings.Contains(b.query, "AND user IN ?") {
+	if !strings.Contains(b.query, "AND if(initial_user != '', initial_user, user) IN ?") {
 		t.Errorf("candidate builder did not splice whitelist clause\nSQL: %s", b.query)
 	}
 	if !strings.Contains(b.query, "AND user NOT IN ?") {
@@ -432,7 +685,7 @@ func TestFetchRecentQueryCandidates_ScansRows(t *testing.T) {
 	conn := &fakeConn{rows: newFakeRows([]any{
 		"qid-1", "QueryFinish", now, uint64(1500), "SELECT * FROM events WHERE id = 7",
 		uint64(987654321), "SELECT * FROM events WHERE id = ?",
-		"default", "clickhouse-go", "app-1", "10.0.0.1", "10.0.0.1",
+		"default", "default", "clickhouse-go", "app-1", "10.0.0.1", "10.0.0.1",
 		[]string{"default"}, []string{"default.events"}, int32(0),
 		uint64(100), uint64(200), uint64(0), uint64(0), uint64(10), uint64(20), uint64(300),
 	})}
@@ -538,7 +791,7 @@ func TestCurrentQueryCandidatesBuilder_PicksUpUserFilters(t *testing.T) {
 	r.whitelistUsers = []string{"app_frontend"}
 	r.blacklistUsers = []string{"patient_records"}
 	b := r.currentQueryCandidatesBuilder(CurrentQueryCandidateOptions{Limit: 10})
-	if !strings.Contains(b.query, "AND user IN ?") {
+	if !strings.Contains(b.query, "AND if(initial_user != '', initial_user, user) IN ?") {
 		t.Errorf("current builder did not splice whitelist clause:\n%s", b.query)
 	}
 	if !strings.Contains(b.query, "AND user NOT IN ?") {
@@ -671,7 +924,7 @@ func TestFetchCurrentQueryCandidates_ScansRowsWithoutNormalized(t *testing.T) {
 func TestFetchSpansForTraceIDs_EmptyAndInvalidInputs(t *testing.T) {
 	reader, conn := newTraceDrilldownReader(nil)
 
-	spans, err := reader.FetchSpansForTraceIDs(context.Background(), nil, 1, 1000, nil)
+	spans, err := reader.FetchSpansForTraceIDs(context.Background(), nil, 1, time.Time{}, 1000, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -680,7 +933,7 @@ func TestFetchSpansForTraceIDs_EmptyAndInvalidInputs(t *testing.T) {
 	}
 
 	// All-invalid trace IDs must short-circuit without a query.
-	spans, err = reader.FetchSpansForTraceIDs(context.Background(), []string{"not-a-uuid"}, 1, 1000, nil)
+	spans, err = reader.FetchSpansForTraceIDs(context.Background(), []string{"not-a-uuid"}, 1, time.Time{}, 1000, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

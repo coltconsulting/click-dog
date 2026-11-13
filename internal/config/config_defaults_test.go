@@ -57,8 +57,8 @@ func TestLoadConfig_ValidMinimal(t *testing.T) {
 	if cfg.Monitor.Backoff.BackoffFactor != 2.0 {
 		t.Errorf("backoff.backoff_factor default = %f, want 2.0", cfg.Monitor.Backoff.BackoffFactor)
 	}
-	if cfg.Filters.QueryTextMode != QueryTextModeRaw {
-		t.Errorf("filters.query_text_mode default = %q, want raw", cfg.Filters.QueryTextMode)
+	if cfg.Filters.QueryTextMode != QueryTextModeNormalizedOnly {
+		t.Errorf("filters.query_text_mode default = %q, want normalized_only", cfg.Filters.QueryTextMode)
 	}
 }
 
@@ -84,26 +84,16 @@ monitor:
 	}
 }
 
-func TestLoadConfig_LegacyRedactionRulesSelectRedactedMode(t *testing.T) {
+func TestLoadConfig_RedactionRulesWithoutModeRejected(t *testing.T) {
 	yaml := validMinimalYAML + `
 filters:
   redact_queries:
     - pattern: "'[^']*'"
       replacement: "?"
 `
-	cfg, err := LoadConfig(writeConfigFile(t, yaml))
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	if cfg.Filters.QueryTextMode != QueryTextModeRedacted {
-		t.Fatalf("query_text_mode = %q, want redacted for legacy redact_queries config", cfg.Filters.QueryTextMode)
-	}
-	if len(cfg.ValidationWarnings) == 0 {
-		t.Fatal("expected a migration warning for implicit legacy redaction")
-	}
-	warnings := strings.Join(cfg.ValidationWarnings, "\n")
-	if !strings.Contains(warnings, "statements that match no rule are now omitted") {
-		t.Fatalf("migration warning does not disclose stricter unmatched-query behavior: %v", cfg.ValidationWarnings)
+	_, err := LoadConfig(writeConfigFile(t, yaml))
+	if err == nil || !strings.Contains(err.Error(), "set query_text_mode: redacted (currently normalized_only)") {
+		t.Fatalf("LoadConfig error = %v, want redact_queries rejected under the default mode", err)
 	}
 }
 
@@ -116,27 +106,14 @@ func TestLoadConfig_QueryTextModeWarnings(t *testing.T) {
 		{
 			name:        "normalized only without enrichment",
 			yaml:        strings.Replace(validMinimalYAML, "monitor:\n", "filters:\n  query_text_mode: normalized_only\nmonitor:\n  enrich_from_query_log: false\n", 1),
-			wantWarning: "scheduled/native spans cannot receive query_log normalized previews",
+			wantWarning: "scheduled spans export no query text under filters.query_text_mode normalized_only",
 		},
 		{
-			name: "none ignores stale redaction rules",
-			yaml: validMinimalYAML + `
-filters:
-  query_text_mode: none
-  redact_queries:
-    - pattern: "[invalid("
-`,
-			wantWarning: "redact_queries is ignored when filters.query_text_mode is none",
-		},
-		{
-			name: "normalized only ignores stale redaction rules",
-			yaml: validMinimalYAML + `
-filters:
-  query_text_mode: normalized_only
-  redact_queries:
-    - pattern: "[invalid("
-`,
-			wantWarning: "redact_queries is ignored when filters.query_text_mode is normalized_only",
+			// The default mode, never written, still loses the text, and the
+			// warning names the fix.
+			name:        "default mode without enrichment",
+			yaml:        strings.Replace(validMinimalYAML, "monitor:\n", "monitor:\n  enrich_from_query_log: false\n", 1),
+			wantWarning: "Set filters.query_text_mode: raw to export db.statement instead",
 		},
 	}
 
@@ -438,7 +415,7 @@ func TestLoadConfig_CanaryDefaults(t *testing.T) {
 func TestLoadConfig_HealthDefaults(t *testing.T) {
 	// Minimal config has health.enabled unset (false). The listen address
 	// default is deliberately NOT applied when health is disabled — that
-	// way -validate output doesn't print a port the process won't open.
+	// way `validate` output doesn't print a port the process won't open.
 	cfg, err := LoadConfig(writeConfigFile(t, validMinimalYAML))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -642,5 +619,26 @@ metrics:
 	}
 	if got := cfg.Metrics.OTLP.Rename["spans_exported"]; got != "myco.clickdog.spans_exported" {
 		t.Errorf("rename[spans_exported] = %q", got)
+	}
+}
+
+// TestFiltersConfig_EffectiveQueryTextModeDefaults pins the default for
+// Config values built in Go without Load, which exporters, tests, and the
+// test commands use: no mode means normalized_only, with or without
+// redaction rules.
+func TestFiltersConfig_EffectiveQueryTextModeDefaults(t *testing.T) {
+	tests := []struct {
+		name    string
+		filters FiltersConfig
+		want    QueryTextMode
+	}{
+		{"unset", FiltersConfig{}, QueryTextModeNormalizedOnly},
+		{"rules without a mode", FiltersConfig{RedactQueries: []RedactionRule{{Pattern: "x"}}}, QueryTextModeNormalizedOnly},
+		{"explicit raw", FiltersConfig{QueryTextMode: QueryTextModeRaw}, QueryTextModeRaw},
+	}
+	for _, tt := range tests {
+		if got := tt.filters.EffectiveQueryTextMode(); got != tt.want {
+			t.Errorf("%s: EffectiveQueryTextMode() = %q, want %q", tt.name, got, tt.want)
+		}
 	}
 }

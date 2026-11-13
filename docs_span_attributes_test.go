@@ -34,14 +34,25 @@ func TestSpanAttributesDocs_NormalizedQueryContract(t *testing.T) {
 		"`exporters.otel[].max_query_length`",
 		"`exporters.splunk_hec[].max_query_length`",
 		"`0` does not disable these limits",
-		"Query Family Rollups",
-		"not part of the hot live-export path",
-		"preserves its member `normalized_query_hash` values",
-		"no AI/LLM naming",
-		"Dashboard/export limitation",
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("span attributes docs missing %q", want)
+		}
+	}
+
+	// The query-family rollup contract lives with the analyze commands.
+	qa, err := os.ReadFile("docs/query-analysis.md")
+	if err != nil {
+		t.Fatalf("reading query analysis docs: %v", err)
+	}
+	for _, want := range []string{
+		"## How families are derived",
+		"A family keeps its member hashes",
+		"Families exist only in `analyze` output",
+		"the Datadog query dashboard groups by exact hash",
+	} {
+		if !strings.Contains(strings.Join(strings.Fields(string(qa)), " "), want) {
+			t.Errorf("query analysis docs missing %q", want)
 		}
 	}
 }

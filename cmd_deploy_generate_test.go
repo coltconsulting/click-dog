@@ -129,6 +129,7 @@ func TestDeployDockerInitialGeneration(t *testing.T) {
 		"password: ${CLICKHOUSE_PASSWORD}",
 		`collector_address: "localhost:4317"`,
 		"port: 9000",
+		"health:\n  enabled: true\n",
 	)
 	dockerCfg := readFile(t, filepath.Join(outDir, "click-dog.yaml"))
 	if strings.Contains(dockerCfg, "secure: true") {
@@ -340,29 +341,6 @@ func TestDeployKubernetesRejectsLocalhostHost(t *testing.T) {
 		if err == nil {
 			t.Errorf("expected error for ch-host %q, got nil", host)
 		}
-	}
-}
-
-// A pre-#199 output dir (daemonset.yaml, no deployment.yaml) can't be
-// image-bumped in place — the topology changed — so --update must refuse with
-// migration guidance rather than a generic not-found.
-func TestDeployKubernetesUpdateRejectsLegacyDaemonSetDir(t *testing.T) {
-	outDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(outDir, "daemonset.yaml"),
-		[]byte("kind: DaemonSet\nspec: {}\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	var stderr bytes.Buffer
-	err := deployKubernetes(deployGenerateOptions{
-		OutDir:  outDir,
-		Version: "26.05.2",
-		Update:  true,
-	}, io.Discard, &stderr)
-	if err == nil {
-		t.Fatal("expected a migration error for a legacy daemonset.yaml dir, got nil")
-	}
-	if !strings.Contains(err.Error(), "kubectl delete daemonset") {
-		t.Errorf("error should give migration guidance (delete the old DaemonSet), got: %v", err)
 	}
 }
 

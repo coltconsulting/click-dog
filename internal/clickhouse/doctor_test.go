@@ -390,6 +390,27 @@ func TestDoctorEnrichJoinSQL_MatchesRuntimeTerminalFilter(t *testing.T) {
 	}
 }
 
+// TestDoctorEnrichJoin_BoundsEventTimeToTheLookback pins the probe's read
+// bound: its query IDs come from spans that finished in the lookback, so it
+// reads query_log only from a margin before that, not since the day floor.
+func TestDoctorEnrichJoin_BoundsEventTimeToTheLookback(t *testing.T) {
+	reader := newDoctorReader(healthyDoctorRow, func(string) (driver.Rows, error) {
+		return newFakeRows([]any{"qid-1"}), nil
+	})
+	reader.RunReadinessChecks(context.Background(), ReadinessOptions{
+		Lookback:           10 * time.Minute,
+		MinTraceDurationMs: 1000,
+		EnrichmentNeeded:   true,
+	})
+	if !strings.Contains(doctorEnrichJoinSQL, "event_time >= now() - INTERVAL ? SECOND") {
+		t.Fatalf("enrichment-join probe lacks the event_time bound:\n%s", doctorEnrichJoinSQL)
+	}
+	args := reader.conn.(*doctorConn).rowArgs[strings.ReplaceAll(doctorEnrichJoinSQL, tblQueryLog, "system.query_log")]
+	if len(args) != 3 || args[1] != 1 || args[2] != 660 {
+		t.Errorf("join args = %v, want [ids 1 660] (one day, the lookback plus a minute)", args)
+	}
+}
+
 func TestReadinessStatusString(t *testing.T) {
 	cases := map[ReadinessStatus]string{
 		ReadinessPass: "PASS", ReadinessWarn: "WARN",
@@ -444,9 +465,15 @@ type doctorConn struct {
 	*fakeConn
 	rowFn  func(query string) driver.Row
 	rowsFn func(query string) (driver.Rows, error)
+	// rowArgs records each QueryRow's arguments by its SQL.
+	rowArgs map[string][]any
 }
 
-func (c *doctorConn) QueryRow(_ context.Context, query string, _ ...any) driver.Row {
+func (c *doctorConn) QueryRow(_ context.Context, query string, args ...any) driver.Row {
+	if c.rowArgs == nil {
+		c.rowArgs = map[string][]any{}
+	}
+	c.rowArgs[query] = args
 	return c.rowFn(query)
 }
 func (c *doctorConn) Query(_ context.Context, query string, _ ...any) (driver.Rows, error) {
@@ -587,5 +614,32 @@ func TestRunReadinessChecks_ClusterModeMixedNormalizedEndToEnd(t *testing.T) {
 	}
 	if !strings.Contains(ck.Detail, "2 of 3") {
 		t.Errorf("normalized check detail should include replica counts: %q", ck.Detail)
+	}
+}
+
+// blacklist_queries alone reads no query_log, but it finds each trace's
+// statements through query spans, so the query_id probe must still run.
+func TestRunReadinessChecks_QueryIDProbeRunsForQueryBlacklist(t *testing.T) {
+	var seen []string
+	reader := newDoctorReader(func(query string) driver.Row {
+		seen = append(seen, query)
+		return healthyDoctorRow(query)
+	}, func(query string) (driver.Rows, error) {
+		seen = append(seen, query)
+		return newFakeRows([]any{"qid-1"}), nil
+	})
+	checks := reader.RunReadinessChecks(context.Background(), ReadinessOptions{
+		Lookback:      24 * time.Hour,
+		QueryIDNeeded: true,
+	})
+	joined := strings.Join(seen, "\n")
+	if !strings.Contains(joined, "with_qid") {
+		t.Errorf("query_id-presence probe did not run:\n%s", joined)
+	}
+	if strings.Contains(joined, "AS matched") {
+		t.Errorf("enrichment-join lookup must not run without enrichment:\n%s", joined)
+	}
+	if s := statusOf(t, checks, "clickhouse.query_id on spans"); s == ReadinessSkip {
+		t.Errorf("clickhouse.query_id on spans = %s, want it checked", s)
 	}
 }

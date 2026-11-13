@@ -51,7 +51,7 @@ func TestIntegration_ClickHouseAllNodesHealthy(t *testing.T) {
 	}
 }
 
-func TestIntegration_FetchSlowQueriesInRange(t *testing.T) {
+func TestIntegration_FetchSlowQueriesInRangePage(t *testing.T) {
 	conn := waitForClickHouse(t, 1, 30*time.Second)
 	defer conn.Close()
 
@@ -61,9 +61,9 @@ func TestIntegration_FetchSlowQueriesInRange(t *testing.T) {
 	defer reader.Close()
 
 	ctx := context.Background()
-	queries, err := reader.FetchSlowQueriesInRange(ctx, 1000, 0, 100000, fixture.WindowStart, fixture.WindowEnd, 100)
+	queries, err := reader.FetchSlowQueriesInRangePage(ctx, 1000, 0, 100000, fixture.WindowStart, fixture.WindowEnd, nil, 100)
 	if err != nil {
-		t.Fatalf("FetchSlowQueriesInRange failed: %v", err)
+		t.Fatalf("FetchSlowQueriesInRangePage failed: %v", err)
 	}
 
 	queries = exactFixtureQueries(t, queries, fixture)
@@ -82,7 +82,7 @@ func TestIntegration_FetchSlowQueriesInRange(t *testing.T) {
 }
 
 // TestIntegration_AnalyzeQueriesHandlesTDigestFloat32 pins issue #381 against
-// the ClickHouse 24.1 image used by the integration suite. quantileTDigest()
+// the ClickHouse image used by the integration suite. quantileTDigest()
 // returns Float32 on that version, while query-family report fields are
 // float64; the production SQL must cast at the source so the driver can scan
 // the complete report without a conversion error.
@@ -128,7 +128,7 @@ monitor:
 		t.Fatalf("analyze queries returned invalid JSON: %v\n%s", err, out.String())
 	}
 	if !report.Coverage.QueryFamilyRollupsSupported {
-		t.Fatal("query-family rollups should be supported by the ClickHouse 24.1 integration image")
+		t.Fatal("query-family rollups should be supported by the ClickHouse integration image")
 	}
 	if report.Coverage.QueryFamilyCount == 0 {
 		t.Fatal("expected at least one scanned query family from the seeded queries")
@@ -278,7 +278,7 @@ func TestIntegration_FetchQueryLogByQueryIDs(t *testing.T) {
 	ctx := context.Background()
 
 	// Fetch enrichment data
-	queryLogMap, err := reader.FetchQueryLogByQueryIDs(ctx, fixture.QueryIDs, 2)
+	queryLogMap, err := reader.FetchQueryLogByQueryIDs(ctx, fixture.QueryIDs, 2, uint64(fixture.WindowStart.UnixMicro()))
 	if err != nil {
 		t.Fatalf("FetchQueryLogByQueryIDs failed: %v", err)
 	}
@@ -328,8 +328,8 @@ func TestIntegration_EnrichSpanPipeline(t *testing.T) {
 	}
 	spans = exactFixtureSpans(t, spans, fixture)
 
-	// Enrich
-	queryLogMap, err := reader.FetchQueryLogByQueryIDs(ctx, fixture.QueryIDs, 2)
+	// Enrich, bounded the way a live cycle bounds it: by its query spans.
+	queryLogMap, err := reader.FetchQueryLogByQueryIDs(ctx, fixture.QueryIDs, 2, processor.EarliestQueryStartUs(spans))
 	if err != nil {
 		t.Fatalf("FetchQueryLogByQueryIDs failed: %v", err)
 	}
@@ -372,6 +372,7 @@ func TestIntegration_FetchQueryLogByQueryIDs_NoMatch(t *testing.T) {
 		context.Background(),
 		[]string{"00000000-0000-0000-0000-000000000000"},
 		2,
+		0,
 	)
 	if err != nil {
 		t.Fatalf("FetchQueryLogByQueryIDs failed on no-match: %v", err)
@@ -401,9 +402,9 @@ func TestIntegration_ClusterQueries_FetchSlowQueries(t *testing.T) {
 	ctx := context.Background()
 	startTime, endTime := fixtureBounds(fixtures)
 
-	queries, err := reader.FetchSlowQueriesInRange(ctx, 1000, 0, 100000, startTime, endTime, 100)
+	queries, err := reader.FetchSlowQueriesInRangePage(ctx, 1000, 0, 100000, startTime, endTime, nil, 100)
 	if err != nil {
-		t.Fatalf("Cluster FetchSlowQueriesInRange failed: %v", err)
+		t.Fatalf("Cluster FetchSlowQueriesInRangePage failed: %v", err)
 	}
 
 	want := queryIDsFromFixtures(fixtures)
@@ -467,14 +468,14 @@ func TestIntegration_ClusterQueries_VsLocalQueries(t *testing.T) {
 	ctx := context.Background()
 	startTime, endTime := fixtureBounds(fixtures)
 
-	localQueries, err := localReader.FetchSlowQueriesInRange(ctx, 1000, 0, 100000, startTime, endTime, 100)
+	localQueries, err := localReader.FetchSlowQueriesInRangePage(ctx, 1000, 0, 100000, startTime, endTime, nil, 100)
 	if err != nil {
-		t.Fatalf("Local FetchSlowQueriesInRange failed: %v", err)
+		t.Fatalf("Local FetchSlowQueriesInRangePage failed: %v", err)
 	}
 
-	clusterQueries, err := clusterReader.FetchSlowQueriesInRange(ctx, 1000, 0, 100000, startTime, endTime, 100)
+	clusterQueries, err := clusterReader.FetchSlowQueriesInRangePage(ctx, 1000, 0, 100000, startTime, endTime, nil, 100)
 	if err != nil {
-		t.Fatalf("Cluster FetchSlowQueriesInRange failed: %v", err)
+		t.Fatalf("Cluster FetchSlowQueriesInRangePage failed: %v", err)
 	}
 
 	wantLocal := stringSet(fixtures[0].QueryIDs)
@@ -503,9 +504,9 @@ func TestIntegration_EachNodeHasOwnQueryLog(t *testing.T) {
 	defer reader2.Close()
 
 	ctx := context.Background()
-	node2Queries, err := reader2.FetchSlowQueriesInRange(ctx, 1000, 0, 100000, fixture.WindowStart, fixture.WindowEnd, 100)
+	node2Queries, err := reader2.FetchSlowQueriesInRangePage(ctx, 1000, 0, 100000, fixture.WindowStart, fixture.WindowEnd, nil, 100)
 	if err != nil {
-		t.Fatalf("Node 2 FetchSlowQueriesInRange failed: %v", err)
+		t.Fatalf("Node 2 FetchSlowQueriesInRangePage failed: %v", err)
 	}
 
 	got := queryIDSet(t, node2Queries, stringSet(fixture.QueryIDs))

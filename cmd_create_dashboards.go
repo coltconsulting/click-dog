@@ -55,9 +55,9 @@ var shippedDashboards = []dashboardDef{
 		description: "Application query analysis (span-based) — traces grouped by app and query name",
 		prerequisites: []string{
 			"Reads exported spans (traces). Make sure click-dog is exporting to a",
-			"collector that forwards to Datadog (exporters.otel in your config).",
+			"collector that forwards to Datadog (exporters.otel in the config).",
 			"Widgets filter on the `service` template variable (default",
-			"click-dog-monitor) — set it to your exporters.otel service_name.",
+			"click-dog-monitor) — set it to the exporters.otel service_name.",
 		},
 	},
 	{
@@ -69,7 +69,7 @@ var shippedDashboards = []dashboardDef{
 			"Keep `monitor.enrich_from_query_log: true` and make sure click-dog can",
 			"read system.query_log; user/database/table/operation fields come from it.",
 			"Widgets filter on the `service` template variable (default",
-			"click-dog-monitor) — set it to your exporters.otel service_name.",
+			"click-dog-monitor) — set it to the exporters.otel service_name.",
 			"Counts are the qualified/exported stream selected by duration and filters,",
 			"not total ClickHouse traffic or a complete audit log.",
 		},
@@ -82,10 +82,10 @@ var shippedDashboards = []dashboardDef{
 			"Reads click-dog's own self-metrics over OTLP — not trace spans.",
 			"Enable `metrics.otlp.enabled: true`; by default it reuses",
 			"`exporters.otel[0]` so metrics flow to the same OTLP collector as spans.",
-			"Set `metrics.otlp.host` in containers if you want a stable host.name",
+			"Set `metrics.otlp.host` in containers for a stable host.name",
 			"dashboard variable instead of the container/pod hostname.",
-			"Prometheus-only users can still scrape :9090/metrics with the legacy",
-			"Datadog Agent OpenMetrics rename list documented in docs/integrations/datadog/self-monitoring.md.",
+			"Without OTLP, the Datadog Agent can scrape :9090/metrics with the",
+			"OpenMetrics rename list documented in docs/integrations/datadog/self-monitoring.md.",
 		},
 	},
 }
@@ -118,7 +118,7 @@ Creates one or more of the Click-Dog dashboards via the Datadog API:
 
 Re-running is safe: each dashboard is stamped with a version marker, so a
 later run detects an already-imported dashboard. If it matches this build it
-is left untouched; if it differs you are offered overwrite / new / skip
+is left untouched; if it differs the command offers overwrite / new / skip
 (prompted on a terminal, or set --on-exists for headless use).
 
 Required environment variables:
@@ -126,7 +126,7 @@ Required environment variables:
   DD_APP_KEY   Datadog application key
   DD_SITE      Trusted Datadog API hostname (default: datadoghq.com)
 
-Your keys are sent directly to Datadog and are NOT stored by click-dog.
+click-dog sends the keys directly to Datadog and does NOT store them.
 
 Usage:
   DD_API_KEY=... DD_APP_KEY=... click-dog create-dashboards [flags]
@@ -140,6 +140,10 @@ Flags:
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
+		return 2
+	}
+	if err := rejectLeftoverArgs("click-dog create-dashboards", fs, args); err != nil {
+		_, _ = fmt.Fprintln(errOut, err)
 		return 2
 	}
 
@@ -403,13 +407,19 @@ func resolveOnExists(opts reconcileOpts, d dashboardDef, out io.Writer) string {
 }
 
 // promptOnExists asks how to handle an existing, differing dashboard,
-// re-prompting on unrecognized input and defaulting to skip on EOF. The caller
-// has already printed the live-vs-build difference.
+// re-prompting on unrecognized input and defaulting to skip on EOF or an
+// over-long line. The caller has already printed the live-vs-build difference.
 func promptOnExists(in io.Reader, out io.Writer, d dashboardDef) string {
 	r := bufio.NewReader(in)
 	for {
 		_, _ = fmt.Fprintf(out, "  [%s] [o]verwrite in place, create [n]ew copy, or [s]kip? [s] ", d.name)
-		line, err := r.ReadString('\n')
+		line, err := readPromptLine(r)
+		if errors.Is(err, errPromptLineTooLong) {
+			// The rest of the line cannot be skipped when it never ends, so
+			// stop asking and take the safe default.
+			_, _ = fmt.Fprintf(out, "\n  [%s] %v; skipping\n", d.name, err)
+			return "skip"
+		}
 		switch strings.ToLower(strings.TrimSpace(line)) {
 		case "o", "overwrite":
 			return "overwrite"

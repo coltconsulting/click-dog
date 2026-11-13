@@ -287,9 +287,7 @@ func TestProcessSpansScheduled_Integration(t *testing.T) {
 		}
 
 		// Apply filters
-		queryText := span.Attributes["db.statement"]
-		clientAddr := span.Attributes["client.address"]
-		if qf.ShouldFilter(span.OperationName, queryText, clientAddr) {
+		if rejectsSpan(qf, span) {
 			filtered++
 			continue
 		}
@@ -685,108 +683,4 @@ func TestProtectionMechanisms_Combined(t *testing.T) {
 			t.Errorf("Expected interval %v, got %v", expectedInterval, poller.CurrentInterval())
 		}
 	})
-}
-
-func TestFilter_ShouldFilter(t *testing.T) {
-	tests := []struct {
-		name          string
-		config        config.FiltersConfig
-		operationName string
-		query         string
-		clientIP      string
-		shouldFilter  bool
-		description   string
-	}{
-		{
-			name: "no filters",
-			config: config.FiltersConfig{
-				BlacklistQueries: []string{},
-			},
-			operationName: "SELECT",
-			query:         "SELECT * FROM users",
-			clientIP:      "192.168.1.1",
-			shouldFilter:  false,
-			description:   "No filters configured, should not filter",
-		},
-		{
-			name: "query matches blacklist",
-			config: config.FiltersConfig{
-				BlacklistQueries: []string{"SHOW TABLES"},
-			},
-			operationName: "SHOW",
-			query:         "SHOW TABLES",
-			clientIP:      "192.168.1.1",
-			shouldFilter:  true,
-			description:   "Query matches blacklist pattern",
-		},
-		{
-			name: "query matches regex pattern",
-			config: config.FiltersConfig{
-				BlacklistQueries: []string{"^SELECT \\* FROM system\\."},
-			},
-			operationName: "SELECT",
-			query:         "SELECT * FROM system.tables",
-			clientIP:      "192.168.1.1",
-			shouldFilter:  true,
-			description:   "Query matches regex pattern",
-		},
-		{
-			name: "IP not in whitelist",
-			config: config.FiltersConfig{
-				WhitelistIPs: []string{"192.168.1.1", "10.0.0.1"},
-			},
-			operationName: "SELECT",
-			query:         "SELECT * FROM users",
-			clientIP:      "127.0.0.1",
-			shouldFilter:  true,
-			description:   "IP is not in whitelist, should be filtered",
-		},
-		{
-			name: "IP in whitelist",
-			config: config.FiltersConfig{
-				WhitelistIPs: []string{"192.168.1.1", "127.0.0.1"},
-			},
-			operationName: "SELECT",
-			query:         "SELECT * FROM users",
-			clientIP:      "127.0.0.1",
-			shouldFilter:  false,
-			description:   "IP is in whitelist, should not be filtered",
-		},
-		{
-			name: "case insensitive query match",
-			config: config.FiltersConfig{
-				BlacklistQueries: []string{"(?i)healthcheck"},
-			},
-			operationName: "SELECT",
-			query:         "SELECT * FROM HealthCheck",
-			clientIP:      "192.168.1.1",
-			shouldFilter:  true,
-			description:   "Case insensitive pattern matches",
-		},
-		{
-			name: "no match",
-			config: config.FiltersConfig{
-				BlacklistQueries: []string{"SHOW TABLES"},
-			},
-			operationName: "SELECT",
-			query:         "SELECT * FROM users",
-			clientIP:      "192.168.1.100",
-			shouldFilter:  false,
-			description:   "Query does not match blacklist",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			qf, err := filter.NewQueryFilter(tt.config)
-			if err != nil {
-				t.Fatalf("Failed to create filter: %v", err)
-			}
-
-			result := qf.ShouldFilter(tt.operationName, tt.query, tt.clientIP)
-			if result != tt.shouldFilter {
-				t.Errorf("%s: expected shouldFilter=%v, got %v", tt.description, tt.shouldFilter, result)
-			}
-		})
-	}
 }

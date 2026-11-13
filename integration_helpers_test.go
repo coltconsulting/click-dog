@@ -828,7 +828,20 @@ func uniqueBasePath(t *testing.T) string {
 }
 
 // newCHReader creates a ClickHouseReader connected to the given node.
+// waitForLiveSettle waits until traces seeded before the call are old enough
+// for the scheduled-mode live walk to select them.
+func waitForLiveSettle() {
+	time.Sleep(chreader.LiveSettle + time.Second)
+}
+
 func newCHReader(t *testing.T, node int) *chreader.ClickHouseReader {
+	t.Helper()
+	return newFilteredCHReader(t, node, config.FiltersConfig{})
+}
+
+// newFilteredCHReader creates a single-node ClickHouseReader that applies
+// filters to the rows and aggregates it reads.
+func newFilteredCHReader(t *testing.T, node int, filters config.FiltersConfig) *chreader.ClickHouseReader {
 	t.Helper()
 	reader, err := chreader.NewClickHouseReader(config.ClickHouseConfig{
 		Host:           integrationCHHost(node),
@@ -840,7 +853,7 @@ func newCHReader(t *testing.T, node int) *chreader.ClickHouseReader {
 		MaxIdleConns:   1,
 		QueryTimeoutS:  30,
 		MaxMemoryUsage: 104857600,
-	}, config.FiltersConfig{})
+	}, filters)
 	if err != nil {
 		t.Fatalf("Failed to create ClickHouseReader for node %d: %v", node, err)
 	}

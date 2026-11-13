@@ -124,7 +124,7 @@ func (s *SplunkHECExporter) ExportSpans(ctx context.Context, spans []model.OpenT
 			"start_time_us":    span.StartTimeUs,
 			"finish_time_us":   span.FinishTimeUs,
 			"duration_ms":      durationMs,
-			"attributes":       liveSpanAttributesForHEC(span.Attributes, s.maxQueryLength),
+			"attributes":       liveSpanAttributesForHEC(span, s.maxQueryLength),
 		}
 
 		ev := hecEvent{

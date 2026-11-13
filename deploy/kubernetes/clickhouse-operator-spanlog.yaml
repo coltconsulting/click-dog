@@ -10,15 +10,15 @@
 #
 # These settings mirror deploy/install.sh (span-log layout, the two SELECT
 # grants, and an explicit readonly=2 profile). Adapt the
-# cluster name, shard/replica layout, and image tag to your environment.
+# cluster name, shard/replica layout, and image tag to the target environment.
 #
 # Full walkthrough: docs/kubernetes.md
 #
 # Apply with the operator already installed:
 #   kubectl apply -f clickhouse-operator-spanlog.yaml
 #
-# NOTE for ClickHouse Cloud / other managed services: you cannot ship a
-# server config file there, so the span-log `files` block below does not
+# NOTE for ClickHouse Cloud / other managed services: these accept no
+# server config file, so the span-log `files` block below does not
 # apply. See the "Managed ClickHouse" caveat in the docs.
 apiVersion: "clickhouse.altinity.com/v1"
 kind: "ClickHouseInstallation"
@@ -56,7 +56,7 @@ spec:
     # click-dog reads. No other privileges are granted.
     #
     # Replace the password hash below. Generate one with:
-    #   printf '%s' 'YOUR_PASSWORD' | sha256sum | awk '{print $1}'
+    #   printf '%s' 'REPLACE_WITH_PASSWORD' | sha256sum | awk '{print $1}'
     # then uncomment CLICKHOUSE_PASSWORD in deploy/kubernetes/secret.yaml and
     # set it to the same plaintext so click-dog can authenticate.
     profiles:
@@ -82,8 +82,8 @@ spec:
         - "GRANT SELECT ON system.columns TO click_dog_monitor"
 
     # ── 3. Cluster layout ─────────────────────────────────────────────────
-    # Expand shards/replicas to match your topology. The span-log config and
-    # monitoring user above apply to every pod regardless of layout, so a
+    # Expand shards/replicas to match the cluster topology. The span-log config
+    # and monitoring user above apply to every pod regardless of layout, so a
     # per-node click-dog sidecar reading its local span_log covers the whole
     # cluster (see the sidecar vs cluster mode guidance in the docs).
     clusters:

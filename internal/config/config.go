@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"regexp"
@@ -230,12 +231,8 @@ type Config struct {
 	Webhook       WebhookConfig       `yaml:"webhook"`        // Webhook notifications for selected operational and analysis events
 	DatadogEvents DatadogEventsConfig `yaml:"datadog_events"` // Optional Datadog Event Management destination for analysis findings
 
-	// DeprecationWarnings holds warnings for deprecated config fields found
-	// during loading. Not part of the YAML schema — populated by LoadConfig.
-	DeprecationWarnings []string `yaml:"-"`
-
 	// EnvWarnings holds warnings for ${VAR} references whose environment
-	// variable is unset (kept separate from DeprecationWarnings so callers can
+	// variable is unset (kept separate from ValidationWarnings so callers can
 	// assert on each independently). Not part of the YAML schema.
 	EnvWarnings []string `yaml:"-"`
 
@@ -338,7 +335,7 @@ type CanaryConfig struct {
 // for the rationale and deployment recipes.
 type MetricsConfig struct {
 	Enabled            bool              `yaml:"enabled"`              // Enable both listeners (default: false)
-	ListenAddress      string            `yaml:"listen_address"`       // Scrape: /metrics + /health (default: ":9090")
+	ListenAddress      string            `yaml:"listen_address"`       // Scrape: /metrics (default: ":9090")
 	AdminListenAddress string            `yaml:"admin_listen_address"` // Admin: POST /flush (default: "127.0.0.1:9091")
 	OTLP               OTLPMetricsConfig `yaml:"otlp"`                 // Optional OTLP push path for self-metrics
 }
@@ -537,24 +534,51 @@ const (
 )
 
 type FiltersConfig struct {
-	QueryTextMode       QueryTextMode   `yaml:"query_text_mode"`      // Exported SQL representation: raw, redacted, normalized_only, or none (default: raw)
+	QueryTextMode       QueryTextMode   `yaml:"query_text_mode"`      // Exported SQL representation: raw, redacted, normalized_only, or none (default: normalized_only)
 	WhitelistOperations []string        `yaml:"whitelist_operations"` // Operation names to include, supports * wildcard (e.g., "DB::Interpreter*::execute()")
 	BlacklistOperations []string        `yaml:"blacklist_operations"` // Operation name substrings to exclude at SQL level (e.g., "MergeTreeIndex", "VFSWrite"). Uses LIKE '%value%' matching.
-	WhitelistIPs        []string        `yaml:"whitelist_ips"`        // IP addresses to include (if set, only these are allowed)
-	WhitelistUsers      []string        `yaml:"whitelist_users"`      // ClickHouse users to include (if set, only spans from these users are exported). Matched against query_log.user on enriched spans; spans without a determinable user are dropped when a whitelist is active.
+	WhitelistIPs        []string        `yaml:"whitelist_ips"`        // Client IPs or CIDRs to include (if set, only queries from these originating clients are exported). See ClientPrefix.
+	WhitelistUsers      []string        `yaml:"whitelist_users"`      // ClickHouse users to include (if set, only queries whose originating user, query_log.initial_user, is listed are exported).
 	BlacklistUsers      []string        `yaml:"blacklist_users"`      // ClickHouse users to exclude. Defense-in-depth alongside CH user-level grants — see docs/filtering.md.
 	BlacklistQueries    []string        `yaml:"blacklist_queries"`    // Regex patterns to exclude from query text
 	RedactQueries       []RedactionRule `yaml:"redact_queries"`       // Regex-based redaction rules applied to query text before export
 }
 
+// ClientPrefix parses one filters.whitelist_ips entry, a plain IP or a CIDR,
+// into the prefix of client addresses it admits; a plain IP admits only
+// itself. ClickHouse stores every client as IPv6 and reports an IPv4 client
+// as ::ffff:a.b.c.d, so IPv4-mapped entries are unmapped to IPv4 and an entry
+// matches a client by value, however either side spells it. The live filter
+// and the query_log SQL both match against these prefixes, so they agree.
+func ClientPrefix(entry string) (netip.Prefix, error) {
+	if strings.Contains(entry, "/") {
+		p, err := netip.ParsePrefix(entry)
+		if err != nil {
+			return netip.Prefix{}, err
+		}
+		p = p.Masked()
+		if p.Addr().Is4In6() && p.Bits() >= 96 {
+			p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96)
+		}
+		return p, nil
+	}
+	addr, err := netip.ParseAddr(entry)
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+	if addr.Zone() != "" {
+		return netip.Prefix{}, fmt.Errorf("IP %q has a zone, which ClickHouse does not record", entry)
+	}
+	addr = addr.Unmap()
+	return netip.PrefixFrom(addr, addr.BitLen()), nil
+}
+
 // EffectiveQueryTextMode returns the privacy mode after applying the
-// compatibility default used by directly constructed Config values.
+// normalized_only default to directly constructed Config values, matching
+// what Load resolves.
 func (f FiltersConfig) EffectiveQueryTextMode() QueryTextMode {
 	if f.QueryTextMode == "" {
-		if len(f.RedactQueries) > 0 {
-			return QueryTextModeRedacted
-		}
-		return QueryTextModeRaw
+		return QueryTextModeNormalizedOnly
 	}
 	return f.QueryTextMode
 }
@@ -630,21 +654,13 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
-	// First pass: unmarshal into raw map to detect deprecated fields.
+	// First pass: unmarshal into a raw map to tell omitted keys from keys set
+	// to their zero value.
 	var raw map[string]interface{}
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
-	deprecationWarnings := checkDeprecations(raw)
 	envWarnings := unresolvedEnvRefs(data)
-
-	// ha.enabled was removed outright (deployment-topology spec): election is
-	// driven solely by the presence of ha.keeper.hosts. The strict decoder would
-	// reject the key with a generic "field enabled not found", which reads like
-	// a typo — catch it here with an actionable upgrade message instead.
-	if lookupPath(raw, "ha.enabled") {
-		return nil, fmt.Errorf("ha.enabled has been removed: leader election is enabled by setting ha.keeper.hosts — delete the ha.enabled key")
-	}
 
 	// Track explicit-set log_rotation keys so the defaults below only fire
 	// when the user omitted the key entirely. Without this, a user-set
@@ -662,9 +678,8 @@ func LoadConfig(path string) (*Config, error) {
 	otlpMetricsIntervalSet := lookupPath(raw, "metrics.otlp.interval_seconds")
 	queryTextModeSet := lookupPath(raw, "filters.query_text_mode")
 
-	// Strict decode: reject unknown keys so a typo (e.g. check_intervla_s) — or
-	// the removed legacy top-level otel: key — fails fast at load instead of
-	// being silently ignored.
+	// Strict decode: reject unknown keys so a typo (e.g. check_intervla_s)
+	// fails fast at load instead of being silently ignored.
 	var config Config
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -674,7 +689,6 @@ func LoadConfig(path string) (*Config, error) {
 	if queryTextModeSet && strings.TrimSpace(string(config.Filters.QueryTextMode)) == "" {
 		return nil, errors.New("filters.query_text_mode must be one of: raw, redacted, normalized_only, none; got an empty value")
 	}
-	config.DeprecationWarnings = deprecationWarnings
 	config.EnvWarnings = envWarnings
 
 	// Expand environment variables in sensitive fields
@@ -788,19 +802,11 @@ func LoadConfig(path string) (*Config, error) {
 	if config.Monitor.ExportTimeoutS == 0 && !exportTimeoutSet {
 		config.Monitor.ExportTimeoutS = DefaultExportTimeoutS
 	}
-	// Migrate legacy redact_queries configs without risking a silent privacy
-	// regression during upgrade. New configs default to raw; an older config
-	// that has redaction rules but no query_text_mode is promoted to the new,
-	// fail-closed redacted mode. Unlike the legacy implementation, unmatched
-	// statements are omitted, so the warning calls out that stricter behavior.
+	// Raw SQL leaves the host only when asked for: without a mode, configs
+	// default to normalized_only. Redaction rules never select a mode; Validate
+	// rejects them under any mode other than redacted.
 	if !queryTextModeSet {
-		if len(config.Filters.RedactQueries) > 0 {
-			config.Filters.QueryTextMode = QueryTextModeRedacted
-			config.ValidationWarnings = append(config.ValidationWarnings,
-				"filters.redact_queries is configured without filters.query_text_mode; selecting fail-closed query_text_mode: redacted for migration safety. Unlike legacy redaction, statements that match no rule are now omitted. Set the mode explicitly to complete the migration")
-		} else {
-			config.Filters.QueryTextMode = QueryTextModeRaw
-		}
+		config.Filters.QueryTextMode = QueryTextModeNormalizedOnly
 	}
 
 	// Resolve each OTLP connection's transport once, from the expanded
@@ -916,7 +922,7 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	// Health defaults — only applied when the server is enabled so that
-	// -validate output (and any future struct dump) doesn't print a port
+	// `validate` output (and any future struct dump) doesn't print a port
 	// that will never be opened.
 	if config.Health.Enabled && config.Health.ListenAddress == "" {
 		config.Health.ListenAddress = ":8686"
@@ -1019,10 +1025,7 @@ func (c *Config) queryTextModeWarnings() []string {
 	mode := c.Filters.EffectiveQueryTextMode()
 	var warnings []string
 	if mode == QueryTextModeNormalizedOnly && !c.Monitor.ShouldEnrichFromQueryLog() {
-		warnings = append(warnings, "filters.query_text_mode is normalized_only while monitor.enrich_from_query_log is false; scheduled/native spans cannot receive query_log normalized previews and will omit query text unless another explicitly normalized span attribute is present")
-	}
-	if (mode == QueryTextModeNormalizedOnly || mode == QueryTextModeNone) && len(c.Filters.RedactQueries) > 0 {
-		warnings = append(warnings, fmt.Sprintf("filters.redact_queries is ignored when filters.query_text_mode is %s; remove the inert rules after confirming the stricter query-text policy", mode))
+		warnings = append(warnings, "monitor.enrich_from_query_log is false, so scheduled spans export no query text under filters.query_text_mode normalized_only (the default): the normalized text comes from query_log. Set filters.query_text_mode: raw to export db.statement instead, or none to make the omission explicit")
 	}
 	return warnings
 }
@@ -1039,7 +1042,7 @@ func (c *Config) tlsMaterialWarnings() []string {
 }
 
 // validateTLSFiles verifies that active TLS file references can be read during
-// config loading, including offline -validate mode. Keep this separate from
+// config loading, including the offline validate command. Keep this separate from
 // Validate so callers can validate an in-memory Config without depending on
 // the local filesystem. Certificate parsing remains the responsibility of the
 // TLS constructors, which already provide format-specific errors.
@@ -1371,38 +1374,16 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Sprintf("filters.blacklist_users[%d] must not be empty", i))
 		}
 	}
-	// User filtering depends on query_log enrichment to resolve the CH user
-	// per span (system.opentelemetry_span_log has no user attribute). With
-	// enrichment disabled, every span resolves to "" — a whitelist would
-	// drop all spans, a blacklist would silently pass everyone. Reject the
-	// combination rather than ship a broken filter.
-	if (len(c.Filters.WhitelistUsers) > 0 || len(c.Filters.BlacklistUsers) > 0) && !c.Monitor.ShouldEnrichFromQueryLog() {
-		errs = append(errs, "filters.whitelist_users / filters.blacklist_users require query_log enrichment (set monitor.enrich_from_query_log: true or remove the user filter)")
-	}
-
-	// The IP whitelist has the same dependency for the same reason: span-log
-	// rows carry no client address, so scheduled mode resolves it through
-	// query_log. Without enrichment every span resolves to "" and the
-	// whitelist drops the whole cycle.
-	if len(c.Filters.WhitelistIPs) > 0 && !c.Monitor.ShouldEnrichFromQueryLog() {
-		errs = append(errs, "filters.whitelist_ips requires query_log enrichment (set monitor.enrich_from_query_log: true or remove the IP whitelist)")
-	}
-
 	// Filter IP whitelist validation: each entry must parse either as a plain
-	// IP (e.g. "10.0.0.1") or as a CIDR (e.g. "10.0.0.0/8"). The filter package
-	// rejects bad CIDRs at construction time, but plain-IP entries are
-	// stuffed into a lookup map untouched — so a typo'd "10.0.0..1" silently
-	// matches nothing instead of erroring. Validate at config load so
-	// `click-dog check` surfaces it before the runtime ever sees it.
+	// IP (e.g. "10.0.0.1") or as a CIDR (e.g. "10.0.0.0/8"), so a typo'd
+	// "10.0.0..1" fails `click-dog check` instead of silently matching nothing.
 	for i, entry := range c.Filters.WhitelistIPs {
-		if strings.Contains(entry, "/") {
-			if _, _, err := net.ParseCIDR(entry); err != nil {
-				errs = append(errs, fmt.Sprintf("filters.whitelist_ips[%d] is not a valid CIDR: %q (%v)", i, entry, err))
+		if _, err := ClientPrefix(entry); err != nil {
+			kind := "IP address"
+			if strings.Contains(entry, "/") {
+				kind = "CIDR"
 			}
-			continue
-		}
-		if net.ParseIP(entry) == nil {
-			errs = append(errs, fmt.Sprintf("filters.whitelist_ips[%d] is not a valid IP address: %q", i, entry))
+			errs = append(errs, fmt.Sprintf("filters.whitelist_ips[%d] is not a valid %s: %q (%v)", i, kind, entry, err))
 		}
 	}
 
@@ -1416,11 +1397,18 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Sprintf("filters.query_text_mode must be one of: raw, redacted, normalized_only, none; got %q", queryTextMode))
 	}
 
+	// Compile the query blacklist here so `validate` and `check` reject an
+	// invalid pattern instead of the daemon failing at startup.
+	for i, pattern := range c.Filters.BlacklistQueries {
+		if _, err := regexp.Compile(pattern); err != nil {
+			errs = append(errs, fmt.Sprintf("filters.blacklist_queries[%d] is invalid regex: %v", i, err))
+		}
+	}
 	// Redaction-rule invariants are also enforced by NewQueryFilter so directly
 	// constructed configs cannot bypass the final privacy boundary. Only the
-	// redacted mode consumes and therefore compiles rules. normalized_only/none
-	// ignore stale rules with a warning; raw rejects them because it would
-	// otherwise look redacted while exporting the original statement.
+	// redacted mode consumes rules, so rules under any other mode are rejected:
+	// under raw they would look like redaction while exporting the original
+	// statement, and under the stricter modes they would do nothing.
 	if queryTextMode == QueryTextModeRedacted {
 		for i, rule := range c.Filters.RedactQueries {
 			pattern := strings.TrimSpace(rule.Pattern)
@@ -1436,7 +1424,7 @@ func (c *Config) Validate() error {
 	if queryTextMode == QueryTextModeRedacted && len(c.Filters.RedactQueries) == 0 {
 		errs = append(errs, "filters.query_text_mode redacted requires at least one valid filters.redact_queries rule; click-dog will not fall back to raw query text")
 	}
-	if queryTextMode == QueryTextModeRaw && len(c.Filters.RedactQueries) > 0 {
+	if queryTextMode != QueryTextModeRedacted && len(c.Filters.RedactQueries) > 0 {
 		errs = append(errs, fmt.Sprintf("filters.redact_queries is only used when filters.query_text_mode is redacted; remove the rules or set query_text_mode: redacted (currently %s)", queryTextMode))
 	}
 

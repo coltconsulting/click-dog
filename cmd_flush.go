@@ -48,6 +48,10 @@ Flags:
 		}
 		return 2
 	}
+	if err := rejectLeftoverArgs("click-dog flush", fs, args); err != nil {
+		_, _ = fmt.Fprintln(errOut, err)
+		return 2
+	}
 
 	cfg, _, err := loadConfig(*configPath)
 	if err != nil {

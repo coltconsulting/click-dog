@@ -30,9 +30,9 @@ on:
   workflow_dispatch:
   schedule:
     # Weekly full run (Mon 06:00 UTC). Its job is to re-run govulncheck
-    # against the latest vuln DB now that govulncheck no longer runs on
-    # PRs (see its `if:` below) — and as a side benefit gives master a
-    # weekly green baseline incl. the integration suite. ~4 runs/month.
+    # against the latest vuln DB, because PRs that leave go.mod and go.sum
+    # alone skip it (see its `if:` below) — and as a side benefit gives master
+    # a weekly green baseline incl. the integration suite. ~4 runs/month.
     - cron: '0 6 * * 1'
 
 # Cancel superseded PR runs to avoid paying for stale push iterations.
@@ -47,22 +47,31 @@ permissions:
   contents: read
 
 jobs:
+  # Where test, lint, build and govulncheck run (docs.yml's jobs too): the org
+  # variable CI_RUNNER names a self-hosted runner label (`colt-laptop`:
+  # throwaway Linux arm64 containers on the owner's MacBook, no Docker) that
+  # takes them off the org's 3,000 hosted minutes; unset or deleted, they run
+  # on GitHub's. Tag runs (release.yml's gate) always run on ubuntu-latest, so
+  # releases stay gated on the same x86 hosts as before. integration-test needs
+  # Docker and build-arm64 is tag-only, so both stay hosted.
   test:
     # Skip draft PRs — agents (claude/*, codex/*) push many WIP commits and
     # each one would otherwise fire the full job set. Non-PR events (push,
     # tag, schedule, workflow_call) always run. Same guard on lint/build.
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
+    runs-on: ${{ !startsWith(github.ref, 'refs/tags/') && vars.CI_RUNNER || 'ubuntu-latest' }}
     outputs:
-      run_integration: ${{ steps.integration-scope.outputs.run_integration }}
+      run_integration: ${{ steps.change-scope.outputs.run_integration }}
+      run_govulncheck: ${{ steps.change-scope.outputs.run_govulncheck }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # Risk-based integration gating compares the exact PR endpoints.
+          # Risk-based integration and govulncheck gating compares the exact
+          # PR endpoints.
           fetch-depth: 0
 
-      - name: Detect integration-sensitive changes
-        id: integration-scope
+      - name: Detect integration- and dependency-sensitive changes
+        id: change-scope
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -70,20 +79,27 @@ jobs:
         run: |
           if [ "$EVENT_NAME" != "pull_request" ]; then
             echo "run_integration=true" >> "$GITHUB_OUTPUT"
+            echo "run_govulncheck=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           run_integration=false
+          run_govulncheck=false
           while IFS= read -r path; do
             case "$path" in
               internal/clickhouse/*|internal/processor/*|internal/leader/*|internal/health/*|internal/export/*|internal/analysis/*|internal/queryfamily/*|internal/filter/*|internal/config/*|internal/resilience/*|testing/*|integration_test.go|integration_*_test.go|cmd_*.go|main.go|health_adapter.go|export_gate.go|third_party/*|.github/workflows/ci.yml|go.mod|go.sum)
                 run_integration=true
-                break
+                ;;
+            esac
+            case "$path" in
+              go.mod|go.sum)
+                run_govulncheck=true
                 ;;
             esac
           done < <(git diff --name-only --diff-filter=ACDMRTUXB "$BASE_SHA" "$HEAD_SHA")
 
           echo "run_integration=$run_integration" >> "$GITHUB_OUTPUT"
+          echo "run_govulncheck=$run_govulncheck" >> "$GITHUB_OUTPUT"
 
       # Pinned tools (Go, golangci-lint, govulncheck, actionlint, shellcheck)
       # take their version from scripts/tool-versions.env, the file the local
@@ -102,12 +118,17 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ steps.pins.outputs.go_version }}
+          # The self-hosted runner restores GitHub's Actions cache at ~2 MB/s
+          # (248 MB: ~105 s) but fetches modules from proxy.golang.org at
+          # ~20 MB/s, so on it a cold build beats the cache. Same in every
+          # job that can run there.
+          cache: ${{ runner.environment == 'github-hosted' }}
 
       - name: Download dependencies
         run: go mod download
 
       - name: Install GoReleaser for public release snapshot
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           version: '~> v2'
           install-only: true
@@ -146,14 +167,14 @@ jobs:
 
       - name: Upload coverage
         # codecov-action v7.0.0, pinned by commit to avoid major-tag drift.
-        uses: codecov/codecov-action@0b35c9ecc4f0529d0eb674914510c22f85b196b4
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5
         with:
           files: coverage.out
         continue-on-error: true
 
   lint:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
+    runs-on: ${{ !startsWith(github.ref, 'refs/tags/') && vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -168,6 +189,7 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ steps.pins.outputs.go_version }}
+          cache: ${{ runner.environment == 'github-hosted' }}
 
       - name: gofmt
         run: make check-fmt
@@ -191,7 +213,13 @@ jobs:
           set -euo pipefail
           source scripts/tool-versions.env
           mkdir -p .agent-cache/bin
-          curl -sSfL "https://github.com/koalaman/shellcheck/releases/download/$SHELLCHECK_VERSION/shellcheck-$SHELLCHECK_VERSION.linux.x86_64.tar.xz" -o shellcheck.tar.xz
+          # x86_64 on GitHub's runners, aarch64 on the self-hosted ones.
+          case "$(uname -m)" in
+            x86_64) arch=x86_64 ;;
+            aarch64 | arm64) arch=aarch64 ;;
+            *) echo "no shellcheck build for $(uname -m)" >&2; exit 1 ;;
+          esac
+          curl -sSfL "https://github.com/koalaman/shellcheck/releases/download/$SHELLCHECK_VERSION/shellcheck-$SHELLCHECK_VERSION.linux.$arch.tar.xz" -o shellcheck.tar.xz
           tar -xJ -O -f shellcheck.tar.xz "shellcheck-$SHELLCHECK_VERSION/shellcheck" > .agent-cache/bin/shellcheck
           rm -f shellcheck.tar.xz
           chmod +x .agent-cache/bin/shellcheck
@@ -202,7 +230,7 @@ jobs:
 
   build:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
+    runs-on: ${{ !startsWith(github.ref, 'refs/tags/') && vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -216,6 +244,7 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ steps.pins.outputs.go_version }}
+          cache: ${{ runner.environment == 'github-hosted' }}
 
       - name: Build (linux/amd64)
         run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o click-dog-linux-amd64
@@ -244,12 +273,19 @@ jobs:
         run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o click-dog-linux-arm64
 
   govulncheck:
-    # Moved off PRs: the vuln DB updates daily, not per-commit, so scanning
-    # every PR push was wasted minutes. Now runs on master push, tag/release
-    # (the gate that matters), the weekly schedule above, and manual dispatch.
-    # Run `make check-vuln` locally if you need a pre-merge check on a PR.
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    # The vuln DB updates daily, not per-commit, so scanning every PR push would
+    # waste minutes. Runs on master push, tag/release (the gate that matters),
+    # the weekly schedule above, manual dispatch, and non-draft PRs that change
+    # go.mod or go.sum: those are rare, and a wrong bump would otherwise merge
+    # green and first fail on master. Such a PR fails on any reachable advisory
+    # in the tree, including ones it did not introduce. On any other PR, run
+    # `make check-vuln` locally if you need a pre-merge check.
+    #
+    # `needs: test` is only for the changed-paths output. `!cancelled()` replaces
+    # the implicit success(), so a failing test job does not hide the scan.
+    if: ${{ !cancelled() && needs.test.outputs.run_govulncheck == 'true' }}
+    needs: test
+    runs-on: ${{ !startsWith(github.ref, 'refs/tags/') && vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -263,6 +299,7 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ steps.pins.outputs.go_version }}
+          cache: ${{ runner.environment == 'github-hosted' }}
 
       # Pinned: avoid silent CI behavior changes from a govulncheck
       # release we haven't reviewed. GOVULNCHECK_VERSION is the pin
@@ -282,9 +319,18 @@ jobs:
   # They run for non-PR events and for non-draft PRs that touch integration-
   # sensitive production, fixture, dependency, or integration-test paths.
   integration-test:
+    name: integration-test (ClickHouse ${{ matrix.clickhouse }})
     if: needs.test.outputs.run_integration == 'true'
     needs: test
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Pull requests run the current LTS; master, tags (through release.yml),
+        # manual and scheduled runs add the latest stable release.
+        clickhouse: ${{ fromJSON(github.event_name == 'pull_request' && '["26.8"]' || '["26.8", "26.10"]') }}
+    env:
+      CLICKHOUSE_VERSION: ${{ matrix.clickhouse }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -407,9 +453,9 @@ jobs:
 
       - name: Upload logs on failure
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: integration-logs
+          name: integration-logs-${{ matrix.clickhouse }}
           path: |
             integration-logs.txt
             test-output.txt

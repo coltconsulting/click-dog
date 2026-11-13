@@ -9,7 +9,7 @@
 #   2. A read-only monitoring user with SELECT on system.opentelemetry_span_log
 #      and system.query_log ONLY (explicit readonly=2 profile, no broader privileges).
 # Set these up with deploy/kubernetes/clickhouse-operator-spanlog.yaml, or run
-# the documented SQL through your existing secured ClickHouse administration
+# the documented SQL through the existing secured ClickHouse administration
 # path. Full walkthrough + verification commands: docs/kubernetes.md.
 apiVersion: v1
 kind: ConfigMap
@@ -26,7 +26,7 @@ data:
     clickhouse:
       # The ClickHouse Service DNS — NOT localhost. A standalone click-dog pod
       # has its own network namespace, so localhost would be click-dog itself.
-      # Replace with your cluster's Service (namespace.svc.cluster.local).
+      # Replace with the cluster's Service (namespace.svc.cluster.local).
       host: clickhouse.clickhouse.svc.cluster.local
       port: 9000
       database: default
@@ -79,7 +79,7 @@ data:
         backoff_factor: 2.0
 
     filters:
-      query_text_mode: raw # raw | redacted | normalized_only | none
+      query_text_mode: normalized_only # raw | redacted | normalized_only | none
       blacklist_queries:
         - "^SELECT \\* FROM system\\."
         - "SHOW TABLES"
@@ -105,7 +105,7 @@ data:
       listen_address: ":8686"
 
     # Configuring keeper.hosts turns on leader election (only the leader
-    # exports). Keeper hosts should match your ClickHouse Keeper ensemble.
+    # exports). Keeper hosts should match the ClickHouse Keeper ensemble.
     ha:
       keeper:
         hosts:
