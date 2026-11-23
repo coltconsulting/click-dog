@@ -11,8 +11,7 @@ import (
 
 // runValidate implements `click-dog validate`: offline config validation.
 // It loads and validates the config file, prints the parsed-settings summary,
-// and exits without contacting ClickHouse or any exporter. The legacy
-// `-validate` flag delegates here so the two spellings cannot drift.
+// and exits without contacting ClickHouse or any exporter.
 func runValidate(args []string, out, errOut io.Writer) int {
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
 	fs.SetOutput(errOut)
@@ -39,8 +38,8 @@ Flags:
 		}
 		return 2
 	}
-	if fs.NArg() > 0 {
-		_, _ = fmt.Fprintf(errOut, "click-dog validate: unexpected argument %q\n", fs.Arg(0))
+	if err := rejectLeftoverArgs("click-dog validate", fs, args); err != nil {
+		_, _ = fmt.Fprintln(errOut, err)
 		return 2
 	}
 
@@ -50,7 +49,7 @@ Flags:
 		return 1
 	}
 
-	warnings := append(append(append([]string{}, cfg.DeprecationWarnings...), cfg.EnvWarnings...), cfg.ValidationWarnings...)
+	warnings := append(append([]string{}, cfg.EnvWarnings...), cfg.ValidationWarnings...)
 	if len(warnings) > 0 {
 		_, _ = fmt.Fprintln(out, "Warnings:")
 		for _, w := range warnings {

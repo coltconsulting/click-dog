@@ -2,20 +2,10 @@
 # through the ClickHouse Service (configmap.yaml sets clickhouse.host to the
 # Service DNS and use_cluster_queries: true). cluster() reads one replica per
 # shard, so a replicated cluster gets partial coverage. Keep replicas at 1:
-# multiple instances double-export unless you also configure HA leader election
+# multiple instances double-export without HA leader election
 # (ha.keeper.hosts in configmap.yaml). For full coverage, run a sidecar inside
 # every ClickHouse pod (where localhost reaches ClickHouse) instead of this
 # standalone Deployment — see docs/kubernetes.md.
-#
-# Rollout note (upgrading from pre-health-endpoints releases): the probes moved
-# from the metrics port (:9090 /health) to a dedicated health port (:8686
-# /healthz, /readyz). Apply the ConfigMap FIRST so health.enabled: true lands
-# before K8s rolls the Deployment against probes that hit :8686.
-#
-# Recommended order:
-#   kubectl apply -f configmap.yaml
-#   kubectl rollout status deploy/click-dog
-#   kubectl apply -f deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -47,8 +37,6 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
-        # Kept explicit for older images, which have no passwd entry for
-        # 65532: without this they start click-dog in group 0 (root).
         runAsGroup: 65532
         # Group owner of the otel-tls volume: client.key is mode 0440, so only
         # this group, which click-dog runs in, can read it.
@@ -98,8 +86,8 @@ spec:
               protocol: TCP
           # /healthz and /readyz are served by the health HTTP server.
           # These probes require health.enabled: true in click-dog.yaml (see configmap.yaml).
-          # If you disable health, switch to a simple exec probe:
-          #   exec: { command: ["click-dog", "-validate", "-config", "/etc/click-dog/click-dog.yaml"] }
+          # With health disabled, switch to a simple exec probe:
+          #   exec: { command: ["click-dog", "validate", "--config", "/etc/click-dog/click-dog.yaml"] }
           livenessProbe:
             httpGet:
               path: /healthz
@@ -109,7 +97,7 @@ spec:
           # failureThreshold defaults to 3, giving ~30s (3 × periodSeconds)
           # for readiness to recover after a transient ClickHouse blip
           # before K8s pulls the pod from the Service endpoints. Raise it
-          # if your ClickHouse restart windows are longer (e.g. 5-6 for a
+          # if ClickHouse restart windows are longer (e.g. 5-6 for a
           # replica rebuild that takes >30s).
           readinessProbe:
             httpGet:

@@ -30,9 +30,11 @@ const maxLogCommentSize = 64 * 1024
 //     (e.g. "clickhouse.setting.log_comment" on query-kind spans). The value
 //     is expected to be JSON or a plain string.
 //
-//  2. URI-encoded attributes (http.url, http.target, or any value containing
-//     "log_comment=") on HTTP-kind spans. The log_comment query parameter
-//     is URL-decoded and then treated the same as case (1).
+//  2. URI attributes (http.url, http.target, then any other attribute
+//     filter.IsURIAttribute recognizes) on HTTP-kind spans. The log_comment
+//     query parameter is URL-decoded and then treated the same as case (1).
+//     Statement attributes are never scanned: a SQL literal containing
+//     "log_comment=" must not become exported metadata.
 //
 // Non-JSON values are set as a single "log_comment" attribute.
 // A copy of the Attributes map is made to avoid mutating the original.
@@ -71,10 +73,12 @@ func ExtractLogComment(span *model.OpenTelemetrySpan) {
 		}
 	}
 
-	// 3. Last resort: scan all attributes for a URI containing log_comment=
+	// 3. Last resort: any other URI attribute containing log_comment=. Only
+	// URI attributes are scanned; db.statement and clickhouse.query hold SQL,
+	// and a literal there is query text, not a log_comment.
 	if raw == "" {
-		for _, v := range span.Attributes {
-			if strings.Contains(v, "log_comment=") {
+		for k, v := range span.Attributes {
+			if filter.IsURIAttribute(k) && strings.Contains(v, "log_comment=") {
 				if lc := extractLogCommentFromURI(v); lc != "" {
 					raw = lc
 					break
@@ -145,32 +149,6 @@ func extractLogCommentFromURI(uri string) string {
 	return vals.Get("log_comment")
 }
 
-// ShouldFilterSpanByUser reports whether the user filter excludes this span.
-// HasUserFilter short-circuits the ResolveSpanUser map lookup in the hot
-// per-span loop when no user filter is configured — keep the guard.
-func ShouldFilterSpanByUser(span model.OpenTelemetrySpan, f *filter.QueryFilter, queryLogMap map[string]model.QueryLog) bool {
-	return f.HasUserFilter() && f.ShouldFilterUser(ResolveSpanUser(span, queryLogMap))
-}
-
-// ResolveSpanUser returns the originating ClickHouse user for a span, or "" if
-// it cannot be determined. The clickhouse.user attribute is checked first
-// (forward-compat: CH does not currently emit it on opentelemetry_span_log,
-// but a future version may); otherwise the user is resolved through the
-// query_log enrichment map by clickhouse.query_id. Spans without query_id —
-// typically internal child spans — return "" and are dropped by an active
-// whitelist, matching the strict semantics of the IP whitelist.
-func ResolveSpanUser(span model.OpenTelemetrySpan, queryLogMap map[string]model.QueryLog) string {
-	if u := span.Attributes["clickhouse.user"]; u != "" {
-		return u
-	}
-	if qid := span.Attributes["clickhouse.query_id"]; qid != "" {
-		if ql, ok := queryLogMap[qid]; ok {
-			return ql.User
-		}
-	}
-	return ""
-}
-
 // OriginatingAddress returns the address of the client that started the
 // query a query_log row belongs to. A distributed query fans out to other
 // servers as secondary queries whose own `address` is the initiating server,
@@ -178,133 +156,353 @@ func ResolveSpanUser(span model.OpenTelemetrySpan, queryLogMap map[string]model.
 // query, so it is the value client-scoped decisions must use. Rows that carry
 // no initial address (an unset or zero value) fall back to their own address.
 func OriginatingAddress(ql model.QueryLog) string {
-	switch ql.InitialAddress {
+	return originatingAddress(ql.InitialAddress, ql.ClientAddress)
+}
+
+func originatingAddress(initial, own string) string {
+	switch initial {
 	case "", "::", "0.0.0.0", "::ffff:0.0.0.0":
-		return ql.ClientAddress
+		return own
 	}
-	return ql.InitialAddress
+	return initial
 }
 
-// TraceClientAddresses maps each trace to its originating client address. A
-// trace has exactly one client, but a distributed trace carries several query
-// spans — the initial query and one secondary query per remote server — and
-// only query spans reach the query log, so the map is built once per cycle
-// over every span and applied to the whole trace: resolving per span would
-// admit roots and drop children, or admit or drop a trace's shards by which
-// server's address happened to be seen first.
+// TraceDecision is FilteredTraces' verdict on a span page. The zero value
+// withholds nothing.
+type TraceDecision struct {
+	// Dropped holds the traces none of whose spans in the page are exported.
+	Dropped map[uuid.UUID]bool
+	// Unattributed holds the spans of the other traces that run under no
+	// query span read: their query has not finished, so it cannot be judged.
+	Unattributed map[model.SpanKey]bool
+}
+
+// Withholds reports whether span is not exported.
+func (d TraceDecision) Withholds(span *model.OpenTelemetrySpan) bool {
+	return d.Dropped[span.TraceID] || d.Unattributed[model.KeyOf(*span)]
+}
+
+// FilteredTraces decides the trace-scoped filters for a live span page:
+// whitelist_ips, whitelist_users, blacklist_users, and blacklist_queries. Each
+// needs a query's client, user, or statement, which only a trace's query
+// spans carry, so a per-span check would export or drop a query's child spans
+// regardless of the query.
 //
-// A query-log row wins over a span attribute for the same trace whatever the
-// row order: every row of a query names the same originating client, whereas
-// a client.address attribute (forward-compat — ClickHouse does not emit it on
-// span-log rows today) would be per server.
-func TraceClientAddresses(spans []model.OpenTelemetrySpan, queryLogMap map[string]model.QueryLog) map[uuid.UUID]string {
-	addrs := make(map[uuid.UUID]string)
-	for i := range spans {
-		if _, ok := addrs[spans[i].TraceID]; ok {
-			continue
-		}
-		if addr := queryLogClientAddress(spans[i], queryLogMap); addr != "" {
-			addrs[spans[i].TraceID] = addr
-		}
+// Every trace is decided from the query spans the span log records for it,
+// whichever page each landed in, and from each query's query_log origin, read
+// without the user whitelist splice the enrichment SQL carries. Both logs are
+// read from shortly before the earliest start of the page's spans, which
+// holds the query span each of those spans runs under and that query's
+// query_log rows. A trace is dropped when any of its queries matches
+// blacklist_queries, comes from a client outside whitelist_ips, or fails
+// AllowsQueryUsers. It fails closed: a trace with no query span yet is
+// dropped, and a query with no query_log row drops its trace too.
+//
+// A span of a trace that is kept is exported only when it is attributed: its
+// parent chain reaches a `query` span read, or it is the connection span a
+// query span read runs directly under. The spans of a query that has not
+// finished have no query span yet, so they are withheld rather than exported
+// on the verdict of the trace's other queries. ClickHouse logs the query span
+// when the query finishes, which moves the trace past the live walk's
+// watermark, so it is read and decided again then. A lookup error returns err
+// and no decision, so the caller can withhold the page and fail the cycle.
+func FilteredTraces(
+	ctx context.Context,
+	reader TraceQueryReader,
+	spans []model.OpenTelemetrySpan,
+	f *filter.QueryFilter,
+	lookbackDays int,
+) (TraceDecision, error) {
+	if !f.HasTraceScopedFilter() {
+		return TraceDecision{}, nil
 	}
-	for i := range spans {
-		if _, ok := addrs[spans[i].TraceID]; ok {
-			continue
-		}
-		if addr := spans[i].Attributes["client.address"]; addr != "" {
-			addrs[spans[i].TraceID] = addr
-		}
-	}
-	return addrs
-}
-
-// UnresolvedTraceIDs lists, in first-seen order, the traces in spans that the
-// address map did not resolve — typically because the page holds children
-// whose query root sits in another page.
-func UnresolvedTraceIDs(spans []model.OpenTelemetrySpan, traceAddrs map[uuid.UUID]string) []uuid.UUID {
-	var missing []uuid.UUID
+	dropped := make(map[uuid.UUID]bool)
+	var order []uuid.UUID
 	seen := make(map[uuid.UUID]bool)
 	for i := range spans {
 		id := spans[i].TraceID
-		if seen[id] {
-			continue
+		if !seen[id] {
+			seen[id] = true
+			order = append(order, id)
 		}
-		seen[id] = true
-		if _, ok := traceAddrs[id]; !ok {
-			missing = append(missing, id)
+		// A blacklisted user stamped on the span or the page's own statement
+		// can decide the trace early. Only the blacklist applies here: from
+		// 25.8 a distributed query's work on another server stamps the
+		// interserver account, and the whitelist judges the client's account,
+		// which only query_log carries.
+		if u := spans[i].Attributes["clickhouse.user"]; u != "" && f.IsBlacklistedUser(u) {
+			dropped[id] = true
+		}
+		if f.IsBlacklistedQuery(spans[i].Attributes["db.statement"]) {
+			dropped[id] = true
 		}
 	}
-	return missing
-}
+	var traceIDs []uuid.UUID
+	for _, id := range order {
+		if !dropped[id] {
+			traceIDs = append(traceIDs, id)
+		}
+	}
+	if len(traceIDs) == 0 {
+		return TraceDecision{Dropped: dropped}, nil
+	}
 
-// ResolveTraceAddressesFromSpanLog resolves the originating client of traces
-// the current span page could not: it reads each trace's query IDs from the
-// span log, fetches those query_log rows, and takes the originating address of
-// the first row found. Traces with no query span inside lookbackDays, or whose
-// rows are missing from query_log, stay unresolved.
-func ResolveTraceAddressesFromSpanLog(ctx context.Context, reader LiveReader, traceIDs []uuid.UUID, lookbackDays int) (map[uuid.UUID]string, error) {
-	byTrace, err := reader.FetchTraceQueryIDs(ctx, traceIDs, lookbackDays)
+	// Attribute what the page can on its own, and ask the span log for the
+	// ancestors of the rest.
+	tree := newSpanTree(spans)
+	earliestStartUs := EarliestStartUs(spans, traceIDs)
+	byTrace, err := reader.FetchTraceNodes(ctx, traceIDs, lookbackDays, earliestStartUs, tree.ancestorRead(spans, dropped))
 	if err != nil {
-		return nil, err
+		return TraceDecision{}, fmt.Errorf("reading the traces' queries: %w", err)
 	}
-	var queryIDs []string
-	seen := make(map[string]bool)
-	for _, qids := range byTrace {
-		for _, qid := range qids {
-			if !seen[qid] {
-				seen[qid] = true
-				queryIDs = append(queryIDs, qid)
-			}
+	tree.add(byTrace)
+
+	// The page's own query spans are judged too: in cluster mode the span log
+	// read can land on another replica than the page did, and a query span
+	// that anchors spans must never go unjudged.
+	type traceQuery struct{ id, statement string }
+	queriesOf := make(map[uuid.UUID][]traceQuery, len(traceIDs))
+	distinct := make(map[uuid.UUID]map[traceQuery]bool, len(traceIDs))
+	addQuery := func(trace uuid.UUID, q traceQuery) {
+		if q.id == "" || dropped[trace] {
+			return
+		}
+		if distinct[trace] == nil {
+			distinct[trace] = make(map[traceQuery]bool)
+		}
+		if !distinct[trace][q] {
+			distinct[trace][q] = true
+			queriesOf[trace] = append(queriesOf[trace], q)
 		}
 	}
-	resolved := make(map[uuid.UUID]string)
-	if len(queryIDs) == 0 {
-		return resolved, nil
+	for i := range spans {
+		addQuery(spans[i].TraceID, traceQuery{spans[i].Attributes["clickhouse.query_id"], spans[i].Attributes["db.statement"]})
 	}
-	rows, err := reader.FetchQueryLogByQueryIDs(ctx, queryIDs, lookbackDays)
-	if err != nil {
-		return nil, err
+	for id, nodes := range byTrace {
+		for _, n := range nodes {
+			addQuery(id, traceQuery{n.QueryID, n.Statement})
+		}
 	}
-	for _, id := range traceIDs {
-		for _, qid := range byTrace[id] {
-			if ql, ok := rows[qid]; ok {
-				if addr := OriginatingAddress(ql); addr != "" {
-					resolved[id] = addr
-					break
+
+	needOrigins := f.HasIPWhitelist() || f.HasUserFilter()
+	var origins map[string]model.QueryOrigin
+	if needOrigins {
+		var queryIDs []string
+		asked := make(map[string]bool)
+		for _, queries := range queriesOf {
+			for _, q := range queries {
+				if !asked[q.id] {
+					asked[q.id] = true
+					queryIDs = append(queryIDs, q.id)
 				}
 			}
 		}
-	}
-	return resolved, nil
-}
-
-// ResolveSpanClientAddress returns the originating client address for a span,
-// or "" if it cannot be determined. The trace-level decision from
-// TraceClientAddresses is authoritative so every span of a trace gets the
-// same answer; a span is resolved on its own only when no trace decision
-// exists. A trace whose address cannot be resolved at all returns "" and is
-// dropped by an active whitelist, matching the strict semantics of the user
-// whitelist.
-func ResolveSpanClientAddress(span model.OpenTelemetrySpan, queryLogMap map[string]model.QueryLog, traceAddrs map[uuid.UUID]string) string {
-	if addr, ok := traceAddrs[span.TraceID]; ok {
-		return addr
-	}
-	if addr := queryLogClientAddress(span, queryLogMap); addr != "" {
-		return addr
-	}
-	return span.Attributes["client.address"]
-}
-
-// queryLogClientAddress resolves one span through the query_log enrichment
-// map by clickhouse.query_id, which is the source the IP whitelist is
-// documented to use, returning the originating client of that query.
-func queryLogClientAddress(span model.OpenTelemetrySpan, queryLogMap map[string]model.QueryLog) string {
-	if qid := span.Attributes["clickhouse.query_id"]; qid != "" {
-		if ql, ok := queryLogMap[qid]; ok {
-			return OriginatingAddress(ql)
+		if len(queryIDs) > 0 {
+			origins, err = reader.FetchQueryOrigins(ctx, queryIDs, lookbackDays, earliestStartUs)
+			if err != nil {
+				return TraceDecision{}, fmt.Errorf("reading the queries' users and clients: %w", err)
+			}
 		}
 	}
-	return ""
+
+	for _, id := range traceIDs {
+		queries := queriesOf[id]
+		if len(queries) == 0 {
+			dropped[id] = true
+			continue
+		}
+		for _, q := range queries {
+			if f.IsBlacklistedQuery(q.statement) {
+				dropped[id] = true
+				break
+			}
+			if !needOrigins {
+				continue
+			}
+			o, ok := origins[q.id]
+			if !ok ||
+				!f.AllowsQueryUsers(o.User, o.InitialUser) ||
+				!f.AllowsClient(originatingAddress(o.InitialAddress, o.Address)) {
+				dropped[id] = true
+				break
+			}
+		}
+	}
+
+	decision := TraceDecision{Dropped: dropped}
+	for i := range spans {
+		if dropped[spans[i].TraceID] || tree.attributed(spans[i].TraceID, spans[i].SpanID, spans[i].OperationName) {
+			continue
+		}
+		if decision.Unattributed == nil {
+			decision.Unattributed = make(map[model.SpanKey]bool)
+		}
+		decision.Unattributed[model.KeyOf(spans[i])] = true
+	}
+	return decision, nil
+}
+
+// connectionOperations name the spans ClickHouse opens for a connection or a
+// distributed DDL task before it starts the query span under them. Such a span
+// belongs to the query it runs. A span of another kind that a query span runs
+// under is inside some other query, such as one that loads a dictionary, and
+// is attributed only through its own chain: it may belong to a query that has
+// not finished yet.
+var connectionOperations = []string{"TCPHandler", "HTTPHandler", "DDLWorker::processTask"}
+
+func isConnectionOperation(name string) bool {
+	for _, op := range connectionOperations {
+		if strings.Contains(name, op) {
+			return true
+		}
+	}
+	return false
+}
+
+// spanTree links the spans of a page's traces, from the page itself and from
+// the span log, so each span can be traced to the query span it runs under.
+// Span IDs are unique within a trace, so a trace's spans from every server
+// share one index.
+type spanTree struct {
+	parent map[model.SpanKey]uint64
+	query  map[model.SpanKey]bool
+	// queryParent holds the spans a query span runs directly under.
+	queryParent map[model.SpanKey]bool
+	memo        map[model.SpanKey]bool
+}
+
+func newSpanTree(spans []model.OpenTelemetrySpan) *spanTree {
+	t := &spanTree{
+		parent:      make(map[model.SpanKey]uint64, len(spans)),
+		query:       make(map[model.SpanKey]bool),
+		queryParent: make(map[model.SpanKey]bool),
+		memo:        make(map[model.SpanKey]bool),
+	}
+	for i := range spans {
+		s := &spans[i]
+		t.link(s.TraceID, s.SpanID, s.ParentSpanID, s.OperationName == "query" && s.Attributes["clickhouse.query_id"] != "")
+	}
+	return t
+}
+
+// link records a span's parent. query marks a `query` span with a query ID,
+// the only kind FilteredTraces judges and so the only kind that anchors.
+func (t *spanTree) link(trace uuid.UUID, span, parent uint64, query bool) {
+	key := model.SpanKey{TraceID: trace, SpanID: span}
+	t.parent[key] = parent
+	if query {
+		t.query[key] = true
+		t.queryParent[model.SpanKey{TraceID: trace, SpanID: parent}] = true
+	}
+}
+
+func (t *spanTree) add(byTrace map[uuid.UUID][]model.TraceNode) {
+	for trace, nodes := range byTrace {
+		for _, n := range nodes {
+			t.link(trace, n.SpanID, n.ParentSpanID, n.Query && n.QueryID != "")
+		}
+	}
+	clear(t.memo)
+}
+
+// attributed reports whether the span is the connection span a query span
+// runs under, or its parent chain, itself included, reaches a query span.
+func (t *spanTree) attributed(trace uuid.UUID, span uint64, operation string) bool {
+	if isConnectionOperation(operation) && t.queryParent[model.SpanKey{TraceID: trace, SpanID: span}] {
+		return true
+	}
+	var chain []model.SpanKey
+	result := false
+	for key := (model.SpanKey{TraceID: trace, SpanID: span}); ; {
+		if v, ok := t.memo[key]; ok {
+			result = v
+			break
+		}
+		if t.query[key] {
+			result = true
+			break
+		}
+		parent, ok := t.parent[key]
+		chain = append(chain, key)
+		if !ok || len(chain) > len(t.parent) {
+			break
+		}
+		key = model.SpanKey{TraceID: trace, SpanID: parent}
+	}
+	for _, k := range chain {
+		t.memo[k] = result
+	}
+	return result
+}
+
+// ancestorRead asks for the ancestors of the page spans the page cannot
+// attribute, in traces not already dropped: every one of them started no
+// later than the latest such span.
+func (t *spanTree) ancestorRead(spans []model.OpenTelemetrySpan, dropped map[uuid.UUID]bool) model.AncestorRead {
+	var read model.AncestorRead
+	asked := make(map[uuid.UUID]bool)
+	for i := range spans {
+		s := &spans[i]
+		if dropped[s.TraceID] || t.attributed(s.TraceID, s.SpanID, s.OperationName) {
+			continue
+		}
+		if !asked[s.TraceID] {
+			asked[s.TraceID] = true
+			read.Traces = append(read.Traces, s.TraceID)
+		}
+		read.StartedByUs = max(read.StartedByUs, s.StartTimeUs)
+	}
+	return read
+}
+
+// EarliestStartUs returns the earliest start_time_us among the spans of the
+// given traces, or 0 when spans holds none of them.
+func EarliestStartUs(spans []model.OpenTelemetrySpan, traceIDs []uuid.UUID) uint64 {
+	want := make(map[uuid.UUID]bool, len(traceIDs))
+	for _, id := range traceIDs {
+		want[id] = true
+	}
+	return earliestStartWhere(spans, func(s *model.OpenTelemetrySpan) bool { return want[s.TraceID] })
+}
+
+// earliestStartWhere returns the earliest start_time_us among the spans keep
+// accepts, or 0 when it accepts none.
+func earliestStartWhere(spans []model.OpenTelemetrySpan, keep func(*model.OpenTelemetrySpan) bool) uint64 {
+	var earliest uint64
+	found := false
+	for i := range spans {
+		if keep(&spans[i]) && (!found || spans[i].StartTimeUs < earliest) {
+			earliest, found = spans[i].StartTimeUs, true
+		}
+	}
+	return earliest
+}
+
+// AllowedSpans returns the spans scheduled export would keep: those
+// FilteredTraces does not withhold and whose operation passes
+// whitelist_operations.
+// Readers that sample the span log outside the live walk, such as analyze,
+// use it so their output describes only what the filters admit. It fails
+// closed: a lookup error returns err and no spans.
+func AllowedSpans(
+	ctx context.Context,
+	reader TraceQueryReader,
+	spans []model.OpenTelemetrySpan,
+	f *filter.QueryFilter,
+	lookbackDays int,
+) ([]model.OpenTelemetrySpan, error) {
+	decision, err := FilteredTraces(ctx, reader, spans, f, lookbackDays)
+	if err != nil {
+		return nil, err
+	}
+	allowed := make([]model.OpenTelemetrySpan, 0, len(spans))
+	for i := range spans {
+		if decision.Withholds(&spans[i]) || !f.AllowsOperation(spans[i].OperationName) {
+			continue
+		}
+		allowed = append(allowed, spans[i])
+	}
+	return allowed, nil
 }
 
 // UniqueQueryIDs returns the deduplicated set of ClickHouse query IDs
@@ -324,6 +522,13 @@ func UniqueQueryIDs(spans []model.OpenTelemetrySpan) []string {
 		}
 	}
 	return ids
+}
+
+// EarliestQueryStartUs returns the earliest start_time_us among the spans
+// that carry a clickhouse.query_id, the spans UniqueQueryIDs reads, or 0 when
+// none does. FetchQueryLogByQueryIDs reads query_log from shortly before it.
+func EarliestQueryStartUs(spans []model.OpenTelemetrySpan) uint64 {
+	return earliestStartWhere(spans, func(s *model.OpenTelemetrySpan) bool { return s.Attributes["clickhouse.query_id"] != "" })
 }
 
 // EnrichSpanFromQueryLog adds query_log metadata as span attributes.
@@ -372,11 +577,9 @@ func EnrichSpanFromQueryLog(span *model.OpenTelemetrySpan, ql model.QueryLog, ma
 	}
 	if len(ql.DatabasesVisited) > 0 {
 		setStringSliceAttribute(&newStringSliceAttrs, "query_log.databases", ql.DatabasesVisited)
-		newAttrs["query_log.databases_csv"] = strings.Join(ql.DatabasesVisited, ",")
 	}
 	if len(ql.TablesVisited) > 0 {
 		setStringSliceAttribute(&newStringSliceAttrs, "query_log.tables", ql.TablesVisited)
-		newAttrs["query_log.tables_csv"] = strings.Join(ql.TablesVisited, ",")
 	}
 
 	span.Attributes = newAttrs

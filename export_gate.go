@@ -14,9 +14,9 @@ type leadership interface {
 // The rule is shouldExport = !clusterMode || !electionActive || IsLeader():
 //
 //   - clusterMode is cfg.ClickHouse.UseClusterQueries. Off → nil gate.
-//   - el is nil when no election was started: a Keeper-less cluster reader
-//     (Option A, backward-compat) or an election-constructor failure
-//     (standalone fallback). Either way the reader always exports.
+//   - el is nil when no election was started: a Keeper-less cluster reader or
+//     an election-constructor failure (standalone fallback). Either way the
+//     reader always exports.
 //   - electionActive is el.Joined(): false during the Keeper dial/join window
 //     and during a session-expiry reconnect, so the instance exports then too
 //     (fail-open, no startup dead zone). Keying on Joined() rather than a bare

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"os/user"
@@ -33,6 +34,8 @@ func newUninstallFixture(t *testing.T) *uninstallFixture {
 		stateDir:  filepath.Join(root, "var", "lib", "click-dog-installer"),
 		progress:  filepath.Join(root, "var", "lib", "click-dog-uninstall-in-progress"),
 		runtimeID: "click-dog",
+
+		clickHouseUsersDir: filepath.Join(root, "etc", "clickhouse-server", "users.d"),
 	}
 	for path, contents := range map[string]string{
 		paths.unit:             "fixture",
@@ -173,16 +176,19 @@ func TestRunDeployUninstall_RequiresRoot(t *testing.T) {
 	}
 }
 
+// TestRunDeployUninstall_DefaultConfirmationAborts pins that a declined
+// confirmation removes nothing and exits 1, so `deploy uninstall && next`
+// does not go on as if the installation were gone.
 func TestRunDeployUninstall_DefaultConfirmationAborts(t *testing.T) {
 	fixture := newUninstallFixture(t)
 	var out, errOut bytes.Buffer
 	code := runDeployUninstallWith(nil, &out, &errOut, fixture.paths, fixture.deps("n\n", 0))
-	if code != 0 {
-		t.Fatalf("exit = %d, want 0", code)
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
 	}
 	if !strings.Contains(out.String(), "including credentials") ||
 		!strings.Contains(out.String(), "ClickHouse: unchanged") ||
-		!strings.Contains(out.String(), "Aborted.") {
+		!strings.Contains(out.String(), "Aborted; nothing was removed.") {
 		t.Errorf("stdout missing destructive scope or abort:\n%s", out.String())
 	}
 	if len(fixture.commands) != 0 {
@@ -194,17 +200,63 @@ func TestRunDeployUninstall_DefaultConfirmationAborts(t *testing.T) {
 }
 
 func TestRunDeployUninstall_EmptyConfirmationAborts(t *testing.T) {
-	fixture := newUninstallFixture(t)
-	var out, errOut bytes.Buffer
-	code := runDeployUninstallWith(nil, &out, &errOut, fixture.paths, fixture.deps("\n", 0))
-	if code != 0 {
-		t.Fatalf("exit = %d, want 0", code)
+	for _, tc := range []struct {
+		name string
+		in   string
+	}{
+		{"empty line", "\n"},
+		{"closed stdin", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newUninstallFixture(t)
+			var out, errOut bytes.Buffer
+			code := runDeployUninstallWith(nil, &out, &errOut, fixture.paths, fixture.deps(tc.in, 0))
+			if code != 1 {
+				t.Fatalf("exit = %d, want 1", code)
+			}
+			if !strings.Contains(out.String(), "Aborted; nothing was removed.") {
+				t.Errorf("stdout missing fail-safe abort:\n%s", out.String())
+			}
+			if len(fixture.commands) != 0 {
+				t.Errorf("commands ran after empty confirmation: %v", fixture.commands)
+			}
+		})
 	}
-	if !strings.Contains(out.String(), "Aborted.") {
-		t.Errorf("stdout missing fail-safe abort:\n%s", out.String())
-	}
-	if len(fixture.commands) != 0 {
-		t.Errorf("commands ran after empty confirmation: %v", fixture.commands)
+}
+
+// TestRunDeployUninstall_OverlongConfirmationAborts pins the bounded read: a
+// confirmation line with no newline, like /dev/zero, is read only up to the
+// line bound and then refused, never buffered without limit. The endless
+// input is a LimitReader so a regression fails the byte count instead of
+// exhausting memory.
+func TestRunDeployUninstall_OverlongConfirmationAborts(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		source io.Reader
+	}{
+		{"zero bytes", zeroReader{}},
+		{"y repeated", repeatByteReader('y')},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newUninstallFixture(t)
+			input := &countingReader{r: io.LimitReader(tc.source, 1<<20)}
+			deps := fixture.deps("", 0)
+			deps.in = input
+			var out, errOut bytes.Buffer
+			code := runDeployUninstallWith(nil, &out, &errOut, fixture.paths, deps)
+			if code != 1 {
+				t.Fatalf("exit = %d, want 1", code)
+			}
+			if !strings.Contains(out.String(), "Aborted; nothing was removed.") {
+				t.Errorf("stdout missing abort:\n%s", out.String())
+			}
+			if len(fixture.commands) != 0 {
+				t.Errorf("commands ran after an over-long confirmation: %v", fixture.commands)
+			}
+			if input.n > 2*maxPromptLineBytes {
+				t.Errorf("read %d bytes of an endless line, want at most %d", input.n, 2*maxPromptLineBytes)
+			}
+		})
 	}
 }
 
@@ -242,6 +294,72 @@ func TestRunDeployUninstall_YesRemovesStandardInstall(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Click-Dog uninstalled.") {
 		t.Errorf("stdout missing completion:\n%s", out.String())
+	}
+}
+
+func TestRunDeployUninstall_ClickHouseNote(t *testing.T) {
+	tests := []struct {
+		name   string
+		config string
+		want   []string
+		reject []string
+	}{
+		{
+			name:   "a named user",
+			config: "clickhouse:\n  username: ops_monitor\n  password_file: /etc/click-dog/.secret\n",
+			want: []string{
+				"ClickHouse is unchanged.",
+				"If user ops_monitor is no longer needed",
+				"click-dog-ops_monitor.xml if it exists",
+				"DROP USER IF EXISTS `ops_monitor`;",
+			},
+			reject: []string{"now removed", ".secret"},
+		},
+		{
+			name:   "a name that needs quoting in SQL",
+			config: "clickhouse:\n  username: svc.dog-1\n",
+			want:   []string{"DROP USER IF EXISTS `svc.dog-1`;"},
+		},
+		{
+			name:   "the default user is never offered for removal",
+			config: "clickhouse:\n  username: default\n",
+			want:   []string{"ClickHouse is unchanged."},
+			reject: []string{"DROP USER", "default"},
+		},
+		{name: "no config", reject: []string{"DROP USER", defaultMonitorUser}, want: []string{"ClickHouse is unchanged."}},
+		{name: "no username in the config", config: "clickhouse:\n  host: localhost\n", reject: []string{"DROP USER", defaultMonitorUser}},
+		{name: "a value that is not a plain name", config: "clickhouse:\n  username: \"${CH_USER}\"\n", reject: []string{"DROP USER", defaultMonitorUser}},
+		{name: "unparseable config", config: "clickhouse: [\n", reject: []string{"DROP USER", defaultMonitorUser}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newUninstallFixture(t)
+			if tt.config != "" {
+				path := filepath.Join(fixture.paths.configDir, "click-dog.yaml")
+				if err := os.WriteFile(path, []byte(tt.config), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var out, errOut bytes.Buffer
+			code := runDeployUninstallWith([]string{"--yes"}, &out, &errOut, fixture.paths, fixture.deps("", 0))
+			if code != 0 {
+				t.Fatalf("exit = %d, want 0\nstderr:\n%s", code, errOut.String())
+			}
+			_, note, found := strings.Cut(out.String(), "Click-Dog uninstalled.")
+			if !found {
+				t.Fatalf("stdout has no completion line:\n%s", out.String())
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(note, want) {
+					t.Errorf("note missing %q:\n%s", want, note)
+				}
+			}
+			for _, reject := range tt.reject {
+				if strings.Contains(note, reject) {
+					t.Errorf("note has %q:\n%s", reject, note)
+				}
+			}
+		})
 	}
 }
 

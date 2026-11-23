@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 const deployUninstallUsage = `click-dog deploy uninstall — remove a standard systemd installation
@@ -26,6 +28,9 @@ removed with their orchestrator. ClickHouse users and configuration are not
 changed. A runtime user or group is removed only when the installer recorded
 that it created the same numeric identity.
 
+Without --yes the command asks for confirmation. Any answer but y or yes, or a
+closed stdin, removes nothing and exits 1.
+
 Flags:
 `
 
@@ -37,6 +42,8 @@ type deployUninstallPaths struct {
 	stateDir  string
 	progress  string
 	runtimeID string
+	// clickHouseUsersDir is only read, to name a users.d file the guide wrote.
+	clickHouseUsersDir string
 }
 
 var standardDeployUninstallPaths = deployUninstallPaths{
@@ -47,6 +54,8 @@ var standardDeployUninstallPaths = deployUninstallPaths{
 	stateDir:  "/var/lib/click-dog-installer",
 	progress:  "/var/lib/click-dog-uninstall-in-progress",
 	runtimeID: "click-dog",
+
+	clickHouseUsersDir: "/etc/clickhouse-server/users.d",
 }
 
 type deployUninstallDeps struct {
@@ -87,6 +96,35 @@ func defaultDeployUninstallDeps() deployUninstallDeps {
 			return fmt.Errorf("%w: %s", err, message)
 		},
 	}
+}
+
+// readDeployUninstallClickHouseUser returns the user the config about to be removed
+// names, or "" when the config is unreadable or does not hold a plain name.
+func readDeployUninstallClickHouseUser(readFile func(string) ([]byte, error), configDir string) string {
+	data, err := readFile(filepath.Join(configDir, "click-dog.yaml"))
+	if err != nil {
+		return ""
+	}
+	var cfg struct {
+		ClickHouse struct {
+			Username string `yaml:"username"`
+		} `yaml:"clickhouse"`
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil || !deployUsernameRE.MatchString(cfg.ClickHouse.Username) {
+		return ""
+	}
+	return cfg.ClickHouse.Username
+}
+
+// printDeployUninstallClickHouseNote says how to remove the user click-dog used. It
+// claims nothing about what ClickHouse holds, which this command cannot see.
+func printDeployUninstallClickHouseNote(out io.Writer, name, usersDir string) {
+	_, _ = fmt.Fprintln(out, "ClickHouse is unchanged.")
+	if name == "" || name == "default" {
+		return
+	}
+	overlay := filepath.Join(usersDir, "click-dog-"+name+".xml")
+	_, _ = fmt.Fprintf(out, "  If user %s is no longer needed: delete %s if it exists, wait 10 seconds for ClickHouse to reload users.d, then run: DROP USER IF EXISTS `%s`;\n", name, overlay, name)
 }
 
 func deployUninstallPathExists(lstat func(string) (os.FileInfo, error), path string) (bool, error) {
@@ -169,8 +207,8 @@ func runDeployUninstallWith(
 		}
 		return 2
 	}
-	if fs.NArg() != 0 {
-		_, _ = fmt.Fprintf(errOut, "click-dog deploy uninstall: unexpected argument %q\n\n", fs.Arg(0))
+	if err := rejectLeftoverArgs("click-dog deploy uninstall", fs, args); err != nil {
+		_, _ = fmt.Fprintf(errOut, "%v\n\n", err)
 		fs.Usage()
 		return 2
 	}
@@ -228,19 +266,23 @@ func runDeployUninstallWith(
 	_, _ = fmt.Fprintf(out, "  Config:  %s (including credentials)\n", paths.configDir)
 	_, _ = fmt.Fprintf(out, "  Logs:    %s\n", paths.logDir)
 	_, _ = fmt.Fprintf(out, "  User:    %s (only if recorded as installer-created)\n", paths.runtimeID)
-	_, _ = fmt.Fprintln(out, "  ClickHouse: unchanged (monitoring user and span-log config remain)")
+	_, _ = fmt.Fprintln(out, "  ClickHouse: unchanged (the Config line above holds its monitoring user's password)")
 	if progressExists || recoveryExists {
 		_, _ = fmt.Fprintln(out, "  Mode:    resume an earlier incomplete uninstall")
 	}
 
 	if !*yes {
+		// Anything but y or yes aborts: a declined, empty, over-long, or
+		// unreadable answer, or stdin closed without one. The installation is
+		// still present, so the abort exits 1 and a script that runs
+		// `click-dog deploy uninstall && ...` without --yes stops here.
 		_, _ = fmt.Fprint(out, "Continue? [y/N] ")
-		answer, readErr := bufio.NewReader(deps.in).ReadString('\n')
+		answer, readErr := readPromptLine(bufio.NewReader(deps.in))
 		answer = strings.TrimSpace(answer)
 		if readErr != nil && !errors.Is(readErr, io.EOF) ||
 			!strings.EqualFold(answer, "y") && !strings.EqualFold(answer, "yes") {
-			_, _ = fmt.Fprintln(out, "Aborted.")
-			return 0
+			_, _ = fmt.Fprintln(out, "Aborted; nothing was removed.")
+			return 1
 		}
 	}
 
@@ -310,6 +352,7 @@ func runDeployUninstallWith(
 		}
 	}
 
+	chUser := readDeployUninstallClickHouseUser(deps.readFile, paths.configDir)
 	removeFile(paths.binary + ".prev")
 	removeTree(paths.configDir)
 	removeTree(paths.logDir)
@@ -450,5 +493,6 @@ func runDeployUninstallWith(
 	}
 
 	_, _ = fmt.Fprintln(out, "Click-Dog uninstalled.")
+	printDeployUninstallClickHouseNote(out, chUser, paths.clickHouseUsersDir)
 	return 0
 }

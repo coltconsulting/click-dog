@@ -6,12 +6,13 @@ import (
 )
 
 const (
-	// coverageQueryIDRatioThreshold is the clickhouse.query_id coverage below
-	// which a warning is emitted.
+	// coverageQueryIDRatioThreshold is the share of sampled `query` spans
+	// carrying clickhouse.query_id below which a warning is emitted. The span
+	// sample holds only `query` spans; child spans never carry the attribute.
 	coverageQueryIDRatioThreshold = 0.80
 
-	// coverageQueryIDMinSampleSpans suppresses the query-id ratio warning on
-	// small samples where the ratio is too noisy to act on.
+	// coverageQueryIDMinSampleSpans suppresses the query-id ratio warning when
+	// fewer `query` spans were sampled, where the ratio is too noisy to act on.
 	coverageQueryIDMinSampleSpans = 50
 )
 
@@ -90,7 +91,7 @@ func (a *coverageAnalyzer) Analyze(_ context.Context, input AnalysisInput) ([]Fi
 			"query_id_ratio",
 			SeverityWarning,
 			"Low clickhouse.query_id span coverage",
-			fmt.Sprintf("Only %.1f%% of %d sampled spans carry clickhouse.query_id, limiting query_log enrichment and attribution analysis.",
+			fmt.Sprintf("Only %.1f%% of %d sampled query spans carry clickhouse.query_id, limiting query_log enrichment and attribution analysis.",
 				cov.QueryIDRatio*100, cov.SpanSampleSize),
 			map[string]any{
 				"span_sample_size":    cov.SpanSampleSize,

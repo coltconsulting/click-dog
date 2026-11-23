@@ -100,9 +100,7 @@ func TestIntegration_E2E_ClickHouseToCollector(t *testing.T) {
 	filter, _ := filter.NewQueryFilter(config.FiltersConfig{})
 	var toExport []model.OpenTelemetrySpan
 	for _, span := range spans {
-		queryText := span.Attributes["db.statement"]
-		clientAddr := span.Attributes["client.address"]
-		if !filter.ShouldFilter(span.OperationName, queryText, clientAddr) {
+		if !rejectsSpan(filter, span) {
 			toExport = append(toExport, span)
 		}
 	}
@@ -189,9 +187,7 @@ func TestIntegration_E2E_FilterIntegration(t *testing.T) {
 	var exported []model.OpenTelemetrySpan
 	var filtered []model.OpenTelemetrySpan
 	for _, span := range spans {
-		queryText := span.Attributes["db.statement"]
-		clientAddr := span.Attributes["client.address"]
-		if filter.ShouldFilter(span.OperationName, queryText, clientAddr) {
+		if rejectsSpan(filter, span) {
 			filtered = append(filtered, span)
 			continue
 		}
@@ -261,9 +257,9 @@ func TestIntegration_E2E_ProcessQueriesBatch(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	queries, err := reader.FetchSlowQueriesInRange(ctx, 1000, 0, 100000, fixture.WindowStart, fixture.WindowEnd, 100)
+	queries, err := reader.FetchSlowQueriesInRangePage(ctx, 1000, 0, 100000, fixture.WindowStart, fixture.WindowEnd, nil, 100)
 	if err != nil {
-		t.Fatalf("FetchSlowQueriesInRange failed: %v", err)
+		t.Fatalf("FetchSlowQueriesInRangePage failed: %v", err)
 	}
 
 	queries = exactFixtureQueries(t, queries, fixture)
@@ -305,6 +301,7 @@ func TestIntegration_E2E_DedupWithRealData(t *testing.T) {
 	// Seeding flushes the span log and waits for the rows to materialize, so
 	// the two cycles below read a window that nothing writes to in between.
 	seedTracedQueries(t, conn, 3)
+	waitForLiveSettle()
 
 	qf, err := filter.NewQueryFilter(config.FiltersConfig{})
 	if err != nil {

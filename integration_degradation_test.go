@@ -172,6 +172,7 @@ func TestDegradation_CollectorDown_CircuitBreakerTrips(t *testing.T) {
 		// A new trace per cycle prevents an empty/no-op cycle from resetting the
 		// consecutive-failure count.
 		seedTracedQueryFixture(t, conns[0], 1)
+		waitForLiveSettle()
 		chReader := newCHReader(t, 1)
 		pipeline := newIntegrationProcessor(t, chReader, otelExp, queryFilter, degradationConfig(), cb, nil)
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -197,6 +198,7 @@ func TestDegradation_CollectorDown_CircuitBreakerTrips(t *testing.T) {
 	waitForOTELCollector(t, 30*time.Second)
 	clock.Advance(4 * time.Second)
 	recoveryFixture := seedTracedQueryFixture(t, conns[0], 1)
+	waitForLiveSettle()
 	recoveryReader := newCHReader(t, 1)
 	defer recoveryReader.Close()
 	pipeline := newIntegrationProcessor(t, recoveryReader, otelExp, queryFilter, degradationConfig(), cb, nil)

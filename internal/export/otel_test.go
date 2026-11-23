@@ -289,10 +289,10 @@ func TestExportSpans_LiveSourceAttribute(t *testing.T) {
 		{
 			name: "supplied source is authoritative",
 			attributes: map[string]string{
-				liveSpanSourceKey: "test-span",
+				liveSpanSourceKey: "test-export",
 				"custom":          "preserved",
 			},
-			wantSource: "test-span",
+			wantSource: "test-export",
 		},
 		{
 			name:       "absent source defaults to span log",
@@ -430,10 +430,6 @@ func TestExportSpans_EmitsStringSliceAttributes(t *testing.T) {
 		Kind:          "CLIENT",
 		StartTimeUs:   1_000_000,
 		FinishTimeUs:  2_000_000,
-		Attributes: map[string]string{
-			"query_log.tables_csv":    "default.events,system.numbers",
-			"query_log.databases_csv": "default,system",
-		},
 		StringSliceAttributes: map[string][]string{
 			"query_log.tables":    {"default.events", "system.numbers"},
 			"query_log.databases": {"default", "system"},
@@ -454,9 +450,6 @@ func TestExportSpans_EmitsStringSliceAttributes(t *testing.T) {
 	}
 	if got := stringSliceAttrValues(t, attrs, "query_log.databases"); !slices.Equal(got, []string{"default", "system"}) {
 		t.Fatalf("query_log.databases = %v, want [default system]", got)
-	}
-	if got := stringAttrValue(t, attrs, "query_log.tables_csv"); got != "default.events,system.numbers" {
-		t.Fatalf("query_log.tables_csv = %q, want default.events,system.numbers", got)
 	}
 }
 

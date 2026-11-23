@@ -221,3 +221,19 @@ func TestExtractLogComment_DoesNotMutateOriginal(t *testing.T) {
 		t.Errorf("expected other_key=other_value, got %q", span.Attributes["other_key"])
 	}
 }
+
+func TestExtractLogComment_IgnoresStatementLiterals(t *testing.T) {
+	for _, key := range []string{"db.statement", "clickhouse.query", "custom.note"} {
+		span := model.OpenTelemetrySpan{
+			Attributes: map[string]string{
+				key: "SELECT * FROM orders WHERE url = 'https://shop/?log_comment=PLANT' AND email = 'a@b.c'",
+			},
+		}
+		ExtractLogComment(&span)
+		for k, v := range span.Attributes {
+			if k != key && strings.Contains(v, "PLANT") {
+				t.Errorf("%s literal became %s = %q", key, k, v)
+			}
+		}
+	}
+}

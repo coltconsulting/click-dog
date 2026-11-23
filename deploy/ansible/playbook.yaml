@@ -5,11 +5,11 @@
 #
 # Usage:
 #   ansible-playbook -i inventory.ini playbook.yaml \
-#     --extra-vars "clickhouse_password=YOUR_PASSWORD"
+#     --extra-vars "clickhouse_password=REPLACE_WITH_PASSWORD"
 #
 # Bound SSH concurrency to 10 hosts in flight at once:
 #   ansible-playbook -i inventory.ini playbook.yaml \
-#     --extra-vars "clickhouse_password=YOUR_PASSWORD" \
+#     --extra-vars "clickhouse_password=REPLACE_WITH_PASSWORD" \
 #     -f 10
 #
 # For batched rollouts that finish a wave before starting the next,
@@ -36,7 +36,7 @@
   handlers:
     - name: validate click-dog config
       ansible.builtin.command:
-        cmd: /usr/local/bin/click-dog -validate -config {{ click_dog_config_dir }}/click-dog.yaml
+        cmd: /usr/local/bin/click-dog validate --config {{ click_dog_config_dir }}/click-dog.yaml
       changed_when: false
       listen: restart click-dog
 
@@ -84,21 +84,6 @@
         # not let it decide plaintext.
         otel_tls_material: "{{ otel_ca_cert | length > 0 or otel_client_cert | length > 0 or otel_client_key | length > 0 }}"
       tags: [always]
-
-    # Fail before touching the host: a run that asked for TLS must not deploy
-    # a plaintext exporter.
-    - name: Reject the retired Let's Encrypt TLS variables
-      ansible.builtin.assert:
-        that:
-          - not (tls_enabled | default(false) | bool)
-        fail_msg: >-
-          tls_enabled, tls_domain, and tls_email were removed. Let's Encrypt no
-          longer issues client-authentication certificates, and a host's own
-          certificate chain cannot verify the collector. TLS is the default
-          for a collector that is not loopback; set otel_secure=true to
-          require it, and, for a private CA or mutual TLS, otel_ca_cert,
-          otel_client_cert, and otel_client_key; see
-          https://click-dog.com/ansible/#otlp-tls.
 
     - name: Validate OTLP TLS inputs
       ansible.builtin.assert:
@@ -541,21 +526,6 @@
       diff: false
       when: otel_mtls_enabled | bool
       # No restart, as for the certificate above.
-
-    # Earlier playbooks installed this hook for a Let's Encrypt certificate
-    # the configuration no longer uses; left behind, renewals would restart
-    # click-dog. Hosts where it ran also hold copies of that certificate and
-    # its private key. The certificate under /etc/letsencrypt is left to the
-    # operator.
-    - name: Remove the retired certbot renewal hook and certificate copies
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - /etc/letsencrypt/renewal-hooks/post/click-dog-restart.sh
-        - "{{ tls_cert_dir }}/tls.crt"
-        - "{{ tls_cert_dir }}/tls.key"
-        - "{{ tls_cert_dir }}/fullchain.pem"
 
     # ── OTLP transport ───────────────────────────────────────────
     # Each host is the host that exports, so it decides as `install.sh

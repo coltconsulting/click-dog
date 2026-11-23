@@ -213,7 +213,7 @@ func TestRunCanaryAndExport_ExportTimeoutRecordsFailure(t *testing.T) {
 		})
 
 		qf, _ := filter.NewQueryFilter(cfg.Filters)
-		err := RunCanaryAndExport(context.Background(), querier, exporter, cfg, qf, cb)
+		err := RunCanaryAndExport(context.Background(), querier, exporter, cfg, qf, cb, nil, nil)
 
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("expected deadline exceeded, got %v", err)

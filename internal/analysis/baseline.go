@@ -40,7 +40,8 @@ const (
 
 // BaselineCompatibility records only settings that affect exact-group
 // selection, aggregation, or rollup identity. FilterFingerprint is a digest of
-// the effective user filters; raw user names never enter the artifact.
+// the effective query filters (user lists, blacklist_queries, whitelist_ips);
+// raw filter values never enter the artifact.
 type BaselineCompatibility struct {
 	FamilyAlgorithmVersion    string  `json:"family_algorithm_version"`
 	SimilarityThreshold       float64 `json:"similarity_threshold"`

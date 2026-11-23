@@ -19,6 +19,13 @@ import (
 // remains subject to this interval.
 const serverVersionRefreshInterval = 5 * time.Minute
 
+// Reasons a cycle clears the stamp, named in Clear's log line.
+const (
+	clearReasonHealthCheck = "ClickHouse health check failed"
+	clearReasonBreakerOpen = "circuit breaker open"
+	clearReasonCanary      = "canary running in place of the span fetch"
+)
+
 // serverVersionStamp keeps an exporter's clickhouse.version attribute in step
 // with the server actually being read.
 //
@@ -90,20 +97,24 @@ func (s *serverVersionStamp) Refresh(ctx context.Context, reader, exporter any, 
 }
 
 // Clear drops the stamp for a cycle that could not confirm the version, and
-// forces the next Refresh to re-read rather than wait out the interval.
+// forces the next Refresh to re-read rather than wait out the interval. reason
+// names why the cycle cannot confirm it: a failed health check, an open
+// breaker, or a canary run in place of the span fetch. ClickHouse may well be
+// reachable in the last two, so the log line states the reason rather than
+// calling ClickHouse unreachable.
 //
 // Degraded cycles still export — the canary span goes out while the breaker is
 // open — and a ClickHouse upgrade is the most likely cause of the outage that
 // opened it. Without this, those spans would carry the pre-upgrade version for
 // the whole degraded window.
-func (s *serverVersionStamp) Clear(exporter any) {
+func (s *serverVersionStamp) Clear(exporter any, reason string) {
 	s.force = true
 	stamper, ok := exporter.(model.ServerVersionStamper)
 	if !ok {
 		return
 	}
 	if s.last != "" {
-		clicklog.Debug("ClickHouse unreachable this cycle, clearing exported clickhouse.version (was %s)", s.last)
+		clicklog.Debug("Clearing exported clickhouse.version (was %s): this cycle cannot confirm the server version (%s)", s.last, reason)
 	}
 	s.last = ""
 	stamper.SetServerVersion("")

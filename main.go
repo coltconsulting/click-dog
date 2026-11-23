@@ -232,7 +232,6 @@ var subcommands = map[string]func(args []string, out, errOut io.Writer) int{
 	"validate":          runValidate,
 	"analyze":           runAnalyze,
 	"test":              runTest,
-	"test-span":         runTestSpan,
 	"flush":             runFlush,
 	"self-update":       runSelfUpdate,
 	"create-dashboards": runCreateDashboards,
@@ -255,7 +254,6 @@ Usage:
   click-dog backfill [flags]     One-shot export of a historical time range, then exit
   click-dog analyze <subcommand> Run a local, read-only query analysis report
   click-dog test <subcommand>    Test exporter delivery, OTLP receiver TLS, or native ClickHouse tracing
-  click-dog test-span            Deprecated alias for 'click-dog test export'
   click-dog flush                Ask the running service (systemd or leader) to export
   click-dog self-update [flags]  Update to the latest release
   click-dog create-dashboards    Create the Datadog dashboards via API
@@ -263,9 +261,7 @@ Usage:
   click-dog version              Print version and exit
   click-dog help                 Show this help and exit
 
-Options are flags spelled --flag; a single leading dash is also accepted. The
-deprecated -validate and -backfill-start/-backfill-end mode flags still work
-and map to the validate and backfill commands.
+Options are flags spelled --flag; a single leading dash is also accepted.
 
 Examples:
   click-dog --config /etc/click-dog/config.yaml
@@ -294,16 +290,15 @@ func printUsage(w io.Writer) {
 // dispatch routes a leading non-flag verb (argv[1]) before flag.Parse() runs:
 // a registered subcommand to its handler, or the built-in `version` / `help`
 // verbs to their printers. It returns fellThrough=true only when main() should
-// proceed into flag parsing — no args, a leading flag, or the `backfill` verb,
-// which has no handler of its own: its args are rewritten onto the legacy mode
-// flags and handed back via argv (argv is otherwise args unchanged; main()
-// must parse argv, not os.Args, to pick the rewrite up). Any other non-flag
-// arg is treated as a typo (e.g. `cehck` for `check`) and reported as an error
-// rather than silently falling through to start the daemon. When a verb is
-// handled, the returned code is the intended process exit code.
-func dispatch(args []string, out, errOut io.Writer) (exitCode int, fellThrough bool, argv []string) {
+// go on to run the export pipeline: with no args or a leading flag, opts is nil
+// and main() parses the root flags itself; the `backfill` verb, which has no
+// handler of its own, returns its parsed options. Any other non-flag arg is
+// treated as a typo (e.g. `cehck` for `check`) and reported as an error rather
+// than silently falling through to start the daemon. When a verb is handled,
+// the returned code is the intended process exit code.
+func dispatch(args []string, out, errOut io.Writer) (exitCode int, fellThrough bool, opts *runOptions) {
 	if len(args) < 2 || strings.HasPrefix(args[1], "-") {
-		return 0, true, args
+		return 0, true, nil
 	}
 	cmd := args[1]
 	if handler, ok := subcommands[cmd]; ok {
@@ -317,11 +312,11 @@ func dispatch(args []string, out, errOut io.Writer) (exitCode int, fellThrough b
 		printUsage(out)
 		return 0, false, nil
 	case "backfill":
-		rewritten, code := rewriteBackfillArgs(args[2:], errOut)
-		if rewritten == nil {
+		backfill, code := parseBackfillArgs(args[2:], errOut)
+		if backfill == nil {
 			return code, false, nil
 		}
-		return 0, true, append([]string{args[0]}, rewritten...)
+		return 0, true, backfill
 	}
 	_, _ = fmt.Fprintf(errOut, "click-dog: unknown command %q\nRun 'click-dog -h' for usage.\n", cmd)
 	return 2, false, nil
@@ -342,14 +337,9 @@ func reportStrayArgs(errOut io.Writer, args []string) int {
 	return 2
 }
 
-func main() {
-	// Dispatch subcommands before flag parsing. argv is os.Args except for the
-	// backfill verb, which dispatch rewrites onto the legacy mode flags.
-	code, fellThrough, argv := dispatch(os.Args, os.Stdout, os.Stderr)
-	if !fellThrough {
-		os.Exit(code)
-	}
-
+// parseRootFlags parses the root command's flags from os.Args into scheduled
+// mode options. It exits for -h, --version, and stray positional arguments.
+func parseRootFlags() *runOptions {
 	flag.Usage = func() {
 		printUsage(os.Stderr)
 		// Blank line separates the banner's Examples block from the flag
@@ -361,17 +351,11 @@ func main() {
 	}
 
 	configPath := flag.String("config", config.DefaultConfigFlag, "Path to configuration file")
-	backfillStart := flag.String("backfill-start", "", "Deprecated: use 'click-dog backfill --start'")
-	backfillEnd := flag.String("backfill-end", "", "Deprecated: use 'click-dog backfill --end'")
 	showVersion := flag.Bool("version", false, "Print version and exit")
-	validateOnly := flag.Bool("validate", false, "Deprecated: use 'click-dog validate'")
 	dryRun := flag.Bool("dry-run", false, "Read real data but discard exports; print summary")
 
 	// Unknown flags fail with the standard flag package error and exit 2.
-	// If a flag is removed in the future, the removal commit must add an
-	// explicit deprecation handler — silent compat shims would mask typos
-	// like `--cfg` for `--config`.
-	_ = flag.CommandLine.Parse(argv[1:])
+	_ = flag.CommandLine.Parse(os.Args[1:])
 	if flag.NArg() > 0 {
 		os.Exit(reportStrayArgs(os.Stderr, flag.Args()))
 	}
@@ -380,32 +364,29 @@ func main() {
 		printVersion(os.Stdout)
 		os.Exit(0)
 	}
+	return &runOptions{configPath: *configPath, dryRun: *dryRun}
+}
 
-	if *validateOnly {
-		fmt.Fprintln(os.Stderr, "WARN: -validate is deprecated; use 'click-dog validate'")
-		os.Exit(runValidate([]string{"-config", *configPath}, os.Stdout, os.Stderr))
+func main() {
+	// Dispatch subcommands before flag parsing. opts is non-nil only for the
+	// backfill verb, which carries its own parsed flags.
+	code, fellThrough, opts := dispatch(os.Args, os.Stdout, os.Stderr)
+	if !fellThrough {
+		os.Exit(code)
+	}
+	if opts == nil {
+		opts = parseRootFlags()
 	}
 
-	// The backfill verb rewrites onto these flags via dispatch(), so only the
-	// spelled-out legacy flags earn the deprecation nudge.
-	if (*backfillStart != "" || *backfillEnd != "") && (len(os.Args) < 2 || os.Args[1] != "backfill") {
-		fmt.Fprintln(os.Stderr, "WARN: -backfill-start/-backfill-end are deprecated; use 'click-dog backfill --start ... --end ...'")
-	}
-
-	cfg, _, err := loadConfig(*configPath)
+	cfg, _, err := loadConfig(opts.configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
 	// Log load-time warnings (always, not just validate mode)
-	loadWarnings := append(append(append([]string{}, cfg.DeprecationWarnings...), cfg.EnvWarnings...), cfg.ValidationWarnings...)
+	loadWarnings := append(append([]string{}, cfg.EnvWarnings...), cfg.ValidationWarnings...)
 	for _, w := range loadWarnings {
 		log.Printf("WARN: %s", w)
-	}
-
-	// Catch partial backfill flags — one without the other is always a mistake
-	if (*backfillStart == "") != (*backfillEnd == "") {
-		log.Fatalf("Backfill needs both ends of the range: use 'click-dog backfill --start ... --end ...' (or both deprecated -backfill-start/-backfill-end flags)")
 	}
 
 	// Initialize logger
@@ -473,7 +454,7 @@ func main() {
 	// from — the ClickHouse node already running the scheduled service — even
 	// though running both at once is a supported topology. Counters still
 	// record into m; only the listeners are skipped.
-	oneShot := *backfillStart != "" && *backfillEnd != ""
+	oneShot := opts.backfill()
 	if oneShot {
 		var skipped []string
 		if cfg.Metrics.Enabled {
@@ -590,7 +571,7 @@ func main() {
 	// Wrap in MultiExporter if multiple, or use directly if single
 	var exporter model.SpanExporter
 	var dryRunExp *DryRunExporter
-	if *dryRun {
+	if opts.dryRun {
 		dryRunExp = NewDryRunExporter()
 		exporter = dryRunExp
 		clicklog.Info("Dry-run mode: exports will be discarded")
@@ -653,7 +634,7 @@ func main() {
 			Host:           cfg.Metrics.OTLP.Host,
 			ServiceName:    cfg.Metrics.OTLP.ServiceName,
 			ServiceVersion: version,
-			SinkNames:      otlpMetricsSinkNames(cfg, *dryRun),
+			SinkNames:      otlpMetricsSinkNames(cfg, opts.dryRun),
 			Rename:         cfg.Metrics.OTLP.Rename,
 		})
 		if metricsErr != nil {
@@ -685,8 +666,8 @@ func main() {
 	wh.Notify(webhook.EventStartup, fmt.Sprintf("Click-Dog starting up (host=%s:%d)", cfg.ClickHouse.Host, cfg.ClickHouse.Port))
 
 	// Check if backfill mode
-	if *backfillStart != "" && *backfillEnd != "" {
-		err := runBackfillMode(ctx, chReader, exporter, f, cfg, *backfillStart, *backfillEnd, wh, m)
+	if opts.backfill() {
+		err := runBackfillMode(ctx, chReader, exporter, f, cfg, opts.backfillStart, opts.backfillEnd, wh, m)
 		// Must precede Fatal so dry-run output isn't lost on failure.
 		if dryRunExp != nil {
 			dryRunExp.PrintSummary()
@@ -703,7 +684,7 @@ func main() {
 
 func runBackfillMode(
 	ctx context.Context,
-	chReader *clickhouse.ClickHouseReader,
+	chReader processor.BackfillReader,
 	exporter model.SpanExporter,
 	f *filter.QueryFilter,
 	cfg *config.Config,
@@ -740,23 +721,13 @@ func runBackfillMode(
 	// collapse is backend-specific. The leader gate applies only to the scheduled
 	// loop.
 
-	// Fetch queries in range
-	queries, err := chReader.FetchSlowQueriesInRange(
-		ctx,
-		cfg.Monitor.MinTraceDurationMs,
-		cfg.Monitor.MaxTraceDurationMs,
-		cfg.Monitor.MaxQueryLength,
-		startTime,
-		endTime,
-		cfg.Monitor.MaxSpansPerCycle,
-	)
+	// Read the whole range in time-ordered pages of max_spans_per_cycle rows,
+	// exporting each page before reading the next. A run that stops early may
+	// already have exported pages, so it is reported as a failed run.
+	result, err := processor.ExportBackfillRange(ctx, chReader, exporter, f, cfg, startTime, endTime, m)
 	if err != nil {
-		return fmt.Errorf("error fetching queries: %w", err)
+		return processor.ReportBackfillStopped(startStr, endStr, result, err, wh)
 	}
-
-	clicklog.Info("Found %d slow queries in range", len(queries))
-
-	result := processor.ProcessQueriesBatch(ctx, queries, exporter, f, cfg, m)
 
 	return processor.ReportBackfillOutcome(startStr, endStr, result, wh)
 }

@@ -11,7 +11,7 @@ spec:
   # --cluster, it runs in cluster mode: cluster() reads one replica per shard,
   # so a replicated cluster gets partial coverage. Without --cluster it reads
   # only the pod the Service routes to. Keep replicas at 1 — multiple instances
-  # double-export unless you also enable HA leader election. Do NOT scale this
+  # double-export without HA leader election. Do NOT scale this
   # one-per-node; for full coverage, run a sidecar inside every ClickHouse pod
   # instead.
   replicas: 1
@@ -40,8 +40,6 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
-        # Kept explicit for older images, which have no passwd entry for
-        # 65532: without this they start click-dog in group 0 (root).
         runAsGroup: 65532
         # Group-owns the mounted volumes so the 0440 client key below is
         # readable by click-dog and no one else.

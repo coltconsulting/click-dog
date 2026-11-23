@@ -17,7 +17,7 @@ import (
 // exclude everything, spans may lack clickhouse.query_id (breaking enrichment +
 // user filters), or normalized_query_hash may be unavailable (empty
 // query-family widgets). `click-dog check` runs these probes by default;
-// `--quick` (and the offline `-validate` mode) skip them.
+// `--quick` (and the offline `validate` command) skip them.
 //
 // Gathering (live queries) is split from evaluation (pure classification) so
 // the pass/warn/fail decisions are unit-testable without a live connection,
@@ -70,9 +70,14 @@ type ReadinessOptions struct {
 	// distribution check can report whether any recent span would qualify.
 	MinTraceDurationMs int
 	// EnrichmentNeeded is true when the current config relies on system.query_log
-	// (enrich_from_query_log, or user whitelist/blacklist). When true a missing
+	// (enrich_from_query_log, the user lists, or whitelist_ips). When true a missing
 	// query_log fails the command; otherwise it only warns.
 	EnrichmentNeeded bool
+	// QueryIDNeeded is true when the config needs clickhouse.query_id on spans:
+	// EnrichmentNeeded, or blacklist_queries, which reads each trace's query
+	// spans by query ID and drops a trace with none. It gates the query_id
+	// presence probe.
+	QueryIDNeeded bool
 	// SampleLimit caps how many distinct span query IDs are pulled to probe the
 	// enrichment join. Defaults to defaultReadinessSampleLimit when <= 0.
 	SampleLimit int
@@ -135,14 +140,23 @@ const doctorQueryLogCountSQL = `
 // (QueryFinish / ExceptionWhileProcessing), so the probe must too — counting
 // QueryStart rows would overstate join viability versus what enrichment can
 // actually match. countDistinct keeps "matched" comparable to the number of
-// sampled query IDs (query_log has multiple rows per query_id).
+// sampled query IDs (query_log has multiple rows per query_id). The sampled
+// query spans finished inside the lookback, so their finish rows were stamped
+// no earlier than a moment before it; the event_time bound, one
+// doctorEnrichJoinMargin wider, keeps the probe to those granules as the
+// runtime lookup is (queryLogReadFloor).
 const doctorEnrichJoinSQL = `
 			SELECT countDistinct(query_id) AS matched
 			FROM ` + tblQueryLog + `
 			WHERE query_id IN ?
 			  AND type IN ('QueryFinish', 'ExceptionWhileProcessing')
 			  AND event_date >= today() - INTERVAL ? DAY
+			  AND event_time >= now() - INTERVAL ? SECOND
 		`
+
+// doctorEnrichJoinMargin widens the enrichment probe's event_time bound past
+// the lookback the query IDs were sampled from.
+const doctorEnrichJoinMargin = queryLogStartMargin
 
 // readinessObs holds the raw observations from the live queries. Evaluation is
 // a pure function of this struct.
@@ -150,6 +164,7 @@ type readinessObs struct {
 	lookback           time.Duration
 	minTraceDurationMs int
 	enrichmentNeeded   bool
+	queryIDNeeded      bool
 	useClusterQueries  bool
 	clusterName        string
 
@@ -190,11 +205,18 @@ func (c *ClickHouseReader) RunReadinessChecks(ctx context.Context, opts Readines
 	return evaluateReadiness(c.gatherReadiness(ctx, opts))
 }
 
+// needsQueryID reports whether the config relies on clickhouse.query_id on
+// spans; enrichment always does.
+func (obs readinessObs) needsQueryID() bool {
+	return obs.queryIDNeeded || obs.enrichmentNeeded
+}
+
 func (c *ClickHouseReader) gatherReadiness(ctx context.Context, opts ReadinessOptions) readinessObs {
 	obs := readinessObs{
 		lookback:           opts.Lookback,
 		minTraceDurationMs: opts.MinTraceDurationMs,
 		enrichmentNeeded:   opts.EnrichmentNeeded,
+		queryIDNeeded:      opts.QueryIDNeeded,
 		useClusterQueries:  c.useClusterQueries,
 		clusterName:        c.cluster,
 	}
@@ -208,11 +230,11 @@ func (c *ClickHouseReader) gatherReadiness(ctx context.Context, opts ReadinessOp
 		[]interface{}{opts.MinTraceDurationMs, lookbackDays, lookbackSeconds},
 		&obs.spanTotal, &obs.spanQualifying, &obs.spanMaxUs)
 
-	// clickhouse.query_id presence — only probed when enrichment/user-filters
-	// are configured. Otherwise query_id on spans is irrelevant and the extra
-	// attribute-Map scan over the lookback isn't worth running. Also requires
-	// the span log to be readable.
-	if opts.EnrichmentNeeded && obs.spanLogErr == nil {
+	// clickhouse.query_id presence — only probed when enrichment or a
+	// trace-scoped filter is configured. Otherwise query_id on spans is
+	// irrelevant and the extra attribute-Map scan over the lookback isn't worth
+	// running. Also requires the span log to be readable.
+	if obs.needsQueryID() && obs.spanLogErr == nil {
 		qidSQL := strings.ReplaceAll(doctorQueryIDPresenceSQL, tblSpanLog, c.spanLogRef)
 		obs.qidSampleErr = c.scanRow(ctx, qidSQL,
 			[]interface{}{lookbackDays, lookbackSeconds},
@@ -235,7 +257,7 @@ func (c *ClickHouseReader) gatherReadiness(ctx context.Context, opts ReadinessOp
 		if err == nil && len(ids) > 0 {
 			joinSQL := strings.ReplaceAll(doctorEnrichJoinSQL, tblQueryLog, c.queryLogRef)
 			obs.joinErr = c.scanRow(ctx, joinSQL,
-				[]interface{}{ids, lookbackDays}, &obs.joinMatched)
+				[]interface{}{ids, lookbackDays, lookbackSeconds + int(doctorEnrichJoinMargin.Seconds())}, &obs.joinMatched)
 		}
 	}
 
@@ -340,9 +362,9 @@ func evaluateReadiness(obs readinessObs) []ReadinessCheck {
 	switch {
 	case obs.spanLogErr != nil:
 		// Span log already failed; sampling is impossible. No separate line.
-	case !obs.enrichmentNeeded:
+	case !obs.needsQueryID():
 		add("clickhouse.query_id on spans", ReadinessSkip,
-			"enrichment and user filters are not configured; query_id propagation not checked", "")
+			"enrichment and the query filters are not configured; query_id propagation not checked", "")
 	case obs.qidSampleErr != nil:
 		add("clickhouse.query_id on spans", ReadinessWarn,
 			fmt.Sprintf("could not sample span attributes: %v", obs.qidSampleErr), "")
@@ -351,7 +373,7 @@ func evaluateReadiness(obs readinessObs) []ReadinessCheck {
 	case obs.qidWith == 0:
 		add("clickhouse.query_id on spans", ReadinessWarn,
 			fmt.Sprintf("0 of %d recent spans carry clickhouse.query_id", obs.qidSampled),
-			"query_log enrichment and user filters need clickhouse.query_id on spans; ensure ClickHouse propagates query_id into span attributes")
+			"query_log enrichment and the user, IP, and query filters need clickhouse.query_id on spans; without it the filters drop every trace. Ensure ClickHouse propagates query_id into span attributes")
 	default:
 		add("clickhouse.query_id on spans", ReadinessPass,
 			fmt.Sprintf("%d of %d recent spans carry clickhouse.query_id", obs.qidWith, obs.qidSampled), "")

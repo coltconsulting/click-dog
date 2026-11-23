@@ -66,8 +66,8 @@ Flags:
 		}
 		return 2
 	}
-	if fs.NArg() != 0 {
-		_, _ = fmt.Fprintf(errOut, "click-dog test tls: unexpected argument %q\n\n", fs.Arg(0))
+	if err := rejectLeftoverArgs("click-dog test tls", fs, args); err != nil {
+		_, _ = fmt.Fprintf(errOut, "%v\n\n", err)
 		fs.Usage()
 		return 2
 	}

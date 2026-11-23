@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -89,14 +90,15 @@ func runInitWizard(in io.Reader, out, errOut io.Writer, fs *flag.FlagSet, chHost
 		}
 	})
 
-	a, eof := runWizard(in, out, errOut, defaults)
+	a, inputErr := runWizard(in, out, errOut, defaults)
 	// EOF mid-wizard means stdin closed before the user finished answering.
 	// Without this check, the wizard would happily write a config full of
 	// silent defaults for the unanswered tail (e.g. localhost:9181 Keeper
 	// hosts the user never picked). Refuse the write and exit non-zero so
-	// the user re-runs with the full input.
-	if eof {
-		_, _ = fmt.Fprintf(errOut, "Error: stdin closed before all wizard questions were answered; not writing %s\n", outputPath)
+	// the user re-runs with the full input. An over-long line stops the
+	// wizard the same way.
+	if inputErr != nil {
+		_, _ = fmt.Fprintf(errOut, "Error: %v; not writing %s\n", inputErr, outputPath)
 		return 1
 	}
 	// The wizard doesn't prompt for the secret file path (it's an install.sh /
@@ -302,22 +304,37 @@ func resolveCHUser(profile, user string) string {
 	return defaultMonitorUser
 }
 
-// wizPrompter wraps a bufio.Reader and tracks whether any read hit EOF.
-// runWizard surfaces the flag back to the caller (via the second return
-// value) so a truncated stdin doesn't silently produce a config file using
-// defaults for every unanswered prompt.
+// wizPrompter wraps a bufio.Reader and tracks whether input stopped early.
+// runWizard surfaces that back to the caller (via its error return) so a
+// truncated stdin doesn't silently produce a config file using defaults for
+// every unanswered prompt.
 type wizPrompter struct {
-	r      *bufio.Reader
+	r *bufio.Reader
+	// sawEOF is set when input ends or a line is too long. Every prompt loop
+	// stops on it, so an over-long line ends the wizard like a closed stdin:
+	// the rest of that line cannot be skipped when it never ends.
 	sawEOF bool
+	// lineTooLong is set when a line exceeded maxPromptLineBytes.
+	lineTooLong bool
 }
 
 // readLine reads one line, trimmed. Mirrors the package-level readLine's
 // "EOF or read error with no buffered data → return empty" contract so
 // existing tests that drain stdin cleanly still work; the difference is
 // that sawEOF flips on the first such read so the caller can refuse to
-// commit results.
+// commit results. A line over maxPromptLineBytes returns "" and stops input.
 func (w *wizPrompter) readLine() string {
-	line, err := w.r.ReadString('\n')
+	if w.lineTooLong {
+		// Later prompts still call readLine; reading on would only consume
+		// another bound's worth of the same endless line.
+		return ""
+	}
+	line, err := readPromptLine(w.r)
+	if errors.Is(err, errPromptLineTooLong) {
+		w.sawEOF = true
+		w.lineTooLong = true
+		return ""
+	}
 	if err != nil {
 		w.sawEOF = true
 		if line == "" {
@@ -327,16 +344,30 @@ func (w *wizPrompter) readLine() string {
 	return strings.TrimSpace(line)
 }
 
+// err explains why input stopped early, or returns nil when it did not.
+func (w *wizPrompter) err() error {
+	switch {
+	case w.lineTooLong:
+		return errPromptLineTooLong
+	case w.sawEOF:
+		return errWizardStdinClosed
+	}
+	return nil
+}
+
+// errWizardStdinClosed reports that stdin ended before the wizard finished.
+var errWizardStdinClosed = errors.New("stdin closed before all wizard questions were answered")
+
 // runWizard executes the interactive configurator. The caller passes in the
 // starting defaults (typically defaultWizardAnswers overlaid with any flags
-// the user supplied) and gets back the populated struct plus a boolean
-// indicating whether stdin closed mid-wizard. runInitWizard treats true as
-// "don't write the file".
+// the user supplied) and gets back the populated struct plus an error when
+// input stopped mid-wizard: stdin closed or a line was too long.
+// runInitWizard treats an error as "don't write the file".
 //
 // Empty input keeps the default. Invalid yes/no, profile, or port responses
 // re-prompt rather than exit — eight earlier answers shouldn't be wiped by a
 // typo on question nine.
-func runWizard(in io.Reader, out, errOut io.Writer, a wizardAnswers) (wizardAnswers, bool) {
+func runWizard(in io.Reader, out, errOut io.Writer, a wizardAnswers) (wizardAnswers, error) {
 	w := &wizPrompter{r: bufio.NewReader(in)}
 
 	_, _ = fmt.Fprintln(out, "click-dog configurator — answer a few questions to generate a starter config.")
@@ -409,7 +440,7 @@ func runWizard(in io.Reader, out, errOut io.Writer, a wizardAnswers) (wizardAnsw
 			a.KeeperHosts = nil
 		}
 	}
-	return a, w.sawEOF
+	return a, w.err()
 }
 
 // promptTopology asks for the deployment topology: sidecar (one reader per node,
@@ -636,16 +667,17 @@ func renderWizardYAML(a wizardAnswers) string {
 		fmt.Fprintf(&b, "  cluster: %s\n", yamlScalar(a.Cluster))
 		b.WriteString("  use_cluster_queries: true\n")
 	}
-	// Profile-specific clickhouse: hardening. Production now carries the
-	// connection-cap + query-timeout knobs install.sh used to emit
-	// unconditionally; paranoid stacks tighter limits on top.
+	// Profile-specific clickhouse: hardening. Production carries the
+	// connection-cap + query-timeout knobs; paranoid stacks tighter limits
+	// on top.
 	b.WriteString(clickhouseHardeningForProfile(a.Profile))
 	b.WriteByte('\n')
 
 	// Emitted for every profile: the operator deciding where spans go is the
 	// same one who must choose the query-text privacy posture below.
 	b.WriteString("# filters.query_text_mode controls whether raw SQL crosses the export boundary.\n")
-	b.WriteString("# Use normalized_only or none for privacy-sensitive production environments.\n")
+	b.WriteString("# The default, normalized_only, keeps SQL literals out of exports; set raw\n")
+	b.WriteString("# only if the backend may store them.\n")
 	b.WriteString("# See https://click-dog.com/filtering/#query-text-export-modes.\n")
 	b.WriteString("exporters:\n")
 	b.WriteString("  otel:\n")
@@ -726,10 +758,9 @@ func yamlScalar(s string) string {
 // hardening lines (each already indented two spaces). Returns empty for
 // profiles that don't add hardening. Mirrors examples/click-dog-*.yaml.
 //
-// `production` carries the modest connection-cap + 30s query timeout that
-// install.sh emitted unconditionally pre-unification; without these the
-// monitor could exhaust pooled connections under load. `paranoid` doubles
-// down (1 conn, 5s timeout, half-default memory) for tighter envelopes.
+// `production` carries a modest connection cap + 30s query timeout; without
+// these the monitor could exhaust pooled connections under load. `paranoid`
+// doubles down (1 conn, 5s timeout, half-default memory) for tighter envelopes.
 func clickhouseHardeningForProfile(profile string) string {
 	switch profile {
 	case "production":
@@ -750,8 +781,7 @@ func clickhouseHardeningForProfile(profile string) string {
 // metricsSectionForProfile returns the metrics: block (each line at column
 // 0) for the named profile, or empty for profiles that opt out.
 //
-// `production` enables the Prometheus scrape on :9090 by default — install.sh
-// emitted this block unconditionally pre-unification, and operators
+// `production` enables the Prometheus scrape on :9090 by default — operators
 // shipping a production install almost certainly want scrape coverage. It also
 // turns on the OTLP self-metrics push (`otlp.enabled`), which reuses
 // `exporters.otel[0]` — without it the shipped Datadog "Click-Dog: Health"
@@ -798,10 +828,9 @@ func healthSectionForProfile(profile string) string {
 // would otherwise hand the user a misconfigured starter under the name
 // they asked for.
 //
-// The production filters: block now carries the `blacklist_operations`
-// list install.sh emitted pre-unification. These drop high-volume
-// engine-internal spans (MergeTree* / VFSWrite / ConcurrentJoin /
-// QueryPipelineEx) at the SQL level, cutting ingest cost ~90-99%.
+// The production filters: block carries a `blacklist_operations` list that
+// drops high-volume engine-internal spans (MergeTree* / VFSWrite /
+// ConcurrentJoin / QueryPipelineEx) at the SQL level.
 func monitorSectionForProfile(profile string) string {
 	switch profile {
 	case "production":
@@ -822,7 +851,7 @@ func monitorSectionForProfile(profile string) string {
     backoff_factor: 2.0
 
 filters:
-  query_text_mode: raw # raw | redacted | normalized_only | none
+  query_text_mode: normalized_only # raw | redacted | normalized_only | none
   blacklist_queries:
     - "^SYSTEM"
     - "^INSERT INTO.*\\.inner\\."
@@ -847,7 +876,7 @@ filters:
 # Health dashboard's "spans with query_id" tile toward zero and inflates ingest
 # ~10-100x. The production profile enables this list; uncomment to use it here.
 # filters:
-#   query_text_mode: raw # raw | redacted | normalized_only | none
+#   query_text_mode: normalized_only # raw | redacted | normalized_only | none
 #   blacklist_operations:
 #     - "MergeTreeSource"
 #     - "MergeTreeMarksLoader"

@@ -36,6 +36,10 @@ Flags:
 		}
 		return 2
 	}
+	if err := rejectLeftoverArgs("click-dog self-update", fs, args); err != nil {
+		_, _ = fmt.Fprintln(errOut, err)
+		return 2
+	}
 
 	if version == "dev" {
 		_, _ = fmt.Fprintln(errOut, "Error: self-update is not available for dev builds")
@@ -150,7 +154,7 @@ Flags:
 		_, _ = fmt.Fprintf(errOut, "Error: %v\n", err)
 		if errors.Is(err, updater.ErrCosignVerification) {
 			_, _ = fmt.Fprintln(errOut, "cosign verification was attempted and failed; checksum-only fallback was not used.")
-			_, _ = fmt.Fprintln(errOut, "Retry with --dangerously-ignore-cosign only if you deliberately accept checksum-only verification.")
+			_, _ = fmt.Fprintln(errOut, "Retry with --dangerously-ignore-cosign only to deliberately accept checksum-only verification.")
 		}
 		return 1
 	}

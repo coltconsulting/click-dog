@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -35,7 +36,6 @@ func TestSubcommandFlagParsing_NoProcessExit(t *testing.T) {
 		{"test", runTest},
 		{"test export", runTestExport},
 		{"test tracing", runTestTracing},
-		{"test-span", runTestSpan},
 		{"self-update", runSelfUpdate},
 		{"create-dashboards", runCreateDashboards},
 		{"deploy status", runDeployStatus},
@@ -58,15 +58,93 @@ func TestSubcommandFlagParsing_NoProcessExit(t *testing.T) {
 	}
 }
 
+// TestSubcommands_RejectPositionalArguments pins that no subcommand drops the
+// flags after a stray word. Go's flag parsing stops at the first non-flag, so
+// `check foo --config x` used to ignore --config and `analyze queries
+// --redact-dimensions false --fail-on critical` used to ignore --fail-on and
+// exit 0. Every handler rejects the leftover with exit 2, naming it, before
+// any config load, network, or stdin read.
+func TestSubcommands_RejectPositionalArguments(t *testing.T) {
+	handlers := []struct {
+		name string
+		run  func([]string, io.Writer, io.Writer) int
+	}{
+		{"check", runCheck},
+		{"validate", runValidate},
+		{"init", runInit},
+		{"flush", runFlush},
+		{"analyze queries", runAnalyzeQueries},
+		{"analyze trace", runAnalyzeTrace},
+		{"test export", runTestExport},
+		{"test tls", runTestTLS},
+		{"test tracing", runTestTracing},
+		{"self-update", runSelfUpdate},
+		{"create-dashboards", runCreateDashboards},
+		{"deploy status", runDeployStatus},
+		{"deploy uninstall", runDeployUninstall},
+		{"deploy kubernetes", runDeployKubernetes},
+		{"deploy docker", runDeployDocker},
+	}
+	missing := filepath.Join(t.TempDir(), "missing.yaml")
+	for _, h := range handlers {
+		for _, args := range [][]string{
+			{"foo", "--config", missing},
+			{"--config", missing, "foo"},
+		} {
+			t.Run(h.name+"/"+strings.Join(args, " "), func(t *testing.T) {
+				var out, errOut bytes.Buffer
+				if code := h.run(withoutConfigFlag(h.name, args), &out, &errOut); code != 2 {
+					t.Fatalf("%s %v: exit = %d, want 2\nstdout: %s\nstderr: %s", h.name, args, code, out.String(), errOut.String())
+				}
+				if want := `unexpected argument "foo"`; !strings.Contains(errOut.String(), want) {
+					t.Errorf("stderr = %q, want it to contain %q", errOut.String(), want)
+				}
+			})
+		}
+	}
+}
+
+// withoutConfigFlag drops --config <path> for the commands that have no
+// --config flag, so each case tests the stray word rather than an unknown
+// flag.
+func withoutConfigFlag(name string, args []string) []string {
+	switch name {
+	case "init", "self-update", "create-dashboards", "deploy status", "deploy uninstall", "deploy kubernetes", "deploy docker":
+		var kept []string
+		for i := 0; i < len(args); i++ {
+			if args[i] == "--config" {
+				i++
+				continue
+			}
+			kept = append(kept, args[i])
+		}
+		return kept
+	}
+	return args
+}
+
+// TestAnalyzeQueries_BooleanValueWordDoesNotDropLaterFlags is the release-test
+// reproduction: the word false after --redact-dimensions used to end parsing,
+// so --fail-on critical was ignored and the command exited 0.
+func TestAnalyzeQueries_BooleanValueWordDoesNotDropLaterFlags(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := runAnalyzeQueries([]string{"--redact-dimensions", "false", "--fail-on", "critical", "--config", filepath.Join(t.TempDir(), "missing.yaml")}, &out, &errOut)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr: %s", code, errOut.String())
+	}
+	if want := `unexpected argument "false": boolean flags take their value with =, e.g. --redact-dimensions=false`; !strings.Contains(errOut.String(), want) {
+		t.Errorf("stderr = %q, want it to contain %q", errOut.String(), want)
+	}
+}
+
 // singleDashLongOption matches a single-dash long option like ` -config` while
 // letting `--config`, single-char shorts (`-c`), hyphenated words
-// (`test-span`), and dates through. It pins the standardized --flag spelling.
+// (`self-update`), and dates through. It pins the standardized --flag spelling.
 var singleDashLongOption = regexp.MustCompile(`(?:^|[\s"'(\[` + "`" + `])-[a-z][a-z0-9][a-z0-9-]*`)
 
 // TestHelpOutput_UsesDoubleDashLongOptions pins every command's help text (and
 // the root banner) to the documented --flag spelling, so generated help cannot
-// drift back to advertising single-dash long options. Lines that deliberately
-// name the deprecated mode-flag spellings are exempt.
+// drift back to advertising single-dash long options.
 func TestHelpOutput_UsesDoubleDashLongOptions(t *testing.T) {
 	outputs := map[string]string{}
 
@@ -85,7 +163,6 @@ func TestHelpOutput_UsesDoubleDashLongOptions(t *testing.T) {
 		{"test", runTest, []string{"--help"}},
 		{"test export", runTestExport, []string{"--help"}},
 		{"test tracing", runTestTracing, []string{"--help"}},
-		{"test-span", runTestSpan, []string{"--help"}},
 		{"self-update", runSelfUpdate, []string{"--help"}},
 		{"create-dashboards", runCreateDashboards, []string{"--help"}},
 		{"deploy status", runDeployStatus, []string{"--help"}},
@@ -103,7 +180,7 @@ func TestHelpOutput_UsesDoubleDashLongOptions(t *testing.T) {
 	outputs["root banner"] = banner.String()
 
 	var backfillHelp bytes.Buffer
-	_, _ = rewriteBackfillArgs([]string{"-h"}, &backfillHelp)
+	_, _ = parseBackfillArgs([]string{"-h"}, &backfillHelp)
 	outputs["backfill"] = backfillHelp.String()
 
 	for name, text := range outputs {
@@ -112,9 +189,6 @@ func TestHelpOutput_UsesDoubleDashLongOptions(t *testing.T) {
 			continue
 		}
 		for _, line := range strings.Split(text, "\n") {
-			if strings.Contains(strings.ToLower(line), "deprecated") {
-				continue
-			}
 			if m := singleDashLongOption.FindString(line); m != "" {
 				t.Errorf("%s help advertises single-dash long option %q in line %q", name, strings.TrimSpace(m), line)
 			}
@@ -150,6 +224,23 @@ func TestMain_RejectsArgumentsAfterFlags(t *testing.T) {
 				t.Errorf("stderr = %q, want it to contain %q", stderr.String(), tc.want)
 			}
 		})
+	}
+}
+
+// TestMain_RejectsUnknownRootFlag pins that the root flag set accepts only its
+// own flags: anything else exits 2 instead of starting the daemon.
+func TestMain_RejectsUnknownRootFlag(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestMain_StrayArgsHelper$") //nolint:gosec // Args[0] is the test binary, not user input.
+	cmd.Env = append(os.Environ(), "GO_MAIN_STRAY_ARGS=--not-a-flag")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 2 {
+		t.Fatalf("exit = %v, want 2; stderr:\n%s", err, stderr.String())
+	}
+	if want := "flag provided but not defined: -not-a-flag"; !strings.Contains(stderr.String(), want) {
+		t.Errorf("stderr = %q, want it to contain %q", stderr.String(), want)
 	}
 }
 

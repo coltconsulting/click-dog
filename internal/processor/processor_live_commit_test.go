@@ -14,9 +14,9 @@ import (
 
 // TestProcess_CommitsTheLivePageOnlyWhenItWasHandled pins when a cycle lets
 // the reader's walk move past the page it fetched. A page that was not
-// handled — an export failed, or a strict whitelist dropped spans because a
-// lookup failed — must stay uncommitted so the next cycle reads it again;
-// committing it would skip those spans for good.
+// handled — an export failed, or a trace filter's lookup failed — must stay
+// uncommitted so the next cycle reads it again; committing it would skip
+// those spans for good.
 func TestProcess_CommitsTheLivePageOnlyWhenItWasHandled(t *testing.T) {
 	trace := uuid.MustParse("55555555-5555-5555-5555-555555555555")
 	span := model.OpenTelemetrySpan{
@@ -58,37 +58,40 @@ func TestProcess_CommitsTheLivePageOnlyWhenItWasHandled(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "IP whitelist with failed enrichment leaves the page uncommitted",
-			filters: config.FiltersConfig{WhitelistIPs: []string{"192.168.0.0/16"}},
-			reader:  mockLiveReader{spans: []model.OpenTelemetrySpan{span}, queryLogsErr: lookupErr},
+			// The trace filters decide on their own lookups, so a failed
+			// enrichment only costs the spans their metadata.
+			name:       "IP whitelist with failed enrichment still decides and commits",
+			filters:    config.FiltersConfig{WhitelistIPs: []string{"192.168.0.0/16"}},
+			reader:     mockLiveReader{spans: []model.OpenTelemetrySpan{span}, queryLogsErr: lookupErr},
+			wantCommit: 1,
 		},
 		{
-			name:    "IP whitelist with a failed span-log trace lookup leaves the page uncommitted",
+			name:    "IP whitelist with a failed span-log lookup fails the cycle uncommitted",
 			filters: config.FiltersConfig{WhitelistIPs: []string{"192.168.0.0/16"}},
 			reader: mockLiveReader{
 				spans:            []model.OpenTelemetrySpan{{TraceID: trace, SpanID: 2, OperationName: "MergeTreeSelect", Attributes: map[string]string{}}},
 				traceQueryIDsErr: lookupErr,
 			},
+			wantErr: true,
 		},
 		{
-			name:    "user whitelist with failed enrichment leaves the page uncommitted",
+			name:    "user whitelist with a failed query_log lookup fails the cycle uncommitted",
 			filters: config.FiltersConfig{WhitelistUsers: []string{"app"}},
-			reader:  mockLiveReader{spans: []model.OpenTelemetrySpan{span}, queryLogsErr: lookupErr},
+			reader:  mockLiveReader{spans: []model.OpenTelemetrySpan{span}, originsErr: lookupErr},
+			wantErr: true,
 		},
 		{
-			// Without a strict whitelist a failed enrichment only exports
+			// Without a trace filter a failed enrichment only exports
 			// unenriched spans; they were delivered, so the walk moves on.
-			name:       "failed enrichment without a whitelist commits",
+			name:       "failed enrichment without a trace filter commits",
 			reader:     mockLiveReader{spans: []model.OpenTelemetrySpan{span}, queryLogsErr: lookupErr},
 			wantCommit: 1,
 		},
 		{
-			// The blacklist admits unresolved users, so nothing was dropped
-			// for want of the lookup.
-			name:       "user blacklist with failed enrichment commits",
-			filters:    config.FiltersConfig{BlacklistUsers: []string{"batch"}},
-			reader:     mockLiveReader{spans: []model.OpenTelemetrySpan{span}, queryLogsErr: lookupErr},
-			wantCommit: 1,
+			name:    "user blacklist with a failed query_log lookup fails the cycle uncommitted",
+			filters: config.FiltersConfig{BlacklistUsers: []string{"batch"}},
+			reader:  mockLiveReader{spans: []model.OpenTelemetrySpan{span}, originsErr: lookupErr},
+			wantErr: true,
 		},
 	}
 	for _, tt := range tests {

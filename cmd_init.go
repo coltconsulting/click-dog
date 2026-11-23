@@ -168,7 +168,7 @@ Usage:
 
 Profiles:
 %s
-If no flags are provided and stdin is a TTY, you will be prompted
+If no flags are provided and stdin is a TTY, the command prompts
 for the four most common values (host / collector / service / profile).
 Pass --wizard for a longer, branching configurator that also covers TLS,
 Splunk HEC, and HA.
@@ -184,7 +184,7 @@ Flags:
 		}
 		return 2
 	}
-	if err := rejectLeftoverArgs("click-dog init", fs); err != nil {
+	if err := rejectLeftoverArgs("click-dog init", fs, args); err != nil {
 		_, _ = fmt.Fprintln(errOut, err)
 		return 2
 	}
@@ -228,7 +228,10 @@ Flags:
 	// --splunk-hec-endpoint / --ha-keeper) intentionally do NOT suppress
 	// the short prompt — see valueFlagsExplicitlySet's comment.
 	if !valueFlagsExplicitlySet(fs) && isTTY() {
-		promptInteractive(os.Stdin, out, errOut, chHost, collector, service, profile)
+		if err := promptInteractive(os.Stdin, out, errOut, chHost, collector, service, profile); err != nil {
+			_, _ = fmt.Fprintf(errOut, "Error: %v; not writing %s\n", err, *output)
+			return 1
+		}
 	}
 
 	// Validate profile after prompting (the prompt loop re-validates user
@@ -288,7 +291,7 @@ Flags:
 	if *chPasswordFile != "" {
 		_, _ = fmt.Fprintf(out, "Write the ClickHouse password to %s (mode 0600) before running click-dog.\n", *chPasswordFile)
 	} else {
-		_, _ = fmt.Fprintln(out, "Set CLICKHOUSE_PASSWORD in your environment before running click-dog.")
+		_, _ = fmt.Fprintln(out, "Set CLICKHOUSE_PASSWORD in the environment before running click-dog.")
 	}
 	writeOTELTransportNote(out, a)
 	return 0
@@ -307,20 +310,6 @@ func writeOTELTransportNote(out io.Writer, a wizardAnswers) {
 		}
 		_, _ = fmt.Fprintf(out, "Check that the receiver speaks TLS: %s\n", check)
 	}
-}
-
-// rejectLeftoverArgs refuses positional arguments. Go's flag package reads
-// "--otel-secure false" as --otel-secure followed by the word false, then
-// stops parsing, so every later flag would be silently ignored.
-func rejectLeftoverArgs(cmd string, fs *flag.FlagSet) error {
-	if fs.NArg() == 0 {
-		return nil
-	}
-	arg := fs.Arg(0)
-	if arg == "true" || arg == "false" {
-		return fmt.Errorf("%s: unexpected argument %q: boolean flags take their value with =, e.g. --otel-secure=%s", cmd, arg, arg)
-	}
-	return fmt.Errorf("%s: unexpected argument %q", cmd, arg)
 }
 
 // buildAnswersFromFlags converts the parsed flag values into a wizardAnswers
@@ -362,23 +351,27 @@ func isTTY() bool {
 
 // promptInteractive accepts io.Reader/io.Writer rather than reading os.Stdin
 // directly so the profile-prompt loop can be exercised by tests without
-// stubbing the global stdin.
-func promptInteractive(in io.Reader, out, errOut io.Writer, chHost, collector, service, profile *string) {
+// stubbing the global stdin. It returns errPromptLineTooLong when an answer
+// exceeds maxPromptLineBytes; the caller then writes nothing.
+func promptInteractive(in io.Reader, out, errOut io.Writer, chHost, collector, service, profile *string) error {
 	reader := bufio.NewReader(in)
 
-	_, _ = fmt.Fprintf(out, "ClickHouse host [%s]: ", *chHost)
-	if line := readLine(reader); line != "" {
-		*chHost = line
-	}
-
-	_, _ = fmt.Fprintf(out, "OTEL collector address [%s]: ", *collector)
-	if line := readLine(reader); line != "" {
-		*collector = line
-	}
-
-	_, _ = fmt.Fprintf(out, "Service name [%s]: ", *service)
-	if line := readLine(reader); line != "" {
-		*service = line
+	for _, p := range []struct {
+		label string
+		value *string
+	}{
+		{"ClickHouse host", chHost},
+		{"OTEL collector address", collector},
+		{"Service name", service},
+	} {
+		_, _ = fmt.Fprintf(out, "%s [%s]: ", p.label, *p.value)
+		line, err := readLine(reader)
+		if err != nil {
+			return err
+		}
+		if line != "" {
+			*p.value = line
+		}
 	}
 
 	// Re-prompt on a bad profile rather than os.Exit'ing (which would wipe
@@ -387,29 +380,37 @@ func promptInteractive(in io.Reader, out, errOut io.Writer, chHost, collector, s
 	names := profileNames()
 	for {
 		_, _ = fmt.Fprintf(out, "Profile (%s) [%s]: ", strings.Join(names, "/"), *profile)
-		line := readLine(reader)
+		line, err := readLine(reader)
+		if err != nil {
+			return err
+		}
 		if line == "" {
-			return
+			return nil
 		}
 		if isValidProfile(line) {
 			*profile = line
-			return
+			return nil
 		}
 		_, _ = fmt.Fprintf(errOut, "unknown profile %q; valid: %s\n", line, strings.Join(names, ", "))
 	}
 }
 
-func readLine(reader *bufio.Reader) string {
-	line, err := reader.ReadString('\n')
+// readLine reads one trimmed answer. Its only error is errPromptLineTooLong;
+// a closed or failed stdin reads as an empty answer.
+func readLine(reader *bufio.Reader) (string, error) {
+	line, err := readPromptLine(reader)
+	if errors.Is(err, errPromptLineTooLong) {
+		return "", err
+	}
 	if err != nil && line == "" {
 		// EOF or read error with no buffered data — surface as "no input"
 		// so promptInteractive's loop can break cleanly.
-		return ""
+		return "", nil
 	}
 	// Intentional: when err != nil but line != "" (a partial read cut by
 	// EOF or stdin error), keep the partial input. Stdin is the only
 	// caller; the alternatives are (a) discard what the user already
 	// typed, or (b) propagate an error the prompt loop has no useful
 	// recovery for. Prefer the user's last keystroke.
-	return strings.TrimSpace(line)
+	return strings.TrimSpace(line), nil
 }

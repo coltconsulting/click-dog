@@ -41,7 +41,7 @@ func TestSelfMetricsStatusLine(t *testing.T) {
 						InheritOTELConnection: true,
 						IntervalSeconds:       10,
 						ServiceName:           "click-dog-monitor",
-						Host:                  "fsnpch201",
+						Host:                  "ch-node-1",
 					},
 				},
 			},
@@ -50,7 +50,7 @@ func TestSelfMetricsStatusLine(t *testing.T) {
 				"inherit otel[0]",
 				"every 10s",
 				"service=click-dog-monitor",
-				"host=fsnpch201",
+				"host=ch-node-1",
 			},
 		},
 		{

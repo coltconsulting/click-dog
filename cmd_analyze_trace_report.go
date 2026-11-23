@@ -11,15 +11,19 @@ import (
 	"github.com/coltconsulting/click-dog/internal/analysis"
 	"github.com/coltconsulting/click-dog/internal/clickhouse"
 	"github.com/coltconsulting/click-dog/internal/config"
+	"github.com/coltconsulting/click-dog/internal/filter"
 	"github.com/coltconsulting/click-dog/internal/model"
+	"github.com/coltconsulting/click-dog/internal/processor"
 )
 
 // buildTraceDrilldownReport runs the read-only drilldown pipeline for a single
 // selected query:
 //
 //  1. resolve trace IDs (from -trace-id directly, or by query-id lookup);
-//  2. fetch spans for those trace IDs without duration-based trace selection;
-//  3. enrich with the query-log row for the selected query ID (non-fatal);
+//  2. fetch spans for those trace IDs without duration-based trace selection,
+//     keeping only what the filters admit (processor.AllowedSpans);
+//  3. enrich with the query-log row for the selected query ID when the filters
+//     admit it (non-fatal);
 //  4. fan out to the similar query-family rollup when requested;
 //  5. fan out to analysis findings filtered to the selected family when
 //     requested (-fanout findings).
@@ -46,6 +50,12 @@ func buildTraceDrilldownReport(ctx context.Context, src traceDrilldownSource, cf
 	}
 
 	lookbackDays := analysisQueryLogLookbackDays(opts.Lookback)
+	// The named query or trace may be one the filters exclude; the report
+	// then omits its spans and query-log row, as scheduled export would.
+	queryFilter, err := filter.NewQueryFilter(cfg.Filters)
+	if err != nil {
+		return analysis.TraceDrilldownReport{}, fmt.Errorf("filters: %w", err)
+	}
 
 	candidate := &analysis.QueryCandidate{Source: report.Source, QueryID: opts.QueryID}
 	// Seed the candidate from the selected current-query row (if any) so the
@@ -58,8 +68,23 @@ func buildTraceDrilldownReport(ctx context.Context, src traceDrilldownSource, cf
 		candidate = &seeded
 	}
 
-	// Step 1: resolve trace IDs.
+	// The span-log and query_log reads start at the window start. Their rows
+	// carry the server's clock, so when this host's clock is ahead of the
+	// server's they start from the server's own window start instead, and the
+	// window's old edge is not cut off. Without the server's time they keep
+	// the window start.
+	readSince := window.Start
+	if serverNow, err := src.ServerTime(ctx); err == nil {
+		if s := serverNow.Add(-opts.Lookback); s.Before(readSince) {
+			readSince = s
+		}
+	}
+
+	// Step 1: resolve trace IDs, and how far back their spans are read: the
+	// window start for a named trace, the selected query's own start for one
+	// found by query ID.
 	var traceIDs []string
+	spansSince := readSince
 	if opts.TraceID != "" {
 		// Direct path: the operator named the exact trace. Skip the query-id
 		// lookup entirely.
@@ -69,11 +94,11 @@ func buildTraceDrilldownReport(ctx context.Context, src traceDrilldownSource, cf
 		// current source, -wait optionally polls (bounded by both -wait and the
 		// command -timeout via ctx) for the trace to materialize; -wait 0s does a
 		// single shot, identical to the recent/other path.
-		ids, err := resolveTraceIDsWithWait(ctx, src, opts, lookbackDays)
+		ids, queryStart, err := resolveTraceIDsWithWait(ctx, src, opts, lookbackDays, readSince)
 		if err != nil {
 			return analysis.TraceDrilldownReport{}, fmt.Errorf("trace-id lookup failed: %w", err)
 		}
-		traceIDs = ids
+		traceIDs, spansSince = ids, queryStart
 		if len(traceIDs) == 0 {
 			warn := fmt.Sprintf("no trace IDs found for query_id %q in the span log within the lookback window", opts.QueryID)
 			if opts.Source == "current" {
@@ -86,14 +111,29 @@ func buildTraceDrilldownReport(ctx context.Context, src traceDrilldownSource, cf
 
 	// Step 2: fetch spans for the resolved trace IDs (no duration selection).
 	if len(traceIDs) > 0 {
-		spans, err := src.FetchSpansForTraceIDs(ctx, traceIDs, lookbackDays, opts.SpanLimit, cfg.Filters.BlacklistOperations)
+		spans, err := src.FetchSpansForTraceIDs(ctx, traceIDs, lookbackDays, spansSince, opts.SpanLimit, cfg.Filters.BlacklistOperations)
 		if err != nil {
 			return analysis.TraceDrilldownReport{}, fmt.Errorf("span fetch failed: %w", err)
 		}
-		if len(spans) == 0 {
+		fetched := len(spans)
+		if fetched > 0 {
+			spans, err = processor.AllowedSpans(ctx, src, spans, queryFilter, lookbackDays)
+			if err != nil {
+				// Fail closed: without the trace's queries the filters cannot
+				// be decided, so no span is reported.
+				report.Warnings = append(report.Warnings,
+					fmt.Sprintf("trace omitted: the filters could not resolve its queries: %v", err))
+				spans = nil
+			}
+		}
+		switch {
+		case fetched == 0:
 			report.Warnings = append(report.Warnings,
 				"trace IDs resolved but no spans were returned (they may be outside the lookback window or fully blacklisted)")
-		} else {
+		case len(spans) == 0 && err == nil:
+			report.Warnings = append(report.Warnings,
+				"trace omitted: the configured filters exclude it")
+		case len(spans) > 0:
 			report.Trace = summarizeTrace(traceIDs, spans)
 		}
 	}
@@ -103,11 +143,16 @@ func buildTraceDrilldownReport(ctx context.Context, src traceDrilldownSource, cf
 	// query-log section but the candidate is still enriched for the similar
 	// fan-out and identity block.
 	if opts.QueryID != "" {
-		queryLogMap, err := src.FetchQueryLogByQueryIDs(ctx, []string{opts.QueryID}, lookbackDays)
+		// The query finished inside the window, so its finish row was stamped
+		// no earlier than the window start.
+		queryLogMap, err := src.FetchQueryLogByQueryIDs(ctx, []string{opts.QueryID}, lookbackDays, uint64(max(readSince.UnixMicro(), 0)))
 		if err != nil {
 			report.Warnings = append(report.Warnings,
 				fmt.Sprintf("query_log enrichment unavailable: %v", err))
-		} else if ql, ok := queryLogMap[opts.QueryID]; ok {
+		} else if ql, ok := queryLogMap[opts.QueryID]; ok && queryFilter.ShouldFilterQueryLog(ql, processor.OriginatingAddress(ql)) {
+			report.Warnings = append(report.Warnings,
+				fmt.Sprintf("query_log row omitted: the configured filters exclude query_id %q", opts.QueryID))
+		} else if ok {
 			if opts.Fanout.Stats {
 				report.QueryLog = summarizeQueryLog(ql, opts.RedactDimensions)
 			}
@@ -252,13 +297,19 @@ func findingHasHash(f analysis.Finding, hashStr string) bool {
 // a context-cancellation error from a fetch (the -timeout firing mid-poll) is a
 // clean stop — expected when waiting — and degrades to a missing-trace warning;
 // any other poll error still propagates as a required-lookup failure.
-func resolveTraceIDsWithWait(ctx context.Context, src traceDrilldownSource, opts analyzeTraceOptions, lookbackDays int) ([]string, error) {
-	ids, err := src.FetchTraceIDsByQueryID(ctx, opts.QueryID, lookbackDays, opts.SpanLimit)
+//
+// since is the start of the report window: the lookup reads only span-log
+// rows that finished in it (less the reader's small margin), because a query
+// selected from the window, or still running, finished no earlier. The
+// returned time is the earliest start of the matched query spans, the floor of
+// the span fetch; it is the zero time when no trace was found.
+func resolveTraceIDsWithWait(ctx context.Context, src traceDrilldownSource, opts analyzeTraceOptions, lookbackDays int, since time.Time) ([]string, time.Time, error) {
+	ids, queryStart, err := src.FetchTraceIDsByQueryID(ctx, opts.QueryID, lookbackDays, since, opts.SpanLimit)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	if len(ids) > 0 || opts.Wait <= 0 {
-		return ids, nil
+		return ids, queryStart, nil
 	}
 
 	// Bound the poll by -wait. Each recheck is scheduled at
@@ -271,7 +322,7 @@ func resolveTraceIDsWithWait(ctx context.Context, src traceDrilldownSource, opts
 		remaining := time.Until(waitDeadline)
 		if remaining <= 0 {
 			// -wait elapsed without the trace materializing: stop polling.
-			return ids, nil
+			return ids, queryStart, nil
 		}
 		sleep := traceWaitPollInterval
 		if remaining < sleep {
@@ -284,21 +335,21 @@ func resolveTraceIDsWithWait(ctx context.Context, src traceDrilldownSource, opts
 			// (empty) so the caller degrades to a missing-trace warning, not a
 			// failure. The drilldown is best-effort for running queries.
 			timer.Stop()
-			return ids, nil
+			return ids, queryStart, nil
 		case <-timer.C:
 		}
-		polled, perr := src.FetchTraceIDsByQueryID(ctx, opts.QueryID, lookbackDays, opts.SpanLimit)
+		polled, polledStart, perr := src.FetchTraceIDsByQueryID(ctx, opts.QueryID, lookbackDays, since, opts.SpanLimit)
 		if perr != nil {
 			// A ctx-cancellation mid-poll is the expected -timeout-bounded stop:
 			// degrade to the last-known (empty) result rather than fail.
 			if ctx.Err() != nil {
-				return ids, nil
+				return ids, queryStart, nil
 			}
-			return nil, perr
+			return nil, time.Time{}, perr
 		}
-		ids = polled
+		ids, queryStart = polled, polledStart
 		if len(ids) > 0 {
-			return ids, nil
+			return ids, queryStart, nil
 		}
 	}
 }

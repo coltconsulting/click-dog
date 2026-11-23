@@ -49,7 +49,7 @@ filters:
   # Drop internal ClickHouse pipeline spans at the SQL level (pushed down as
   # operation_name NOT LIKE '%pattern%'). These are high-volume but low-signal -
   # they represent engine internals, not user queries or their sub-queries.
-  # Removing them cuts ingest cost by ~90-99% without losing query-level data.
+  # Removing them cuts span volume without losing query-level data.
   blacklist_operations:
     - "MergeTreeSource"
     - "MergeTreeMarksLoader"
@@ -68,3 +68,8 @@ metrics:
   # admin_listen_address (default: 127.0.0.1:9091) hosts POST /flush.
   # Loopback by default; SIGUSR1 is the cross-host equivalent.
   # admin_listen_address: "127.0.0.1:9091"
+
+# /healthz is liveness and /readyz reports dependency/circuit-breaker readiness.
+health:
+  enabled: true
+  listen_address: ":8686"

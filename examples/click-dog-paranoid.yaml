@@ -17,7 +17,8 @@ clickhouse:
   max_memory_usage: 52428800  # 50MB per query (half the default)
 
 # filters.query_text_mode controls whether raw SQL crosses the export boundary.
-# Use normalized_only or none for privacy-sensitive production environments.
+# The default, normalized_only, keeps SQL literals out of exports; set raw
+# only if the backend may store them.
 # See https://click-dog.com/filtering/#query-text-export-modes.
 exporters:
   otel:

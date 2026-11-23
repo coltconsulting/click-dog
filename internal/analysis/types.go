@@ -97,6 +97,11 @@ type AnalysisWindow struct {
 // CoverageSummary reports how complete the analysis input is. Warnings holds
 // data-quality and prerequisite warnings discovered while building analysis
 // input, such as span sampling being unavailable.
+//
+// The span sample holds only `query` spans: a query's internal child spans
+// never carry clickhouse.query_id or log_comment. SpanSampleSize counts the
+// sampled `query` spans, SpansWithQueryID counts those that carry the
+// attribute, and QueryIDRatio is their ratio.
 type CoverageSummary struct {
 	NormalizedQuerySupported    bool     `json:"normalized_query_supported"`
 	QueryFamilyRollupsSupported bool     `json:"query_family_rollups_supported"`

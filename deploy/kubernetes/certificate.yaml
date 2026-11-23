@@ -6,7 +6,7 @@
 # that requires one. Give it the TLS Web Client Authentication extended key
 # usage: Let's Encrypt stopped issuing it in 2026, and collectors built on Go's
 # TLS stack reject a client certificate whose extended key usage leaves it out,
-# so this file uses your own CA rather than an ACME issuer.
+# so this file uses a private CA rather than an ACME issuer.
 #
 # It creates:
 #   1. A private root CA in Secret click-dog-otel-client-ca, bootstrapped by a
@@ -21,7 +21,7 @@
 # trusts. In production keep the CA elsewhere, for example behind a
 # ClusterIssuer whose CA Secret lives in the cert-manager namespace: delete the
 # resources for steps 1 and 2 and name that issuer in click-dog-otel-client's
-# issuerRef. The same goes for a CA you already run.
+# issuerRef. The same goes for an existing CA.
 #
 # The collector must trust this CA for client certificates. Export the CA
 # certificate and give it to the collector (the OpenTelemetry Collector's OTLP

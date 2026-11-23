@@ -15,10 +15,7 @@ import (
 )
 
 func runTestExport(args []string, out, errOut io.Writer) int {
-	return runTestExportAs("test export", args, out, errOut)
-}
-
-func runTestExportAs(commandName string, args []string, out, errOut io.Writer) int {
+	const commandName = "test export"
 	fs := flag.NewFlagSet(commandName, flag.ContinueOnError)
 	fs.SetOutput(errOut)
 	configPath := fs.String("config", config.DefaultConfigFlag, "Path to configuration file")
@@ -43,8 +40,8 @@ Flags:
 		}
 		return 2
 	}
-	if fs.NArg() != 0 {
-		_, _ = fmt.Fprintf(errOut, "click-dog %s: unexpected argument %q\n\n", commandName, fs.Arg(0))
+	if err := rejectLeftoverArgs("click-dog "+commandName, fs, args); err != nil {
+		_, _ = fmt.Fprintf(errOut, "%v\n\n", err)
 		fs.Usage()
 		return 2
 	}
@@ -66,7 +63,7 @@ Flags:
 		Hostname:      "click-dog-test",
 		TraceID:       identity.TraceID,
 		SpanID:        identity.SpanID,
-		OperationName: "click-dog.test-span",
+		OperationName: "click-dog.test.export",
 		Kind:          "INTERNAL",
 		StartTimeUs:   uint64(now.Add(-100 * time.Millisecond).UnixMicro()),
 		FinishTimeUs:  uint64(now.UnixMicro()),
@@ -74,9 +71,9 @@ Flags:
 		Attributes: map[string]string{
 			"click_dog.test":      "true",
 			"click_dog.test_kind": "export",
-			"click_dog.source":    "test-span",
+			"click_dog.source":    "test-export",
 			"db.system":           "clickhouse",
-			"db.statement":        "SELECT 1 -- click-dog test span",
+			"db.statement":        "SELECT 1 -- click-dog test export",
 		},
 	}
 

@@ -465,13 +465,12 @@ func TestAuditedOperatorContracts_AreDocumented(t *testing.T) {
 	required := map[string][]string{
 		"docs/configuration.md": {
 			"omitting `monitor:` is not a valid scheduled-mode config",
-			"Replace the removed top-level `otel:` mapping",
-			"Delete the removed `ha.enabled` key",
+			"Unknown keys are errors",
 			"uses the host's system trust roots",
 		},
 		"docs/filtering.md": {
-			"`blacklist_queries` expressions are not compiled by configuration loading",
-			"`click-dog validate` and `click-dog check` can succeed",
+			"Configuration loading compiles every `blacklist_queries` expression",
+			"a trace with any query that matches is dropped whole, child spans included",
 		},
 		"docs/integrations/generic-otlp.md": {
 			"3,500,000 bytes (3.5 MB)",
@@ -488,7 +487,8 @@ func TestAuditedOperatorContracts_AreDocumented(t *testing.T) {
 			"at most four sends in flight",
 			"There is no waiting queue",
 			"uses a synchronous send during graceful signal handling",
-			"Last success does not prove the regular span fetch ran",
+			"A degraded-mode canary does not advance `click_dog_last_success_timestamp_seconds`",
+			"A successful degraded-mode canary is not recorded as a cycle in `/status`",
 		},
 		"docs/span-attributes.md": {
 			"A direct attribute therefore wins",
@@ -552,8 +552,9 @@ func TestMonitorMaxQueryLengthDocs_ScopeToQueryLogFetch(t *testing.T) {
 			"docs/integrations/generic-otlp.md before changing this test", got)
 	}
 
-	// The predicate reaches only the builders that call addDurationFilters:
-	// backfill's slowQueries* pair and analyze trace's recentQueryCandidates.
+	// The predicate reaches only the builders that call addDurationFilters with
+	// a positive length: backfill's slowQueries* pair. analyze trace's
+	// recentQueryCandidates passes 0, which skips it.
 	// The analyze queries family rollups take no MaxQueryLength at all, so the
 	// docs must not fold them into a blanket "analyze" claim.
 	if strings.Contains(string(reader), "MaxQueryLength") {
@@ -577,7 +578,7 @@ func TestMonitorMaxQueryLengthDocs_ScopeToQueryLogFetch(t *testing.T) {
 
 	for path, phrases := range map[string][]string{
 		"docs/filtering.md": {
-			"During the query_log fetch (backfill, `analyze trace` candidate search)",
+			"| `monitor.max_query_length` | Backfill's `query_log` read |",
 			"`monitor.max_query_length` never drops a live span",
 			"The `analyze queries` family rollups do not take this key",
 		},
@@ -723,7 +724,7 @@ func TestHomeQuickStart_ShowsThreeConfigViews(t *testing.T) {
 		password  string
 	}{
 		{"starter", config.QueryTextModeNormalizedOnly, "test-secret"},
-		{"minimal", config.QueryTextModeRaw, ""},
+		{"minimal", config.QueryTextModeNormalizedOnly, ""},
 	} {
 		t.Run(view.name, func(t *testing.T) {
 			plainConfig := extractConfig(t, view.name)
@@ -749,7 +750,6 @@ func TestHomeQuickStart_ShowsThreeConfigViews(t *testing.T) {
 			}
 			if view.name == "starter" {
 				wantPaths["clickhouse.password"] = true
-				wantPaths["filters.query_text_mode"] = true
 			}
 			for path := range wantPaths {
 				if !paths[path] {
@@ -1012,7 +1012,7 @@ func TestSupportPage_CarriesProductionSupportBrand(t *testing.T) {
 		"contracted and provided by",
 		"Colt Consulting Ltd",
 		"Discuss%20a%20Click-Dog%20deployment",
-		"Discuss your deployment",
+		"Discuss a deployment",
 		"response-time commitment",
 	})
 	if !strings.Contains(support, "hide_global_support_cta: true") {
@@ -1200,10 +1200,11 @@ func TestAnsibleInstallRecordsCreatedRuntimeIdentity(t *testing.T) {
 }
 
 // Brand attribution: the README carries the full sentence with the founder
-// named; the landing footer carries the short form and names the founder
-// once, in the production-support section, as creator and maintainer. The
-// three surfaces ship separately (README to the public repo, home.html to
-// the site), so a brand URL or wording change in one must land in the others.
+// named; the landing footer carries the short form, and the landing's visible
+// copy does not name the founder (the support page does, as creator and
+// maintainer). The surfaces ship separately (README to the public repo,
+// home.html to the site), so a brand URL or wording change in one must land
+// in the others.
 func TestReadmeAttribution_MatchesLanding(t *testing.T) {
 	// README.md ships in the public archive, so it is checked before the
 	// internal-only guard: the public repo's CI enforces its line too.
@@ -1228,12 +1229,21 @@ func TestReadmeAttribution_MatchesLanding(t *testing.T) {
 	text := string(home)
 	for _, want := range []string{
 		`<p class="attribution">A <a href="https://futureproof.dev/">Futureproof.dev</a> project.</p>`,
-		`<h2>Take Click-Dog into production with its creator and maintainer.</h2>`,
-		`Work directly with <a href="https://futureproof.dev/profile">Colin Taylor</a> on topology`,
+		`<h2>Get help taking Click-Dog to production</h2>`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("www/home.html is missing %q", want)
 		}
+	}
+	// The JSON-LD still names the founder for search engines; the page body
+	// must not, so a person link can only come back deliberately.
+	bodyAt := strings.Index(text, "<body>")
+	if bodyAt < 0 {
+		t.Fatal("www/home.html has no <body>")
+	}
+	body := text[bodyAt:]
+	if strings.Contains(body, "Colin Taylor") || strings.Contains(body, `href="https://futureproof.dev/profile"`) {
+		t.Error("www/home.html names the founder in its visible copy; the support page carries that")
 	}
 	if strings.Contains(text, "a brand of Colt Consulting Ltd") {
 		t.Error("www/home.html still carries the retired long attribution wording")

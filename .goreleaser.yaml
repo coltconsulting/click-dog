@@ -161,8 +161,9 @@ release:
   footer: |
 
     ---
-    click-dog is pre-1.0. Read STATUS.txt in the tree for what is not yet
-    stable before pinning a deployment to this tag.
+    Any release can change config keys, CLI flags, HTTP endpoints, and metric
+    names. Read the changelog (https://click-dog.com/changelog/) and the
+    operating contract (https://click-dog.com/operating/) before upgrading.
 
 changelog:
   sort: asc

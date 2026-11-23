@@ -143,8 +143,8 @@ func TestQueryFamilyDimensionCountsBuilder_AppliesUserFilters(t *testing.T) {
 	b := r.queryFamilyDimensionCountsBuilder(dimensionCountOpts())
 
 	// The whitelist clause appears in both the outer query and the subquery.
-	if got := strings.Count(b.query, "AND user IN ?"); got != 2 {
-		t.Errorf("AND user IN ? count = %d, want 2 (outer + subquery):\n%s", got, b.query)
+	if got := strings.Count(b.query, "AND if(initial_user != '', initial_user, user) IN ?"); got != 2 {
+		t.Errorf("originating-user whitelist count = %d, want 2 (outer + subquery):\n%s", got, b.query)
 	}
 }
 

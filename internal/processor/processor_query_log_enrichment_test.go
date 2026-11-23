@@ -50,8 +50,6 @@ func TestEnrichSpanFromQueryLog_Basic(t *testing.T) {
 		"query_log.result_rows":       "100",
 		"query_log.result_bytes":      "4096",
 		"query_log.memory_usage":      "2048000",
-		"query_log.databases_csv":     "default,system",
-		"query_log.tables_csv":        "default.events,system.numbers",
 	}
 	for k, want := range checks {
 		if got := span.Attributes[k]; got != want {
@@ -311,9 +309,7 @@ func TestEnrichSpanFromQueryLog_EmptyValuesOmitted(t *testing.T) {
 		"query_log.client_address",
 		"query_log.exception_code",
 		"query_log.databases",
-		"query_log.databases_csv",
 		"query_log.tables",
-		"query_log.tables_csv",
 		"query_log.normalized_query_hash",
 		"query_log.normalized_query",
 	} {

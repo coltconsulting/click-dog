@@ -23,8 +23,8 @@ type materializationObservingReader struct {
 	missingReads int
 }
 
-func (r *materializationObservingReader) FetchSpansForTraceIDs(ctx context.Context, ids []string, days, limit int, blacklist []string) ([]model.OpenTelemetrySpan, error) {
-	spans, err := r.tracingTestReader.FetchSpansForTraceIDs(ctx, ids, days, limit, blacklist)
+func (r *materializationObservingReader) FetchSpansForTraceIDs(ctx context.Context, ids []string, days int, since time.Time, limit int, blacklist []string) ([]model.OpenTelemetrySpan, error) {
+	spans, err := r.tracingTestReader.FetchSpansForTraceIDs(ctx, ids, days, since, limit, blacklist)
 	var exception *clickhouse.Exception
 	if errors.As(err, &exception) && exception.Code == chErrUnknownTable {
 		r.missingReads++
@@ -55,7 +55,11 @@ func TestTracingCommand_FirstInvocationOnFreshNodeIntegration(t *testing.T) {
 	}
 	image := os.Getenv("CLICKHOUSE_FRESH_IMAGE")
 	if image == "" {
-		image = "clickhouse/clickhouse-server:24.1"
+		version := os.Getenv("CLICKHOUSE_VERSION")
+		if version == "" {
+			version = "26.8" // matches testing/docker-compose.integration.yml
+		}
+		image = "clickhouse/clickhouse-server:" + version
 	}
 	t.Cleanup(func() { docker("rm", "-f", "-v", name) })
 	// ClickHouse 25.x otherwise restricts passwordless default users to the
@@ -67,7 +71,9 @@ func TestTracingCommand_FirstInvocationOnFreshNodeIntegration(t *testing.T) {
 		"--volume", configPath+":/etc/clickhouse-server/config.d/tracing.xml:ro", image)
 	// Keep this test serial: shared node-1 helpers use this process-wide override.
 	t.Setenv("CLICKHOUSE1_ADDR", docker("port", name, "9000/tcp"))
-	conn := waitForClickHouse(t, 1, 30*time.Second)
+	// A fresh 26.x server can take well over 30s to accept connections on a
+	// loaded host.
+	conn := waitForClickHouse(t, 1, 90*time.Second)
 	defer func() { _ = conn.Close() }()
 	var exists uint8
 	if err := conn.QueryRow(context.Background(), "EXISTS TABLE system.opentelemetry_span_log").Scan(&exists); err != nil || exists != 0 {

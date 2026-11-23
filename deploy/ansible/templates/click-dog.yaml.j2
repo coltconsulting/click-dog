@@ -2,7 +2,8 @@
 # node. Everything except the per-host connection, secret, TLS, and Keeper
 # values is the `production` profile (examples/click-dog-production.yaml), and
 # TestAnsibleTemplate_MatchesProductionProfile keeps the two identical.
-# To tune your fleet, edit your copy of this file before deploying.
+# To tune the fleet, edit deploy/ansible/templates/click-dog.yaml.j2
+# before deploying.
 
 clickhouse:
   host: {{ clickhouse_host }}
@@ -15,7 +16,8 @@ clickhouse:
   query_timeout_s: 30
 
 # filters.query_text_mode controls whether raw SQL crosses the export boundary.
-# Use normalized_only or none for privacy-sensitive production environments.
+# The default, normalized_only, keeps SQL literals out of exports; set raw
+# only if the backend may store them.
 # See https://click-dog.com/filtering/#query-text-export-modes.
 exporters:
   otel:
@@ -58,7 +60,7 @@ monitor:
     backoff_factor: 2.0
 
 filters:
-  query_text_mode: raw # raw | redacted | normalized_only | none
+  query_text_mode: normalized_only # raw | redacted | normalized_only | none
   blacklist_queries:
     - "^SYSTEM"
     - "^INSERT INTO.*\\.inner\\."

@@ -170,7 +170,7 @@ func parseDeployGenerateFlags(name string, args []string, opts *deployGenerateOp
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if err := rejectLeftoverArgs("click-dog "+name, fs); err != nil {
+	if err := rejectLeftoverArgs("click-dog "+name, fs, args); err != nil {
 		_, _ = fmt.Fprintln(errOut, err)
 		return err
 	}
@@ -206,18 +206,6 @@ func deployKubernetes(opts deployGenerateOptions, out, errOut io.Writer) error {
 		version, err := requireDeployUpdateVersion(opts.Version, "kubernetes")
 		if err != nil {
 			return err
-		}
-		// Pre-#199 output dirs hold daemonset.yaml, not deployment.yaml. The
-		// topology changed (DaemonSet -> Deployment), so an in-place
-		// image bump is wrong — regenerate, and delete the old workload (which
-		// `kubectl apply -k` does NOT prune, so it would keep running and
-		// double-export alongside the new Deployment).
-		if isLegacyDaemonSetOutDir(opts.OutDir) {
-			return fmt.Errorf("%s has daemonset.yaml but no deployment.yaml — it predates the DaemonSet->Deployment migration (#199); an image-tag bump won't migrate it.\n"+
-				"Regenerate:\n"+
-				"  click-dog deploy kubernetes -c <collector> --ch-host <ch-service> [--cluster <name>]\n"+
-				"then delete the old workload (apply -k won't remove it):\n"+
-				"  kubectl delete daemonset click-dog -n click-dog", opts.OutDir)
 		}
 		return updateDeploymentImage(opts.OutDir, "deployment.yaml", version, out, "Kubernetes")
 	}
@@ -416,18 +404,6 @@ func rejectOTELSecureOnUpdate(opts deployGenerateOptions, configFile string) err
 		return nil
 	}
 	return fmt.Errorf("--otel-secure applies when generating, not with --update (which only bumps the image tag); set secure under exporters.otel in %s", configFile)
-}
-
-// isLegacyDaemonSetOutDir reports whether an output dir was generated before
-// the DaemonSet->Deployment migration (#199): it has daemonset.yaml and no
-// deployment.yaml. Such dirs can't be image-bumped in place — the topology
-// changed — so the update path refuses with migration guidance.
-func isLegacyDaemonSetOutDir(outDir string) bool {
-	if _, err := os.Stat(filepath.Join(outDir, "deployment.yaml")); err == nil {
-		return false
-	}
-	_, err := os.Stat(filepath.Join(outDir, "daemonset.yaml"))
-	return err == nil
 }
 
 // validateClickHouseHostForK8s rejects an empty or loopback host. A standalone

@@ -69,6 +69,10 @@ Flags:
 		}
 		return 2
 	}
+	if err := rejectLeftoverArgs("click-dog deploy status", fs, args); err != nil {
+		_, _ = fmt.Fprintln(errOut, err)
+		return 2
+	}
 
 	report := collectDeployStatus()
 

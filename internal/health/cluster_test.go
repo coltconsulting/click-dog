@@ -27,7 +27,12 @@ type stubClusterSource struct {
 // release without inventing yet another struct type.
 type pingerFunc func(ctx context.Context) bool
 
-func (f pingerFunc) IsHealthy(ctx context.Context) bool { return f(ctx) }
+func (f pingerFunc) Ping(ctx context.Context) error {
+	if f(ctx) {
+		return nil
+	}
+	return fmt.Errorf("ping failed")
+}
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 

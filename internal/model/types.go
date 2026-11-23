@@ -17,6 +17,41 @@ const (
 	CycleSkipReasonLeaderStandby = "leader_standby"
 )
 
+// QueryOrigin is who ran one query and from where, read from query_log. For a
+// distributed query's secondary queries, User and Address are the account and
+// server the initiating node connects to the shard as; InitialUser and
+// InitialAddress name the client that started the query.
+type QueryOrigin struct {
+	User           string
+	InitialUser    string
+	Address        string
+	InitialAddress string
+}
+
+// TraceNode is one span of a trace as the trace filters read it: its place in
+// the span tree and, for a span that carries a clickhouse.query_id, that ID
+// and its db.statement.
+type TraceNode struct {
+	SpanID       uint64
+	ParentSpanID uint64
+	// Query is true for a `query` span, the span every other span of a query
+	// runs under. Other spans can carry a query ID too, such as
+	// RemoteQueryExecutor::execute, but never anchor a query's spans.
+	Query     bool
+	QueryID   string
+	Statement string
+}
+
+// AncestorRead asks a trace node read for the spans that can be ancestors of
+// some of the caller's spans: spans that started no later than StartedByUs and
+// are the parent of another span of Traces read. A span always starts after
+// its parent, so every ancestor of a span that started by StartedByUs is among
+// them. The zero value asks for none.
+type AncestorRead struct {
+	Traces      []uuid.UUID
+	StartedByUs uint64
+}
+
 // QueryLog represents a row from ClickHouse's system.query_log table.
 // Used in two contexts:
 //
@@ -48,9 +83,13 @@ type QueryLog struct {
 	NormalizedQueryHash uint64
 	NormalizedQuery     string
 	User                string
-	ClientName          string
-	ClientHostname      string
-	ClientAddress       string
+	// InitialUser is query_log.initial_user: the account of the client that
+	// started the initial query. It differs from User on a distributed
+	// query's secondary queries, which run as the interserver account.
+	InitialUser    string
+	ClientName     string
+	ClientHostname string
+	ClientAddress  string
 	// InitialAddress is query_log.initial_address: the address of the client
 	// that started the initial query. For the initial query it equals
 	// ClientAddress; for the secondary queries a distributed query fans out to

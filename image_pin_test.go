@@ -19,7 +19,6 @@ var imagePinSurfaces = []string{
 	"deploy/kubernetes/deployment.yaml",
 	"docs/kubernetes.md",
 	"deploy/install.sh",
-	"deploy/templates/docker/docker-compose.yml.tmpl",
 	"internal/deploy/template/k8s/deployment.yaml.tmpl",
 	"internal/deploy/template/docker/docker-compose.yml.tmpl",
 }

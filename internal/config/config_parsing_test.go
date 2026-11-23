@@ -328,7 +328,7 @@ func TestLoadConfig_MissingFile(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Exporters config: backward compat, multi-sink, Splunk HEC env expansion
+// Exporters config: multi-sink, Splunk HEC env expansion
 // ---------------------------------------------------------------------------
 
 func TestLoadConfig_MultiSink(t *testing.T) {
@@ -414,6 +414,7 @@ monitor:
   min_trace_duration_ms: 1000
   check_interval_s: 30
 filters:
+  query_text_mode: redacted
   redact_queries:
     - pattern: "(?i)identified\\s+by\\s+'[^']*'"
       replacement: "IDENTIFIED BY '[REDACTED]'"
@@ -636,28 +637,6 @@ monitor:
 			}
 			if !strings.Contains(err.Error(), tc.field) {
 				t.Errorf("error should name the offending key %q, got: %v", tc.field, err)
-			}
-		})
-	}
-}
-
-// TestLoadConfig_RemovedHAEnabledKeyGetsTargetedError pins the upgrade-path
-// error for the removed ha.enabled key (#237): the strict decoder's generic
-// "field enabled not found" reads like a typo, so LoadConfig must name the
-// removed key and point at ha.keeper.hosts instead.
-func TestLoadConfig_RemovedHAEnabledKeyGetsTargetedError(t *testing.T) {
-	for _, value := range []string{"true", "false"} {
-		t.Run("enabled_"+value, func(t *testing.T) {
-			yaml := minimalNoMonitorToggles + "ha:\n  enabled: " + value + "\n"
-			_, err := LoadConfig(writeConfigFile(t, yaml))
-			if err == nil {
-				t.Fatal("expected error for removed ha.enabled key, got nil")
-			}
-			if !strings.Contains(err.Error(), "ha.enabled has been removed") {
-				t.Errorf("error should explain the removal, got: %v", err)
-			}
-			if !strings.Contains(err.Error(), "ha.keeper.hosts") {
-				t.Errorf("error should point at ha.keeper.hosts, got: %v", err)
 			}
 		})
 	}

@@ -173,7 +173,7 @@ func (c *ClickHouseReader) queryFamilyDimensionCountsBuilder(opts QueryFamilyDim
 			  AND dimension_value != ''`, c.queryLogRef, nameArray, valueArray),
 		params: []interface{}{opts.StartTime, opts.EndTime},
 	}
-	b.addUserFilters(c.whitelistUsers, c.blacklistUsers)
+	b.addRowFilters(c, c.queryLogSince(opts.StartTime, "event_time >= ?"))
 
 	b.query += fmt.Sprintf(`
 			  AND normalized_query_hash IN (
@@ -184,7 +184,7 @@ func (c *ClickHouseReader) queryFamilyDimensionCountsBuilder(opts QueryFamilyDim
 				  AND type IN ('QueryFinish', 'ExceptionWhileProcessing')
 				  AND normalized_query_hash != 0`, c.queryLogRef)
 	b.params = append(b.params, opts.StartTime, opts.EndTime)
-	b.addUserFilters(c.whitelistUsers, c.blacklistUsers)
+	b.addRowFilters(c, c.queryLogSince(opts.StartTime, "event_time >= ?"))
 	b.query += `
 				GROUP BY normalized_query_hash
 				HAVING count() >= ?

@@ -83,7 +83,7 @@ func TestFetchQueryLogByQueryIDsScansQueryOperation(t *testing.T) {
 	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
 	conn := &fakeConn{rows: newFakeRows([]any{
 		"qid-1", "QueryFinish", "Select", now, uint64(1500),
-		"default", "clickhouse-go", "app-1", "10.0.0.1", "10.0.0.1",
+		"default", "default", "clickhouse-go", "app-1", "10.0.0.1", "10.0.0.1",
 		[]string{"default"}, []string{"default.events"}, int32(0),
 		uint64(100), uint64(200), uint64(0), uint64(0), uint64(10), uint64(20), uint64(300),
 	})}
@@ -95,7 +95,7 @@ func TestFetchQueryLogByQueryIDsScansQueryOperation(t *testing.T) {
 	}
 	reader.setUserFilter(nil, nil)
 
-	logs, err := reader.FetchQueryLogByQueryIDs(context.Background(), []string{"qid-1"}, 1)
+	logs, err := reader.FetchQueryLogByQueryIDs(context.Background(), []string{"qid-1"}, 1, 0)
 	if err != nil {
 		t.Fatalf("FetchQueryLogByQueryIDs failed: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestFetchQueryLogByQueryIDsScansWithoutQueryOperation(t *testing.T) {
 	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
 	conn := &fakeConn{rows: newFakeRows([]any{
 		"qid-1", "QueryFinish", now, uint64(1500),
-		"default", "clickhouse-go", "app-1", "10.0.0.1", "10.0.0.1",
+		"default", "default", "clickhouse-go", "app-1", "10.0.0.1", "10.0.0.1",
 		[]string{"default"}, []string{"default.events"}, int32(0),
 		uint64(100), uint64(200), uint64(0), uint64(0), uint64(10), uint64(20), uint64(300),
 	})}
@@ -120,7 +120,7 @@ func TestFetchQueryLogByQueryIDsScansWithoutQueryOperation(t *testing.T) {
 	}
 	reader.setUserFilter(nil, nil)
 
-	logs, err := reader.FetchQueryLogByQueryIDs(context.Background(), []string{"qid-1"}, 1)
+	logs, err := reader.FetchQueryLogByQueryIDs(context.Background(), []string{"qid-1"}, 1, 0)
 	if err != nil {
 		t.Fatalf("FetchQueryLogByQueryIDs failed: %v", err)
 	}

@@ -21,6 +21,7 @@ import (
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
@@ -139,13 +140,29 @@ func (o *OTELExporter) currentResource() *resourceState {
 // Plaintext chosen automatically (secure omitted, loopback collector) is held
 // to the local host: it ignores proxy settings and dials only loopback
 // addresses. An explicit secure: false dials as configured.
+// otlpConnectParams caps the wait between reconnect attempts. gRPC's default
+// backoff grows to two minutes, so after a collector outage the client kept
+// failing with a stale "connection refused" for many cycles after the collector
+// was back, and spans that were still inside the retry reach were lost. Five
+// seconds keeps a reconnect well inside one check interval.
+// MinConnectTimeout is gRPC's own default.
+var otlpConnectParams = grpc.ConnectParams{
+	Backoff: backoff.Config{
+		BaseDelay:  time.Second,
+		Multiplier: 1.6,
+		Jitter:     0.2,
+		MaxDelay:   5 * time.Second,
+	},
+	MinConnectTimeout: 20 * time.Second,
+}
+
 func NewOTELGRPCConn(cfg config.OTELConfig) (*grpc.ClientConn, error) {
 	name := cfg.Name
 	if name == "" {
 		name = "exporters.otel"
 	}
 	transport := config.TransportSummary(cfg.CollectorAddress, cfg.Secure, cfg.SecureSource)
-	opts := []grpc.DialOption{}
+	opts := []grpc.DialOption{grpc.WithConnectParams(otlpConnectParams)}
 
 	if cfg.Secure {
 		tlsConfig, err := newOTELTLSConfig(cfg)
@@ -464,7 +481,7 @@ func (o *OTELExporter) convertToOTLPSpan(span model.OpenTelemetrySpan) *tracepb.
 
 	// Convert attributes map to OTLP attributes. The source attribute is emitted
 	// exactly once and stays first for consistency with ExportQuery. A source
-	// supplied by the span (for example, test-span) is authoritative.
+	// supplied by the span (for example, test-export) is authoritative.
 	attrs := make([]*commonpb.KeyValue, 0, len(span.Attributes)+len(span.StringSliceAttributes)+3)
 	attrs = append(attrs, StringAttr(liveSpanSourceKey, liveSpanSource(span.Attributes)))
 	attrs = append(attrs, StringAttr("hostname", span.Hostname))

@@ -13,8 +13,9 @@ const (
 // It is not a real failure — the poller should not adjust backoff when it sees this.
 var ErrCircuitOpen = errors.New("circuit breaker open, cycle skipped")
 
-// ErrCanaryRan is a sentinel error indicating a canary query ran in degraded mode.
-// Like ErrCircuitOpen, the poller should not adjust backoff when it sees this.
+// ErrCanaryRan is a sentinel error indicating a canary query ran in degraded mode
+// and succeeded. It is neither a failure nor a recovery: the poller leaves
+// backoff unchanged, and the pipeline runs a real fetch on the next cycle.
 var ErrCanaryRan = errors.New("canary query executed in degraded mode")
 
 // ErrHealthCheck is a sentinel for health check failures, avoiding an allocation per cycle.

@@ -251,14 +251,13 @@ func TestRunInit_ProductionHasHardeningAndBlacklistOps(t *testing.T) {
 	if cfg.Health.ListenAddress != ":8686" {
 		t.Errorf("production health.listen_address = %q, want :8686", cfg.Health.ListenAddress)
 	}
-	if cfg.Filters.QueryTextMode != config.QueryTextModeRaw {
-		t.Errorf("production query_text_mode = %q, want raw compatibility default", cfg.Filters.QueryTextMode)
+	if cfg.Filters.QueryTextMode != config.QueryTextModeNormalizedOnly {
+		t.Errorf("production query_text_mode = %q, want normalized_only", cfg.Filters.QueryTextMode)
 	}
 
-	// blacklist_operations must contain the install.sh-era set of
-	// high-volume engine-internal spans. Without these the production
-	// profile silently regresses on the ~90-99% ingest reduction those
-	// drops historically provided.
+	// blacklist_operations must contain the high-volume engine-internal
+	// spans. Without these the production profile exports every pipeline
+	// span ClickHouse records.
 	wantOps := []string{
 		"MergeTreeSource", "MergeTreeMarksLoader", "MergeTreeIndex",
 		"MergeTreeSequentialSource", "VFSWrite", "WriteBufferFromS3",
@@ -278,14 +277,10 @@ func TestRunInit_ProductionHasHardeningAndBlacklistOps(t *testing.T) {
 	}
 }
 
-// TestRunInit_NeverEmitsTopLevelOtel pins the spec's schema-cleanup
-// payoff: the unified renderer emits `exporters.otel[]` only, never the
-// deprecated top-level `otel:` form. Configs already on disk in the
-// deprecated form keep working via internal/config/compat.go, but
-// freshly-rendered configs must NOT carry the deprecation warning. Loop
-// over every profile + the optional blocks so the assertion covers the
-// whole renderer surface.
-func TestRunInit_NeverEmitsTopLevelOtel(t *testing.T) {
+// TestRunInit_EveryProfileLoads renders every profile with every optional
+// block and requires the result to pass LoadConfig, whose strict decoder
+// rejects any key outside the current schema.
+func TestRunInit_EveryProfileLoads(t *testing.T) {
 	for _, profile := range []string{"production", "minimal", "paranoid"} {
 		t.Run(profile, func(t *testing.T) {
 			dir := t.TempDir()
@@ -301,28 +296,8 @@ func TestRunInit_NeverEmitsTopLevelOtel(t *testing.T) {
 				"--output", output,
 			}, io.Discard, io.Discard)
 
-			body, err := os.ReadFile(output)
-			if err != nil {
-				t.Fatal(err)
-			}
-			// A line beginning `otel:` (column 0) is the deprecated
-			// top-level form. The current schema nests under
-			// `exporters:` (column 0) then `  otel:` (column 2).
-			for _, line := range strings.Split(string(body), "\n") {
-				if strings.HasPrefix(line, "otel:") {
-					t.Errorf("rendered %s YAML contains top-level otel: form (deprecated schema)\n--- rendered ---\n%s", profile, body)
-					break
-				}
-			}
-
-			// Reinforce via the deprecation registry: LoadConfig must
-			// surface zero warnings on a freshly-rendered file.
-			cfg, err := config.LoadConfig(output)
-			if err != nil {
+			if _, err := config.LoadConfig(output); err != nil {
 				t.Fatalf("LoadConfig: %v", err)
-			}
-			if len(cfg.DeprecationWarnings) > 0 {
-				t.Errorf("fresh %s config should have zero deprecation warnings, got: %v", profile, cfg.DeprecationWarnings)
 			}
 		})
 	}
@@ -603,7 +578,9 @@ func TestPromptInteractive_RejectsBadProfile(t *testing.T) {
 	in := strings.NewReader("\n\n\nludicrous\nparanoid\n")
 	var errOut bytes.Buffer
 
-	promptInteractive(in, io.Discard, &errOut, &chHost, &collector, &service, &profile)
+	if err := promptInteractive(in, io.Discard, &errOut, &chHost, &collector, &service, &profile); err != nil {
+		t.Fatal(err)
+	}
 
 	if profile != "paranoid" {
 		t.Errorf("profile = %q, want paranoid (loop should have accepted second input)", profile)
@@ -630,7 +607,9 @@ func TestPromptInteractive_EmptyProfileKeepsDefault(t *testing.T) {
 	in := strings.NewReader("\n\n\n\n") // four empties
 	var errOut bytes.Buffer
 
-	promptInteractive(in, io.Discard, &errOut, &chHost, &collector, &service, &profile)
+	if err := promptInteractive(in, io.Discard, &errOut, &chHost, &collector, &service, &profile); err != nil {
+		t.Fatal(err)
+	}
 
 	if profile != "production" {
 		t.Errorf("profile = %q, want production (empty input should leave default)", profile)

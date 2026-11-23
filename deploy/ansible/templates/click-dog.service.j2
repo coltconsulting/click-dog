@@ -10,7 +10,7 @@ StartLimitBurst=5
 Type=simple
 User={{ click_dog_user }}
 Group={{ click_dog_group }}
-ExecStart={{ click_dog_install_dir }}/click-dog -config {{ click_dog_config_dir }}/click-dog.yaml
+ExecStart={{ click_dog_install_dir }}/click-dog --config {{ click_dog_config_dir }}/click-dog.yaml
 Restart=on-failure
 RestartSec=5
 

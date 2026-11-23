@@ -105,7 +105,7 @@ func TestIntegration_QueryFamilies_AggregateExactClusterFixtures(t *testing.T) {
 	defer reader.Close()
 
 	ctx := context.Background()
-	logs, err := reader.FetchQueryLogByQueryIDs(ctx, queryIDs, 1)
+	logs, err := reader.FetchQueryLogByQueryIDs(ctx, queryIDs, 1, uint64(fixture.WindowStart.UnixMicro()))
 	if err != nil {
 		t.Fatalf("FetchQueryLogByQueryIDs: %v", err)
 	}

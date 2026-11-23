@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"regexp"
 	"slices"
 	"sort"
@@ -297,9 +298,6 @@ func TestQueryDashboard_LiveSpanOnlyContract(t *testing.T) {
 		if !strings.Contains(note, want) {
 			t.Errorf("query dashboard live contract note missing %q", want)
 		}
-	}
-	if !regexp.MustCompile(`v\d{2}\.\d{2}\.\d+`).MatchString(note) {
-		t.Errorf("query dashboard live contract note missing a versioned compatibility requirement: %q", note)
 	}
 
 	for _, q := range queryDashboardSpanSearchQueries(t, dash) {
@@ -697,8 +695,8 @@ func TestQueryDashboard_ExactFamilyWidgetsUseNormalizedFacets(t *testing.T) {
 			t.Errorf("exact family note missing %q", want)
 		}
 	}
-	resourceNote := queryDashboardNoteContent(t, dash, "## Resource Usage", "older spans")
-	for _, want := range []string{"@query_log.normalized_query_hash", "older spans"} {
+	resourceNote := queryDashboardNoteContent(t, dash, "## Resource Usage", "spans without enrichment")
+	for _, want := range []string{"@query_log.normalized_query_hash", "spans without enrichment"} {
 		if !strings.Contains(resourceNote, want) {
 			t.Errorf("resource usage note missing %q", want)
 		}
@@ -1135,7 +1133,7 @@ func queryDashboardNoteContent(t *testing.T, dash map[string]interface{}, marker
 }
 
 // Reference notes can live inside collapsible groups without dropping their
-// source-contract and legacy scrape-mapping checks.
+// source-contract and scrape-mapping checks.
 func dashboardNotes(t *testing.T, dash map[string]interface{}) []string {
 	t.Helper()
 	widgets, ok := dash["widgets"].([]interface{})
@@ -1414,30 +1412,30 @@ var healthDashboardMapping = []healthDashboardMetric{
 	{prom: "click_dog_spans_exported_total", rename: "spans_exported", counter: true},
 	{prom: "click_dog_spans_filtered_total", rename: "spans_filtered", counter: true},
 	{prom: "click_dog_spans_duplicates_total", rename: "spans_duplicates", counter: true},
-	{prom: "click_dog_export_attempts_total", rename: "export.attempts", counter: true},
-	{prom: "click_dog_export_accepted_total", rename: "export.accepted", counter: true},
-	{prom: "click_dog_export_errors_total", rename: "export.errors", counter: true},
+	{prom: "click_dog_export_attempts_total", rename: "export_attempts", counter: true},
+	{prom: "click_dog_export_accepted_total", rename: "export_accepted", counter: true},
+	{prom: "click_dog_export_errors_total", rename: "export_errors", counter: true},
 	{prom: "click_dog_cycle_results_total", rename: "cycle_results", counter: true},
-	{prom: "click_dog_circuit_breaker_state", rename: "circuit_breaker.state"},
+	{prom: "click_dog_circuit_breaker_state", rename: "circuit_breaker_state"},
 	{prom: "click_dog_leader", rename: "leader"},
-	{prom: "click_dog_backoff_interval_seconds", rename: "backoff_interval.seconds"},
-	{prom: "click_dog_last_success_timestamp_seconds", rename: "last_success_timestamp.seconds"},
-	{prom: "click_dog_uptime_seconds", rename: "uptime.seconds"},
-	{prom: "click_dog_last_cycle_duration_seconds", rename: "last_cycle.duration_seconds"},
-	{prom: "click_dog_last_cycle_exported_spans", rename: "last_cycle.exported_spans"},
-	{prom: "click_dog_last_cycle_filtered_spans", rename: "last_cycle.filtered_spans"},
-	{prom: "click_dog_last_cycle_duplicate_spans", rename: "last_cycle.duplicate_spans"},
+	{prom: "click_dog_backoff_interval_seconds", rename: "backoff_interval_seconds"},
+	{prom: "click_dog_last_success_timestamp_seconds", rename: "last_success_timestamp_seconds"},
+	{prom: "click_dog_uptime_seconds", rename: "uptime_seconds"},
+	{prom: "click_dog_last_cycle_duration_seconds", rename: "last_cycle_duration_seconds"},
+	{prom: "click_dog_last_cycle_exported_spans", rename: "last_cycle_exported_spans"},
+	{prom: "click_dog_last_cycle_filtered_spans", rename: "last_cycle_filtered_spans"},
+	{prom: "click_dog_last_cycle_duplicate_spans", rename: "last_cycle_duplicate_spans"},
 	// ClickHouse data-plane health (#183). The note widget YAML, the
 	// dashboards/README.md mapping table, the Datadog self-monitoring docs
 	// table, and this slice must stay in lockstep — TestHealthDashboard_*
 	// tests pin all four against each other.
-	{prom: "click_dog_span_log_last_poll_timestamp_seconds", rename: "span_log.last_poll_timestamp.seconds"},
-	{prom: "click_dog_span_log_newest_row_age_seconds", rename: "span_log.newest_row_age.seconds"},
-	{prom: "click_dog_span_log_rows_last_cycle", rename: "span_log.rows_last_cycle"},
-	{prom: "click_dog_query_log_enrichment_attempts_total", rename: "query_log.enrichment.attempts", counter: true},
-	{prom: "click_dog_query_log_enrichment_successes_total", rename: "query_log.enrichment.successes", counter: true},
-	{prom: "click_dog_query_log_enrichment_failures_total", rename: "query_log.enrichment.failures", counter: true},
-	{prom: "click_dog_query_log_enrichment_match_ratio", rename: "query_log.enrichment.match_ratio"},
+	{prom: "click_dog_span_log_last_poll_timestamp_seconds", rename: "span_log_last_poll_timestamp_seconds"},
+	{prom: "click_dog_span_log_newest_row_age_seconds", rename: "span_log_newest_row_age_seconds"},
+	{prom: "click_dog_span_log_rows_last_cycle", rename: "span_log_rows_last_cycle"},
+	{prom: "click_dog_query_log_enrichment_attempts_total", rename: "query_log_enrichment_attempts", counter: true},
+	{prom: "click_dog_query_log_enrichment_successes_total", rename: "query_log_enrichment_successes", counter: true},
+	{prom: "click_dog_query_log_enrichment_failures_total", rename: "query_log_enrichment_failures", counter: true},
+	{prom: "click_dog_query_log_enrichment_match_ratio", rename: "query_log_enrichment_match_ratio"},
 	{prom: "click_dog_spans_with_query_id_ratio", rename: "spans_with_query_id_ratio"},
 	{prom: "click_dog_normalized_query_supported", rename: "normalized_query_supported"},
 	{prom: "click_dog_query_operation_supported", rename: "query_operation_supported"},
@@ -1466,7 +1464,7 @@ var metricNameRE = regexp.MustCompile(`(?:^|[^a-zA-Z0-9_.])([a-z][a-z0-9_]*(?:\.
 // corresponding widget query is allowed (it represents an emitted metric
 // the current dashboard layout doesn't surface yet). The reverse direction
 // — every emitted metric must be in the mapping — is enforced by
-// TestHealthDashboard_MappingCoversEmittedMetrics, which keeps the legacy
+// TestHealthDashboard_MappingCoversEmittedMetrics, which keeps the
 // OpenMetrics mapping from silently lagging behind internal/metrics.
 func TestHealthDashboard_QueriesMatchOTLPProfile(t *testing.T) {
 	dash := loadHealthDashboard(t)
@@ -1481,6 +1479,52 @@ func TestHealthDashboard_QueriesMatchOTLPProfile(t *testing.T) {
 		if !expected[name] {
 			t.Errorf("health dashboard queries metric %q which is not produced by the default OTLP profile; "+
 				"update internal/metrics descriptors/profile or the dashboard query", name)
+		}
+	}
+}
+
+// TestHealthDashboard_ScrapeMappingMatchesOTLPNames verifies that every
+// OpenMetrics rename produces the name the OTLP push sends, so the Health
+// dashboard and the monitors read the same series on either path. The Agent
+// prefixes the `click_dog` namespace and appends `.count` to counters.
+func TestHealthDashboard_ScrapeMappingMatchesOTLPNames(t *testing.T) {
+	otlp := healthDashboardOTLPNames()
+	for _, m := range healthDashboardMapping {
+		name := "click_dog." + m.rename
+		if m.counter {
+			name += ".count"
+		}
+		if !otlp[name] {
+			t.Errorf("scrape rename %q -> %q yields %q, which the OTLP push does not send", m.prom, m.rename, name)
+		}
+	}
+}
+
+// TestHealthDashboard_ScrapeDocsMatchMapping pins the rename lists in
+// dashboards/README.md and the Datadog self-monitoring page to the mapping,
+// so a copy-pasted Agent config always matches what the dashboard queries.
+func TestHealthDashboard_ScrapeDocsMatchMapping(t *testing.T) {
+	want := make(map[string]string, len(healthDashboardMapping))
+	for _, m := range healthDashboardMapping {
+		want[m.prom] = m.rename
+	}
+	paths := []string{"dashboards/README.md"}
+	if internalTreePresent(t, "docs", "documentation") {
+		paths = append(paths, "docs/integrations/datadog/self-monitoring.md")
+	}
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		got := parseRenamePairs(t, string(raw))
+		if len(got) != len(want) {
+			t.Errorf("%s defines %d rename pairs, mapping has %d", path, len(got), len(want))
+		}
+		for prom, rename := range want {
+			if got[prom] != rename {
+				t.Errorf("%s renames %q to %q, mapping says %q", path, prom, got[prom], rename)
+			}
 		}
 	}
 }
@@ -1995,6 +2039,23 @@ func TestPromptOnExists(t *testing.T) {
 		if got != want {
 			t.Errorf("input %q -> %q, want %q", input, got, want)
 		}
+	}
+}
+
+// TestPromptOnExists_OverlongLineSkips pins the bounded read: an answer with
+// no newline takes the safe skip default after maxPromptLineBytes instead of
+// growing a buffer or re-prompting forever.
+func TestPromptOnExists_OverlongLineSkips(t *testing.T) {
+	input := &countingReader{r: io.LimitReader(repeatByteReader('o'), 1<<20)}
+	var out bytes.Buffer
+	if got := promptOnExists(input, &out, dashboardByName(t, "query")); got != "skip" {
+		t.Errorf("over-long answer -> %q, want skip", got)
+	}
+	if !strings.Contains(out.String(), "input line is longer than 4096 bytes; skipping") {
+		t.Errorf("output missing over-long notice:\n%s", out.String())
+	}
+	if input.n > 2*maxPromptLineBytes {
+		t.Errorf("read %d bytes, want at most %d", input.n, 2*maxPromptLineBytes)
 	}
 }
 

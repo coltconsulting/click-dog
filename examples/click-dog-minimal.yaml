@@ -11,7 +11,7 @@
 #     switch to `production` before a real deployment to materialize them
 #   - filters.blacklist_operations → shipped commented-out below (inactive);
 #     uncomment it (or switch to `production`) to drop engine-internal spans
-# If you copy this file as a base for a real deployment, fill those in
+# To use this file as a base for a real deployment, fill those in
 # explicitly so the operating envelope is visible at a glance.
 
 clickhouse:
@@ -21,7 +21,8 @@ clickhouse:
   password: ${CLICKHOUSE_PASSWORD}
 
 # filters.query_text_mode controls whether raw SQL crosses the export boundary.
-# Use normalized_only or none for privacy-sensitive production environments.
+# The default, normalized_only, keeps SQL literals out of exports; set raw
+# only if the backend may store them.
 # See https://click-dog.com/filtering/#query-text-export-modes.
 exporters:
   otel:
@@ -39,7 +40,7 @@ monitor:
 # Health dashboard's "spans with query_id" tile toward zero and inflates ingest
 # ~10-100x. The production profile enables this list; uncomment to use it here.
 # filters:
-#   query_text_mode: raw # raw | redacted | normalized_only | none
+#   query_text_mode: normalized_only # raw | redacted | normalized_only | none
 #   blacklist_operations:
 #     - "MergeTreeSource"
 #     - "MergeTreeMarksLoader"

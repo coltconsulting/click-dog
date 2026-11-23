@@ -96,10 +96,10 @@ func TestSplunkHEC_ExportSpans_LiveSourceAttribute(t *testing.T) {
 		{
 			name: "supplied source is authoritative",
 			attributes: map[string]string{
-				liveSpanSourceKey: "test-span",
+				liveSpanSourceKey: "test-export",
 				"custom":          "preserved",
 			},
-			wantSource: "test-span",
+			wantSource: "test-export",
 		},
 		{
 			name:       "absent source defaults to span log",
@@ -230,6 +230,71 @@ func TestSplunkHEC_ExportSpans_LiveDBStatementTruncation(t *testing.T) {
 				t.Fatalf("input %s mutated to %q, want %q", liveSpanQueryKey, got, tt.query)
 			}
 		})
+	}
+}
+
+func TestSplunkHEC_ExportSpans_StringSliceAttributes(t *testing.T) {
+	var receivedBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		receivedBody = string(buf)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	exp, err := NewSplunkHECExporter(config.SplunkHECConfig{
+		Endpoint: server.URL,
+		Token:    "test",
+	})
+	if err != nil {
+		t.Fatalf("NewSplunkHECExporter returned err: %v", err)
+	}
+
+	span := model.OpenTelemetrySpan{
+		SpanID:      42,
+		TraceID:     testTraceID,
+		StartTimeUs: 1_000_000,
+		Attributes: map[string]string{
+			"custom":           "preserved",
+			"query_log.tables": "replaced by the array",
+		},
+		StringSliceAttributes: map[string][]string{
+			"query_log.databases": {"default", "analytics"},
+			"query_log.tables":    {"default.events", "analytics.users"},
+		},
+	}
+	if _, err := exp.ExportSpans(context.Background(), []model.OpenTelemetrySpan{span}); err != nil {
+		t.Fatalf("ExportSpans returned err: %v", err)
+	}
+
+	var event struct {
+		Event struct {
+			Attributes map[string]interface{} `json:"attributes"`
+		} `json:"event"`
+	}
+	if err := json.Unmarshal([]byte(receivedBody), &event); err != nil {
+		t.Fatalf("failed to parse HEC event: %v", err)
+	}
+
+	attributes := event.Event.Attributes
+	if got := attributes["custom"]; got != "preserved" {
+		t.Errorf("custom = %v, want preserved", got)
+	}
+	for key, want := range span.StringSliceAttributes {
+		got, ok := attributes[key].([]interface{})
+		if !ok {
+			t.Errorf("%s is %T, want a JSON array", key, attributes[key])
+			continue
+		}
+		if len(got) != len(want) {
+			t.Errorf("%s = %v, want %v", key, got, want)
+			continue
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("%s[%d] = %v, want %q", key, i, got[i], want[i])
+			}
+		}
 	}
 }
 

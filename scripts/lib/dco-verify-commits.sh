@@ -54,6 +54,6 @@ dco_warn_merges() {
 	done
 	echo "      Importing uses 'git am' over the .patch, which omits merges, so" >&2
 	echo "      any change a merge introduced that is in neither parent is lost." >&2
-	echo "      Rebase onto the base branch instead of merging into your branch." >&2
+	echo "      Rebase onto the base branch instead of merging into this branch." >&2
 	return 0
 }
